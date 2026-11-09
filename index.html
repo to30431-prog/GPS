@@ -40,7 +40,12 @@
             display: flex; align-items: center; justify-content: center;
             color: white; font-size: 16px;
         }
-
+<link rel="manifest" href="manifest.json">
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+  }
+</script>
         /* 進度條拉桿 */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb {

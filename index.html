@@ -370,9 +370,18 @@
 
         function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
-        // --- 2. 視角操作 ---
+        // --- 2. 視角操作 (加入UI觸控過濾器) ---
         ['dragstart', 'touchstart', 'wheel', 'rotatestart', 'pitchstart'].forEach(evt => {
-            map.on(evt, (e) => { if (e.originalEvent) setCameraFollow(false); });
+            map.on(evt, (e) => { 
+                if (e.originalEvent) {
+                    // 🚨 關鍵過濾器：如果點擊的是按鈕或控制面板，就立刻中止，不准地圖攔截！
+                    const target = e.originalEvent.target;
+                    if (target.closest('button') || target.closest('.ui-layer')) {
+                        return; 
+                    }
+                    setCameraFollow(false); 
+                }
+            });
         });
 
         function setCameraFollow(follow) {

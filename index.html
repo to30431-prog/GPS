@@ -697,14 +697,27 @@ document.getElementById('closeHistory').onclick = (e) => {
             map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
         }
 
-        document.getElementById('deleteRouteBtn').onclick = (e) => {
-        if (confirm('確定要刪除這條清運路線嗎？')) {
-            savedRoutes.splice(selectedRouteIdx, 1);
-            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-            backToMain();
-        }
-    };
+        document.getElementById('deleteRouteBtn').ontouchend = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            
+            // 用 setTimeout 延遲執行，避開系統彈窗死鎖
+            setTimeout(() => {
+                if (confirm('確定要刪除這條清運路線嗎？')) {
+                    savedRoutes.splice(selectedRouteIdx, 1);
+                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    document.getElementById('historyCount').innerText = savedRoutes.length;
+                    
+                    // 刪除後跳回歷史清單
+                    document.getElementById('routeDetailUI').classList.add('hidden');
+                    document.getElementById('topBackBtn').classList.add('hidden');
+                    clearDomMarkers(); updateRouteLayers([]);
+                    map.getSource('bg-route')?.setData(emptyGeoJSON());
+                    
+                    renderHistoryList();
+                    document.getElementById('historyModal').classList.remove('hidden');
+                }
+            }, 100);
+        };
 
         function backToMain() {
             stopSmoothPlayback();

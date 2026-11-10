@@ -39,7 +39,7 @@
             box-shadow: 0 3px 10px rgba(37,99,235,0.6);
             display: flex; align-items: center; justify-content: center;
             color: white; font-size: 16px;
-            transition: transform 0.1s ease-out; /* 讓轉向更平滑 */
+            transition: transform 0.1s ease-out;
         }
 
         /* 進度條拉桿 */
@@ -74,9 +74,8 @@
 
     <div id="map"></div>
 
-    <!-- 語音與視覺警報橫幅 (提前 30 公尺觸發音樂開關或轉彎) -->
+    <!-- 語音與視覺警報橫幅 -->
     <div id="musicAlertBanner" class="hidden fixed top-20 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex items-center justify-center gap-3">
-        <!-- 內容由 JS 動態填入 -->
     </div>
 
     <!-- OLED 黑屏省電模式 -->
@@ -97,8 +96,7 @@
     <!-- 頂部導航狀態與工具列 -->
     <div class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer">
         <div class="flex items-center gap-2 pointer-events-auto">
-            <!-- 加上 relative z-[99999] -->
-<button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
+            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-chevron-left text-lg"></i>
             </button>
             <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
@@ -109,18 +107,18 @@
 
         <!-- 右側浮動控制鍵 -->
         <div class="flex flex-col gap-2.5 pointer-events-auto">
-            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95" title="切換車頭朝上/正北朝上">
+            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]" title="切換車頭朝上/正北朝上">
                 <i id="headingIcon" class="fa-solid fa-compass text-base"></i>
                 <span id="headingLabel" class="text-[9px] font-bold leading-none mt-0.5">車頭上</span>
             </button>
-            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500" title="鎖定跟隨車輛">
+            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[99999]" title="鎖定跟隨車輛">
                 <i class="fa-solid fa-location-crosshairs text-base"></i>
                 <span id="followLabel" class="text-[9px] font-bold leading-none mt-0.5">跟隨中</span>
             </button>
-            <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95">
+            <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-moon text-base"></i>
             </button>
-            <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95">
+            <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-xmark"></i> 結束遵循
             </button>
         </div>
@@ -130,7 +128,6 @@
     <div id="mainUI" class="absolute bottom-4 left-4 right-4 ui-layer flex justify-center">
         <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md border border-gray-100">
             
-            <!-- 待機時顯示：精度設定 & 已儲存路線 -->
             <div id="idleTopRow" class="flex justify-between items-center mb-3 gap-2.5">
                 <div id="settingsBtn" class="bg-green-50 text-green-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-green-200 cursor-pointer active:scale-95">
                     <div class="flex items-center gap-2">
@@ -154,19 +151,18 @@
                 </div>
             </div>
 
-            <!-- 紀錄中顯示：GPS精度小格 + 回收車音樂開關大按鈕 (不擋地圖中間！) -->
             <div id="recordingTopRow" class="hidden flex items-stretch gap-2.5 mb-3">
                 <div class="bg-gray-100 px-3 py-2 rounded-2xl flex flex-col justify-center items-center w-24 flex-shrink-0">
                     <span class="text-[10px] text-gray-500 font-bold">GPS 精度</span>
                     <span id="recAccuracyText" class="text-xs font-extrabold text-gray-800 mt-0.5">± 5 m</span>
                 </div>
-                <button id="musicToggleBtn" class="flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all">
+                <button id="musicToggleBtn" class="flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[99999]">
                     <i id="musicBtnIcon" class="fa-solid fa-volume-xmark text-lg"></i>
                     <span id="musicBtnText" class="text-sm">音樂關閉中 (點擊開啟)</span>
                 </button>
             </div>
 
-            <button id="recordBtn" class="w-full bg-green-700 text-white font-extrabold py-3.5 rounded-2xl text-base flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all">
+            <button id="recordBtn" class="w-full bg-green-700 text-white font-extrabold py-3.5 rounded-2xl text-base flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all relative z-[99999]">
                 <i class="fa-solid fa-play"></i> <span id="recordBtnText">開始紀錄路線</span>
             </button>
 
@@ -204,7 +200,7 @@
                 </div>
               <div class="flex gap-2">
                 <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[99999]"><i class="fa-solid fa-share-nodes"></i></button>
-<button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
+                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
             </div>
         </div>
 
@@ -229,10 +225,10 @@
             </div>
 
             <div class="flex gap-3">
-                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95">
+                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative z-[99999]">
                     <i class="fa-solid fa-play"></i> 重播複習
                 </button>
-                <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden">
+                <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden z-[99999]">
                     <div class="absolute inset-0 bg-white/20 w-full transform -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
                     <i class="fa-solid fa-location-arrow"></i> 遵循導航
                 </button>
@@ -247,13 +243,13 @@
         </div>
 
         <div class="bg-white rounded-full px-4 py-2 shadow-xl pointer-events-auto w-full max-w-md flex items-center gap-3 border border-gray-100">
-            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95">
+            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-pause"></i>
             </button>
             <div class="flex-1 flex items-center py-2">
                 <input id="playbackSlider" type="range" min="0" max="1000" value="0" step="1">
             </div>
-            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95">
+            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95 relative z-[99999]">
                 0.3x
             </button>
         </div>
@@ -263,7 +259,7 @@
                 <div id="playbackTitle" class="font-black text-gray-900 text-base truncate">路線名稱</div>
                 <div id="playbackSub" class="text-xs text-gray-500 truncate">雙指可自由旋轉縮放，按右上角恢復跟隨</div>
             </div>
-            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm">
+            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm relative z-[99999]">
                 <i class="fa-solid fa-stop"></i> 停止
             </button>
         </div>
@@ -274,7 +270,7 @@
         <div class="bg-white w-11/12 max-w-sm rounded-3xl p-5 shadow-2xl">
             <div class="flex justify-between items-center mb-3">
                 <h2 class="text-lg font-black">紀錄精度設定</h2>
-                <button id="closeSettings" class="text-gray-400 text-xl p-1"><i class="fa-solid fa-xmark"></i></button>
+                <button id="closeSettings" class="text-gray-400 text-xl p-1 relative z-[99999]"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="space-y-2.5">
                 <label class="flex items-center justify-between p-3.5 border-2 border-blue-500 bg-blue-50 rounded-2xl cursor-pointer" onclick="setMode(2, 2, '高精度 (2秒)')">
@@ -298,7 +294,7 @@
        <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
     <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
     <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
-    <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
+    <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95 relative z-[99999]" title="匯入路線">
         <i class="fa-solid fa-file-import"></i>
         <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
     </label>
@@ -307,7 +303,6 @@
     </div>
 
     <script>
-        // --- 1. 初始化 MapLibre GL 向量旋轉地圖 (免金鑰 Google Maps) ---
         const map = new maplibregl.Map({
             container: 'map',
             style: {
@@ -322,28 +317,20 @@
                 },
                 layers: [{ id: 'google-maps-layer', type: 'raster', source: 'google-maps' }]
             },
-            center: [121.346, 24.954], // 鶯歌區
+            center: [121.346, 24.954],
             zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
         });
 
-        // 核心狀態變數
-        let isFollowingCamera = true;
-        let isHeadingUpMode = true; 
-        let currentHeading = 0;
+        let isFollowingCamera = true, isHeadingUpMode = true, currentHeading = 0;
         let lastKnownLngLat = [121.346, 24.954];
-        let isRecording = false, watchId = null, wakeLock = null;
-        let musicActive = false;
-        let routePoints = [], musicEvents = []; 
-        let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
+        let isRecording = false, watchId = null, wakeLock = null, musicActive = false;
+        let routePoints = [], musicEvents = [], totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
         let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
-
         let savedRoutes = JSON.parse(localStorage.getItem('yinggeCleanRoutes_v2')) || [];
-        let selectedRouteIdx = -1;
-        let domMarkers = []; 
+        let selectedRouteIdx = -1, domMarkers = []; 
 
         document.getElementById('historyCount').innerText = savedRoutes.length;
 
-        // 導航箭頭
         const puckEl = document.createElement('div');
         puckEl.className = 'nav-puck';
         puckEl.innerHTML = '<i class="fa-solid fa-location-arrow" style="transform: rotate(-45deg);"></i>';
@@ -370,20 +357,18 @@
 
         function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
-        // --- 2. 視角操作 ---
         ['dragstart', 'touchstart', 'wheel', 'rotatestart', 'pitchstart'].forEach(evt => {
             map.on(evt, (e) => { if (e.originalEvent) setCameraFollow(false); });
         });
 
         function setCameraFollow(follow) {
             isFollowingCamera = follow;
-            const btn = document.getElementById('locateBtn');
-            const label = document.getElementById('followLabel');
+            const btn = document.getElementById('locateBtn'), label = document.getElementById('followLabel');
             if (follow) {
-                btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500";
+                btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[99999]";
                 label.innerText = "跟隨中";
             } else {
-                btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200";
+                btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200 relative z-[99999]";
                 label.innerText = "自由看";
             }
         }
@@ -392,86 +377,71 @@
             setCameraFollow(true);
             map.easeTo({
                 center: lastKnownLngLat, zoom: Math.max(map.getZoom(), 17),
-                bearing: isHeadingUpMode ? currentHeading : 0,
-                offset: [0, -80], duration: 400
+                bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, -80], duration: 400
             });
         };
 
         document.getElementById('headingModeBtn').onclick = () => {
             isHeadingUpMode = !isHeadingUpMode;
-            const btn = document.getElementById('headingModeBtn');
-            const label = document.getElementById('headingLabel');
+            const btn = document.getElementById('headingModeBtn'), label = document.getElementById('headingLabel');
             if (isHeadingUpMode) {
-                btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
+                btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]";
                 label.innerText = "車頭上";
                 if (isFollowingCamera) map.easeTo({ bearing: currentHeading, duration: 300 });
             } else {
-                btn.className = "bg-white text-gray-700 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
+                btn.className = "bg-white text-gray-700 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]";
                 label.innerText = "正北上";
                 if (isFollowingCamera) map.easeTo({ bearing: 0, duration: 300 });
             }
         };
 
-        // --- 3. 幾何數學計算 ---
         function getDistanceKm(lng1, lat1, lng2, lat2) {
             const R = 6371;
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLon = (lng2 - lng1) * Math.PI / 180;
+            const dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lng2 - lng1) * Math.PI / 180;
             const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         }
 
         function getBearing(lng1, lat1, lng2, lat2) {
-            const toRad = d => d * Math.PI / 180;
-            const toDeg = r => r * 180 / Math.PI;
+            const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
             const dLon = toRad(lng2 - lng1);
             const y = Math.sin(dLon) * Math.cos(toRad(lat2));
             const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
             return (toDeg(Math.atan2(y, x)) + 360) % 360;
         }
 
-        // 兩角度的最小差值 (-180 到 180)
         function getAngleDiff(angle1, angle2) {
             let diff = (angle2 - angle1 + 180) % 360 - 180;
             return diff < -180 ? diff + 360 : diff;
         }
 
-        // 點到線段的最短距離 (公尺) - 判斷偏離路線用
         function pointToLineDistanceMeters(ptLng, ptLat, lineStart, lineEnd) {
             const R = 6371000;
             const lat1 = lineStart.lat * Math.PI / 180, lon1 = lineStart.lng * Math.PI / 180;
             const lat2 = lineEnd.lat * Math.PI / 180, lon2 = lineEnd.lng * Math.PI / 180;
             const lat3 = ptLat * Math.PI / 180, lon3 = ptLng * Math.PI / 180;
-
             const d13 = Math.acos(Math.sin(lat1)*Math.sin(lat3) + Math.cos(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1)) * R;
             const theta13 = Math.atan2(Math.sin(lon3-lon1)*Math.cos(lat3), Math.cos(lat1)*Math.sin(lat3)-Math.sin(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1));
             const theta12 = Math.atan2(Math.sin(lon2-lon1)*Math.cos(lat2), Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(lon2-lon1));
-            
-            const crossTrackDist = Math.asin(Math.sin(d13/R) * Math.sin(theta13-theta12)) * R;
-            return Math.abs(crossTrackDist);
+            return Math.abs(Math.asin(Math.sin(d13/R) * Math.sin(theta13-theta12)) * R);
         }
 
         function speakText(text) {
             if (!('speechSynthesis' in window)) return;
             window.speechSynthesis.cancel();
             const u = new SpeechSynthesisUtterance(text);
-            u.lang = 'zh-TW';
-            u.rate = 1.05;
+            u.lang = 'zh-TW'; u.rate = 1.05;
             window.speechSynthesis.speak(u);
         }
 
-        // 手機震動提示 (如果支援)
-        function vibrate(pattern) {
-            if ('vibrate' in navigator) navigator.vibrate(pattern);
-        }
+        function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
 
         function updateRouteLayers(points) {
             const musicFeatures = [], silentFeatures = [];
             for (let i = 1; i < points.length; i++) {
                 const prev = points[i - 1], curr = points[i];
                 const seg = { type: 'Feature', geometry: { type: 'LineString', coordinates: [[prev.lng, prev.lat], [curr.lng, curr.lat]] } };
-                if (curr.musicActive) musicFeatures.push(seg);
-                else silentFeatures.push(seg);
+                if (curr.musicActive) musicFeatures.push(seg); else silentFeatures.push(seg);
             }
             map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
             map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
@@ -486,44 +456,142 @@
             domMarkers.push(m);
         }
 
-        // --- 4. 紀錄路線 (支援寫入方向 bearing 供後續精準導航) ---
-        const musicToggleBtn = document.getElementById('musicToggleBtn');
-        function renderMusicButtonState() {
-            const icon = document.getElementById('musicBtnIcon');
-            const text = document.getElementById('musicBtnText');
-            if (musicActive) {
-                musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all";
-                icon.className = "fa-solid fa-music text-lg";
-                text.innerText = "音樂播放中 (點擊關閉)";
-            } else {
-                musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all";
-                icon.className = "fa-solid fa-volume-xmark text-lg";
-                text.innerText = "音樂關閉中 (點擊開啟)";
-            }
+        // ==========================================
+        // 🚨 終極安全重置：確保任何情況下退出，畫面都不會殘留卡死
+        // ==========================================
+        
+        function backToMain() {
+            stopSmoothPlayback();
+            if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
+            if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; } 
+            isBlackScreenActive = false; 
+            isScreenAutoWoken = false; 
+            
+            // 強制隱藏所有子面板與警告
+            document.getElementById('followStopBtn').classList.add('hidden');
+            document.getElementById('musicAlertBanner').classList.add('hidden');
+            document.getElementById('routeDetailUI').classList.add('hidden');
+            document.getElementById('playbackUI').classList.add('hidden');
+            document.getElementById('topBackBtn').classList.add('hidden');
+            document.getElementById('offRouteWarning').classList.add('hidden');
+            document.getElementById('blackOverlay').classList.add('hidden');
+            document.getElementById('historyModal').classList.add('hidden'); 
+            
+            // 恢復主介面
+            document.getElementById('mainUI').classList.remove('hidden'); 
+            document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
+            
+            clearDomMarkers();
+            updateRouteLayers([]);
+            map.getSource('bg-route')?.setData(emptyGeoJSON());
+            try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
         }
 
-        musicToggleBtn.onclick = () => {
-            if (!isRecording) return;
-            musicActive = !musicActive;
-            renderMusicButtonState();
-            const evtType = musicActive ? 'on' : 'off';
-            musicEvents.push({ type: evtType, lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], bearing: currentHeading });
-            
-            const badgeHtml = musicActive 
-                ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開音樂</div>`
-                : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關音樂</div>`;
-            addPinMarker(lastKnownLngLat, badgeHtml);
-        };
-
-        document.getElementById('recordBtn').onclick = async () => {
-            if (!isRecording) {
-                isRecording = true;
-                musicActive = false;
-                renderMusicButtonState();
-                routePoints = []; musicEvents = []; totalDistanceKm = 0; elapsedSec = 0;
+        document.getElementById('topBackBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!document.getElementById('playbackUI').classList.contains('hidden')) {
+                stopSmoothPlayback();
+                document.getElementById('playbackUI').classList.add('hidden');
+                openRouteDetail(selectedRouteIdx);
+            } else if (!document.getElementById('followStopBtn').classList.contains('hidden')) {
+                if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
+                if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+                isBlackScreenActive = false;
+                isScreenAutoWoken = false;
+                document.getElementById('blackOverlay').classList.add('hidden');
+                document.getElementById('followStopBtn').classList.add('hidden');
+                document.getElementById('musicAlertBanner').classList.add('hidden');
+                document.getElementById('offRouteWarning').classList.add('hidden');
+                openRouteDetail(selectedRouteIdx);
+            } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
+                document.getElementById('routeDetailUI').classList.add('hidden');
+                document.getElementById('topBackBtn').classList.add('hidden');
                 clearDomMarkers();
                 updateRouteLayers([]);
                 map.getSource('bg-route')?.setData(emptyGeoJSON());
+                renderHistoryList();
+                document.getElementById('historyModal').classList.remove('hidden');
+            } else {
+                backToMain();
+            }
+        };
+
+        document.getElementById('closeHistory').onclick = (e) => { 
+            e.preventDefault(); e.stopPropagation(); 
+            backToMain(); 
+        };
+
+        // 延遲執行刪除，防止 confirm 原生視窗造成觸控鎖死
+        document.getElementById('deleteRouteBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            setTimeout(() => {
+                if (confirm('確定要刪除這條清運路線嗎？')) {
+                    savedRoutes.splice(selectedRouteIdx, 1);
+                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    document.getElementById('historyCount').innerText = savedRoutes.length;
+                    
+                    document.getElementById('routeDetailUI').classList.add('hidden');
+                    document.getElementById('topBackBtn').classList.add('hidden');
+                    clearDomMarkers();
+                    updateRouteLayers([]);
+                    map.getSource('bg-route')?.setData(emptyGeoJSON());
+                    renderHistoryList();
+                    document.getElementById('historyModal').classList.remove('hidden');
+                }
+            }, 50);
+        };
+
+        document.getElementById('stopPlaybackBtn').onclick = (e) => { 
+            e.preventDefault(); e.stopPropagation();
+            stopSmoothPlayback(); 
+            document.getElementById('playbackUI').classList.add('hidden');
+            document.getElementById('topBackBtn').classList.remove('hidden'); 
+            openRouteDetail(selectedRouteIdx); 
+        };
+        
+        document.getElementById('followStopBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
+            if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+            isBlackScreenActive = false;
+            isScreenAutoWoken = false;
+            document.getElementById('blackOverlay').classList.add('hidden');
+            document.getElementById('followStopBtn').classList.add('hidden');
+            document.getElementById('musicAlertBanner').classList.add('hidden');
+            document.getElementById('offRouteWarning').classList.add('hidden');
+            openRouteDetail(selectedRouteIdx);
+        };
+
+        // ==========================================
+
+        const musicToggleBtn = document.getElementById('musicToggleBtn');
+        function renderMusicButtonState() {
+            const icon = document.getElementById('musicBtnIcon'), text = document.getElementById('musicBtnText');
+            if (musicActive) {
+                musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all relative z-[99999]";
+                icon.className = "fa-solid fa-music text-lg"; text.innerText = "音樂播放中 (點擊關閉)";
+            } else {
+                musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[99999]";
+                icon.className = "fa-solid fa-volume-xmark text-lg"; text.innerText = "音樂關閉中 (點擊開啟)";
+            }
+        }
+
+        musicToggleBtn.onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!isRecording) return;
+            musicActive = !musicActive;
+            renderMusicButtonState();
+            musicEvents.push({ type: musicActive ? 'on' : 'off', lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], bearing: currentHeading });
+            const badgeHtml = musicActive ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開音樂</div>` : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關音樂</div>`;
+            addPinMarker(lastKnownLngLat, badgeHtml);
+        };
+
+        document.getElementById('recordBtn').onclick = async (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!isRecording) {
+                isRecording = true; musicActive = false; renderMusicButtonState();
+                routePoints = []; musicEvents = []; totalDistanceKm = 0; elapsedSec = 0;
+                clearDomMarkers(); updateRouteLayers([]); map.getSource('bg-route')?.setData(emptyGeoJSON());
                 startTime = Date.now();
 
                 document.getElementById('idleTopRow').classList.add('hidden');
@@ -535,17 +603,14 @@
                 setCameraFollow(true);
 
                 try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
-
                 timerInterval = setInterval(() => {
                     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
                     document.getElementById('timeText').innerText = new Date(elapsedSec * 1000).toISOString().substr(11, 8);
                 }, 1000);
 
                 watchId = navigator.geolocation.watchPosition(pos => {
-                    const now = Date.now();
-                    const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                    const acc = Math.round(pos.coords.accuracy);
-                    document.getElementById('recAccuracyText').innerText = `± ${acc} m`;
+                    const now = Date.now(), lng = pos.coords.longitude, lat = pos.coords.latitude;
+                    document.getElementById('recAccuracyText').innerText = `± ${Math.round(pos.coords.accuracy)} m`;
                     if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
 
                     if (routePoints.length === 0) {
@@ -558,30 +623,18 @@
                     }
 
                     const prev = routePoints[routePoints.length - 1];
-                    const distKm = getDistanceKm(prev.lng, prev.lat, lng, lat);
-                    const distM = distKm * 1000;
-
+                    const distKm = getDistanceKm(prev.lng, prev.lat, lng, lat), distM = distKm * 1000;
                     if (distM >= minMoveMeters || (now - lastRecordTime >= gpsFreqMs && distM >= 1.5)) {
                         currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
-                        totalDistanceKm += distKm;
-                        document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
-                        
+                        totalDistanceKm += distKm; document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: currentHeading });
                         vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
                         updateRouteLayers(routePoints);
-
-                        if (isFollowingCamera) {
-                            map.easeTo({
-                                center: [lng, lat],
-                                bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
-                                offset: [0, -80], duration: 300
-                            });
-                        }
+                        if (isFollowingCamera) map.easeTo({ center: [lng, lat], bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
                         lastRecordTime = now;
                     }
                 }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
-
             } else {
                 isRecording = false;
                 if (watchId) navigator.geolocation.clearWatch(watchId);
@@ -596,45 +649,36 @@
                 document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
 
                 if (routePoints.length >= 2) {
-                    const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                    const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
-                    if (name) {
-                        const savedAuthor = localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
-                        const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
-                        localStorage.setItem('yinggeRouteLastAuthor', author);
-
-                        const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
-                        savedRoutes.unshift({
-                            id: Date.now(), name, author,
-                            date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                            distance: totalDistanceKm.toFixed(2),
-                            timeStr: `${mins}m ${secs}s`,
-                            points: routePoints, events: musicEvents
-                        });
-                        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-                        document.getElementById('historyCount').innerText = savedRoutes.length;
-                        openRouteDetail(0);
-                    }
-                } else {
-                    alert("移動距離過短，未儲存路線。");
-                }
+                    setTimeout(() => {
+                        const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                        const name = prompt("路線紀錄完成！請輸入路線名稱：", defaultName);
+                        if (name) {
+                            const author = prompt("請輸入這條路線的創作者署名：", localStorage.getItem('yinggeRouteLastAuthor') || '凱哥') || "熱心隊員";
+                            localStorage.setItem('yinggeRouteLastAuthor', author);
+                            const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
+                            savedRoutes.unshift({
+                                id: Date.now(), name, author,
+                                date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                                distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
+                                points: routePoints, events: musicEvents
+                            });
+                            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                            document.getElementById('historyCount').innerText = savedRoutes.length;
+                            openRouteDetail(0);
+                        }
+                    }, 50);
+                } else alert("移動距離過短，未儲存路線。");
             }
         };
 
-        // --- 5. 歷史清單與路線預覽 ---
         const historyModal = document.getElementById('historyModal');
         function renderHistoryList() {
-            const list = document.getElementById('historyList');
-            list.innerHTML = '';
-            if (savedRoutes.length === 0) {
-                list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>';
-                return;
-            }
+            const list = document.getElementById('historyList'); list.innerHTML = '';
+            if (savedRoutes.length === 0) { list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>'; return; }
             savedRoutes.forEach((r, idx) => {
                 const card = document.createElement('div');
                 card.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer active:scale-[0.99]";
                 const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
-                
                 card.innerHTML = `
                     <div>
                         <div class="font-black text-gray-900 text-base flex items-center">${r.name} ${authorTag}</div>
@@ -642,397 +686,154 @@
                         <div class="flex gap-3 text-xs font-bold">
                             <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
                             <span class="text-gray-600"><i class="fa-regular fa-clock mr-1"></i>${r.timeStr}</span>
-                            <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
+                            <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處</span>
                         </div>
                     </div>
-                    <i class="fa-solid fa-chevron-right text-gray-300"></i>
-                `;
+                    <i class="fa-solid fa-chevron-right text-gray-300"></i>`;
                 card.onclick = () => openRouteDetail(idx);
                 list.appendChild(card);
             });
         }
 
-        document.getElementById('historyBtn').onclick = () => { renderHistoryList(); historyModal.classList.remove('hidden'); };
-document.getElementById('closeHistory').onclick = (e) => { 
-    e.stopPropagation(); 
-    historyModal.classList.add('hidden'); 
-    backToMain(); // ✅ 關鍵修復：關閉清單時，強制把底層重置回乾淨的主畫面！
-};
-
-        function renderRouteMarkers(route) {
-            clearDomMarkers();
-            const pts = route.points;
-            if (!pts || pts.length === 0) return;
-            addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
-            addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
-            (route.events || []).forEach(ev => {
-                const html = ev.type === 'on'
-                    ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`
-                    : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
-                addPinMarker([ev.lng, ev.lat], html);
-            });
-        }
+        document.getElementById('historyBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); renderHistoryList(); historyModal.classList.remove('hidden'); };
 
         function openRouteDetail(idx) {
-            selectedRouteIdx = idx;
-            const route = savedRoutes[idx];
-            historyModal.classList.add('hidden');
+            selectedRouteIdx = idx; const route = savedRoutes[idx];
+            document.getElementById('historyModal').classList.add('hidden');
             document.getElementById('mainUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.add('hidden');
+            document.getElementById('followStopBtn').classList.add('hidden');
             document.getElementById('routeDetailUI').classList.remove('hidden');
             document.getElementById('topBackBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '路線預覽';
-
             document.getElementById('detailTitle').innerText = route.name;
             document.getElementById('detailDate').innerText = `保存於 ${route.date} · 創作者：${route.author || '隊員'}`;
             document.getElementById('detailDist').innerText = `${route.distance} km`;
             document.getElementById('detailTime').innerText = route.timeStr;
             document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
-
-            updateRouteLayers(route.points);
-            renderRouteMarkers(route);
-
+            updateRouteLayers(route.points); renderRouteMarkers(route);
             const bounds = new maplibregl.LngLatBounds();
             route.points.forEach(p => bounds.extend([p.lng, p.lat]));
             map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
         }
 
-        document.getElementById('deleteRouteBtn').onclick = (e) => {
-        if (confirm('確定要刪除這條清運路線嗎？')) {
-            savedRoutes.splice(selectedRouteIdx, 1);
-            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-            backToMain();
-        }
-    };
-
-        function backToMain() {
-            stopSmoothPlayback();
-            if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
-            document.getElementById('followStopBtn').classList.add('hidden');
-            document.getElementById('musicAlertBanner').classList.add('hidden');
-            document.getElementById('routeDetailUI').classList.add('hidden');
-            document.getElementById('playbackUI').classList.add('hidden');
-            document.getElementById('topBackBtn').classList.add('hidden');
-            document.getElementById('offRouteWarning').classList.add('hidden');
-            document.getElementById('blackOverlay').classList.add('hidden');
-            document.getElementById('mainUI').classList.remove('hidden');
-            document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
-            clearDomMarkers();
-            updateRouteLayers([]);
-            map.getSource('bg-route')?.setData(emptyGeoJSON());
-            try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
-        }
-
-        document.getElementById('topBackBtn').onclick = (e) => {
-        if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-            stopSmoothPlayback();
-            openRouteDetail(selectedRouteIdx);
-        } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
-            document.getElementById('routeDetailUI').classList.add('hidden');
-            document.getElementById('topBackBtn').classList.add('hidden');
-            renderHistoryList();
-            document.getElementById('historyModal').classList.remove('hidden');
-        } else {
-            backToMain();
-            renderHistoryList();
-            historyModal.classList.remove('hidden');
-        }
-    };
-
-        // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
-        const speedOptions = [0.3, 0.5, 1, 2, 4];
-        let speedMultiplier = 0.3;
+        const speedOptions = [0.3, 0.5, 1, 2, 4]; let speedMultiplier = 0.3;
+        const playbackSlider = document.getElementById('playbackSlider'), playPauseBtn = document.getElementById('playPauseBtn'), speedToggleBtn = document.getElementById('speedToggleBtn');
 
-        const playbackSlider = document.getElementById('playbackSlider');
-        const playPauseBtn = document.getElementById('playPauseBtn');
-        const speedToggleBtn = document.getElementById('speedToggleBtn');
-
-        document.getElementById('startReplayBtn').onclick = () => {
+        document.getElementById('startReplayBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
             const route = savedRoutes[selectedRouteIdx];
             if (!route.points || route.points.length < 2) return;
-
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '路線重播複習';
             document.getElementById('playbackTitle').innerText = route.name;
-
-            map.getSource('bg-route')?.setData({
-                type: 'FeatureCollection',
-                features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: route.points.map(p => [p.lng, p.lat]) } }]
-            });
-            updateRouteLayers([]);
-            renderRouteMarkers(route);
-
+            map.getSource('bg-route')?.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: route.points.map(p => [p.lng, p.lat]) } }] });
+            updateRouteLayers([]); renderRouteMarkers(route);
             playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
             setCameraFollow(true);
-
-            const startPt = route.points[0];
-            lastKnownLngLat = [startPt.lng, startPt.lat];
-            vehicleMarker.setLngLat(lastKnownLngLat);
-            map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
-
+            const startPt = route.points[0]; lastKnownLngLat = [startPt.lng, startPt.lat];
+            vehicleMarker.setLngLat(lastKnownLngLat); map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
             startSmoothPlayback();
         };
 
         function renderInterpolatedStep(floatIdx) {
-            const route = savedRoutes[selectedRouteIdx];
-            const pts = route.points;
-            const maxIdx = pts.length - 1;
-            const clamped = Math.min(Math.max(floatIdx, 0), maxIdx);
-            const i = Math.floor(clamped);
-            const frac = clamped - i;
-
+            const pts = savedRoutes[selectedRouteIdx].points, maxIdx = pts.length - 1, clamped = Math.min(Math.max(floatIdx, 0), maxIdx), i = Math.floor(clamped), frac = clamped - i;
             const p1 = pts[i], p2 = pts[Math.min(i + 1, maxIdx)];
-            const curLng = p1.lng + (p2.lng - p1.lng) * frac;
-            const curLat = p1.lat + (p2.lat - p1.lat) * frac;
-            lastKnownLngLat = [curLng, curLat];
-
+            lastKnownLngLat = [p1.lng + (p2.lng - p1.lng) * frac, p1.lat + (p2.lat - p1.lat) * frac];
             if (i < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
-
             vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-
-            const walkedPoints = pts.slice(0, i + 1).concat([{ lng: curLng, lat: curLat, musicActive: p2.musicActive }]);
-            updateRouteLayers(walkedPoints);
-
+            updateRouteLayers(pts.slice(0, i + 1).concat([{ lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], musicActive: p2.musicActive }]));
             const badge = document.getElementById('replayMusicBadge');
-            if (p2.musicActive) {
-                badge.className = "bg-green-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto";
-                badge.innerText = "🎵 目前路段：播放回收音樂中";
-            } else {
-                badge.className = "bg-gray-800/90 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto";
-                badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)";
-            }
-
+            if (p2.musicActive) { badge.className = "bg-green-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; badge.innerText = "🎵 目前路段：播放回收音樂中"; } 
+            else { badge.className = "bg-gray-800/90 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)"; }
             if (isFollowingCamera) map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80] });
         }
 
         function playbackLoop(timestamp) {
             if (!isPlaying) return;
             if (!lastFrameTime) lastFrameTime = timestamp;
-            const deltaSec = (timestamp - lastFrameTime) / 1000;
+            playProgress += ((timestamp - lastFrameTime) / 1000) * 2.5 * speedMultiplier;
             lastFrameTime = timestamp;
-
             const maxIdx = savedRoutes[selectedRouteIdx].points.length - 1;
-            playProgress += deltaSec * 2.5 * speedMultiplier;
-
-            if (playProgress >= maxIdx) {
-                playProgress = maxIdx;
-                renderInterpolatedStep(playProgress);
-                playbackSlider.value = Math.round(playProgress * 100);
-                stopSmoothPlayback();
-                playPauseBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i>';
-                return;
-            }
-
-            renderInterpolatedStep(playProgress);
-            playbackSlider.value = Math.round(playProgress * 100);
+            if (playProgress >= maxIdx) { playProgress = maxIdx; renderInterpolatedStep(playProgress); playbackSlider.value = Math.round(playProgress * 100); stopSmoothPlayback(); return; }
+            renderInterpolatedStep(playProgress); playbackSlider.value = Math.round(playProgress * 100);
             animFrameId = requestAnimationFrame(playbackLoop);
         }
 
-        function startSmoothPlayback() {
-            if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) playProgress = 0;
-            isPlaying = true; lastFrameTime = 0;
-            playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
-            animFrameId = requestAnimationFrame(playbackLoop);
-        }
-
-        function stopSmoothPlayback() {
-            isPlaying = false;
-            if (animFrameId) cancelAnimationFrame(animFrameId);
-            playPauseBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
-        }
-
-        playPauseBtn.onclick = () => isPlaying ? stopSmoothPlayback() : startSmoothPlayback();
+        function startSmoothPlayback() { if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) playProgress = 0; isPlaying = true; lastFrameTime = 0; playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>'; animFrameId = requestAnimationFrame(playbackLoop); }
+        function stopSmoothPlayback() { isPlaying = false; if (animFrameId) cancelAnimationFrame(animFrameId); playPauseBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; }
+        
+        playPauseBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); isPlaying ? stopSmoothPlayback() : startSmoothPlayback(); };
         playbackSlider.oninput = (e) => { playProgress = parseInt(e.target.value, 10) / 100; renderInterpolatedStep(playProgress); };
-        speedToggleBtn.onclick = () => {
-            const nextIdx = (speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length;
-            speedMultiplier = speedOptions[nextIdx];
-            speedToggleBtn.innerText = `${speedMultiplier}x`;
-        };
-        document.getElementById('stopPlaybackBtn').onclick = () => { 
-    stopSmoothPlayback(); 
-    document.getElementById('playbackUI').classList.add('hidden'); // ✅ 關鍵修復：把重播面板藏起來
-    document.getElementById('topBackBtn').classList.remove('hidden'); // 確保頂部返回鍵有出來
-    openRouteDetail(selectedRouteIdx); 
-};
+        speedToggleBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); speedMultiplier = speedOptions[(speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length]; speedToggleBtn.innerText = `${speedMultiplier}x`; };
 
-        // --- 7. 🔥 Pro Max 級實戰導航引擎 (嚴格判定 + 轉彎提示 + 智慧黑屏 + 偏離警告) ---
-        let triggeredMusicIndices = new Set();
-        let triggeredTurnIndices = new Set();
-        let isBlackScreenActive = false; // 紀錄使用者是否手動啟用了黑屏
-        let isScreenAutoWoken = false;   // 紀錄目前是否被系統暫時喚醒
-        let sleepTimer = null;           // 重新進入黑屏的計時器
+        let triggeredMusicIndices = new Set(), triggeredTurnIndices = new Set(), isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
+        const blackOverlay = document.getElementById('blackOverlay'), offRouteWarning = document.getElementById('offRouteWarning'), banner = document.getElementById('musicAlertBanner');
 
-        const blackOverlay = document.getElementById('blackOverlay');
-        const offRouteWarning = document.getElementById('offRouteWarning');
-        const banner = document.getElementById('musicAlertBanner');
+        document.getElementById('blackScreenBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); isBlackScreenActive = true; isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); };
+        blackOverlay.onclick = () => { isBlackScreenActive = false; isScreenAutoWoken = false; if (sleepTimer) clearTimeout(sleepTimer); blackOverlay.classList.add('hidden'); };
 
-        // 黑屏按鈕手動控制
-        document.getElementById('blackScreenBtn').onclick = () => {
-            isBlackScreenActive = true;
-            isScreenAutoWoken = false;
-            blackOverlay.classList.remove('hidden');
-        };
-        // 點擊螢幕任何地方強制離開黑屏
-        blackOverlay.onclick = () => {
-            isBlackScreenActive = false;
-            isScreenAutoWoken = false;
-            if (sleepTimer) clearTimeout(sleepTimer);
-            blackOverlay.classList.add('hidden');
-        };
-
-        // 智慧喚醒函數
         function autoWakeScreen() {
-            if (!isBlackScreenActive) return; // 如果本來就沒開黑屏，不用動作
-            if (isScreenAutoWoken) return;    // 已經被喚醒過了
-            
-            isScreenAutoWoken = true;
-            blackOverlay.classList.add('opacity-0'); // 淡出黑屏
-            setTimeout(() => { 
-                if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); 
-            }, 300);
-            
-            vibrate([100, 50, 100]); // 震動提示喚醒
+            if (!isBlackScreenActive || isScreenAutoWoken) return;
+            isScreenAutoWoken = true; blackOverlay.classList.add('opacity-0');
+            setTimeout(() => { if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); }, 300);
+            vibrate([100, 50, 100]);
         }
 
-        // 任務完成後，重新進入黑屏
         function autoSleepScreen() {
-            if (!isBlackScreenActive) return; // 使用者沒說要黑屏
+            if (!isBlackScreenActive) return;
             if (sleepTimer) clearTimeout(sleepTimer);
-            
-            // 延遲 5 秒後重新黑屏
-            sleepTimer = setTimeout(() => {
-                if (isBlackScreenActive) {
-                    isScreenAutoWoken = false;
-                    blackOverlay.classList.remove('hidden');
-                    // 一小段延遲讓 CSS 動畫生效
-                    setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10);
-                }
-            }, 5000);
+            sleepTimer = setTimeout(() => { if (isBlackScreenActive) { isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10); } }, 5000);
         }
 
-        // 顯示頂部大字報警告
         function showNavAlert(iconHtml, text, bgColorClass) {
             banner.className = `fixed top-16 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center text-2xl nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center gap-3 ${bgColorClass}`;
             banner.innerHTML = `<span class="text-4xl drop-shadow-md">${iconHtml}</span> <span>${text}</span>`;
-            banner.classList.remove('hidden');
-            setTimeout(() => banner.classList.add('hidden'), 6000);
+            banner.classList.remove('hidden'); setTimeout(() => banner.classList.add('hidden'), 6000);
         }
 
-        document.getElementById('startFollowBtn').onclick = async () => {
+        document.getElementById('startFollowBtn').onclick = async (e) => {
+            e.preventDefault(); e.stopPropagation();
             const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
-            
-            triggeredMusicIndices.clear();
-            triggeredTurnIndices.clear();
-            isBlackScreenActive = false;
-            isScreenAutoWoken = false;
-            
-            updateRouteLayers(route.points);
-            renderRouteMarkers(route);
-            setCameraFollow(true);
-
-            // 請求螢幕常亮
+            triggeredMusicIndices.clear(); triggeredTurnIndices.clear(); isBlackScreenActive = false; isScreenAutoWoken = false;
+            updateRouteLayers(route.points); renderRouteMarkers(route); setCameraFollow(true);
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
                 const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                // 如果手機有硬體羅盤 heading，優先使用
-                if (pos.coords.heading !== null && pos.coords.heading !== NaN) {
-                    currentHeading = pos.coords.heading;
-                } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) {
-                    // 否則用 GPS 位移計算前進方向 (速度 > 1m/s 才算準確)
-                    if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat);
-                }
-                
-                lastKnownLngLat = [lng, lat];
-                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                if (pos.coords.heading !== null && pos.coords.heading !== NaN) currentHeading = pos.coords.heading;
+                else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) { if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat); }
+                lastKnownLngLat = [lng, lat]; vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                if (isFollowingCamera) map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
 
-                if (isFollowingCamera) {
-                    map.easeTo({
-                        center: lastKnownLngLat,
-                        bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
-                        offset: [0, -80], duration: 300
-                    });
-                }
-
-                // 核心導航邏輯檢查
-                const pts = route.points;
-                let isOffRoute = true;
-                let closestPtIdx = 0;
-                let minDist = Infinity;
-
-                // 1. 尋找距離最近的軌跡線段，判斷是否偏離路線
+                const pts = route.points; let isOffRoute = true, closestPtIdx = 0, minDist = Infinity;
                 for (let i = 0; i < pts.length - 1; i++) {
                     const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                    if (distToSeg < minDist) {
-                        minDist = distToSeg;
-                        closestPtIdx = i;
-                    }
+                    if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
                 }
 
-                // 寬容度 25 公尺內都算在路線上
-                if (minDist < 25) {
-                    isOffRoute = false;
-                    offRouteWarning.classList.add('hidden');
-                } else {
-                    offRouteWarning.classList.remove('hidden');
-                    // 每 10 秒提示一次偏離
-                    if (Math.floor(Date.now() / 1000) % 10 === 0) {
-                        speakText("已偏離路線");
-                        vibrate([200, 100, 200]);
-                        autoWakeScreen();
-                    }
-                }
+                if (minDist < 25) { isOffRoute = false; offRouteWarning.classList.add('hidden'); }
+                else { offRouteWarning.classList.remove('hidden'); if (Math.floor(Date.now() / 1000) % 10 === 0) { speakText("已偏離路線"); vibrate([200, 100, 200]); autoWakeScreen(); } }
 
                 if (!isOffRoute) {
-                    // 2. 轉彎語音導航檢查 (檢查前方 3 到 6 個紀錄點的軌跡角度變化)
-                    // 假設一秒記錄一個點，大約檢查前方 15~30 公尺的轉彎
                     const lookAheadIdx = Math.min(closestPtIdx + 4, pts.length - 1);
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
-                        const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
-                        const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
-                        
-                        const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
-                        
-                        if (angleDiff > 45 && angleDiff < 135) {
-                            triggeredTurnIndices.add(closestPtIdx); // 避免重複報
-                            autoWakeScreen();
-                            showNavAlert('➡️', '前方準備右轉', 'bg-blue-600');
-                            speakText("前方準備右轉");
-                            autoSleepScreen();
-                        } else if (angleDiff < -45 && angleDiff > -135) {
-                            triggeredTurnIndices.add(closestPtIdx);
-                            autoWakeScreen();
-                            showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600');
-                            speakText("前方準備左轉");
-                            autoSleepScreen();
-                        }
+                        const angleDiff = getAngleDiff(getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat), getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat));
+                        if (angleDiff > 45 && angleDiff < 135) { triggeredTurnIndices.add(closestPtIdx); autoWakeScreen(); showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); speakText("前方準備右轉"); autoSleepScreen(); }
+                        else if (angleDiff < -45 && angleDiff > -135) { triggeredTurnIndices.add(closestPtIdx); autoWakeScreen(); showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); speakText("前方準備左轉"); autoSleepScreen(); }
                     }
-
-                    // 3. 嚴格音樂標記判定 (加入車頭方向限制，解決平行巷弄誤判)
                     (route.events || []).forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
-                        const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
-                        
-                        // 距離 35 米內，且「車頭方向」與「當初記錄標記時的車頭方向」誤差小於 60 度
-                        if (distMeters <= 35) {
-                            const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
-                            if (headingDiff < 60 || !ev.bearing) { // 如果是舊資料沒有 bearing 就跳過角度檢查
-                                triggeredMusicIndices.add(idx);
-                                autoWakeScreen();
-                                
-                                if (ev.type === 'on') {
-                                    showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
-                                    speakText("前方準備開啟回收音樂");
-                                } else {
-                                    showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
-                                    speakText("前方準備關閉回收音樂");
-                                }
+                        if (getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000 <= 35) {
+                            if (Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading)) < 60 || !ev.bearing) {
+                                triggeredMusicIndices.add(idx); autoWakeScreen();
+                                if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
+                                else { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }
                                 autoSleepScreen();
                             }
                         }
@@ -1041,60 +842,31 @@ document.getElementById('closeHistory').onclick = (e) => {
             }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
         };
 
-       // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
-        document.getElementById('exportRouteBtn').onclick = async () => {
-            const route = savedRoutes[selectedRouteIdx];
-            const routeData = JSON.stringify(route);
-            const blob = new Blob([routeData], { type: 'text/plain' });
-            const file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
-            
-            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                try {
-                    await navigator.share({ title: '分享清運路線', files: [file] });
-                    return; 
-                } catch (err) { console.log('分享取消，改下載'); }
-            }
-            
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = `${route.name}.txt`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            alert(`✅ 已下載檔案：${route.name}.txt\n請到手機的「下載」資料夾，以傳送檔案的方式發到 LINE 群組。`);
+        document.getElementById('exportRouteBtn').onclick = async (e) => {
+            e.preventDefault(); e.stopPropagation();
+            const route = savedRoutes[selectedRouteIdx], blob = new Blob([JSON.stringify(route)], { type: 'text/plain' }), file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ title: '分享清運路線', files: [file] }); return; } catch (err) { } }
+            const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = `${route.name}.txt`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+            alert(`✅ 已下載檔案：${route.name}.txt`);
         };
 
         document.getElementById('importRouteInput').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+            const file = e.target.files[0]; if (!file) return;
             const reader = new FileReader();
             reader.onload = (event) => {
                 try {
                     const route = JSON.parse(event.target.result);
                     if (!route.points || !route.name) throw new Error("格式不對");
-                    
-                    route.id = Date.now(); 
-                    savedRoutes.unshift(route);
-                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-                    document.getElementById('historyCount').innerText = savedRoutes.length;
-                    renderHistoryList();
-                    alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);
-                } catch (err) {
-                    alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。');
-                }
-                e.target.value = ''; 
-            };
-            reader.readAsText(file);
+                    route.id = Date.now(); savedRoutes.unshift(route); localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    document.getElementById('historyCount').innerText = savedRoutes.length; renderHistoryList();
+                    alert(`✅ 成功匯入路線：${route.name}`);
+                } catch (err) { alert('❌ 匯入失敗！'); } e.target.value = ''; 
+            }; reader.readAsText(file);
         };
 
-        // --- 精度設定控制 (補回並放在正確的獨立位置) ---
-        document.getElementById('settingsBtn').onclick = () => document.getElementById('settingsModal').classList.remove('hidden');
-        document.getElementById('closeSettings').onclick = () => document.getElementById('settingsModal').classList.add('hidden');
-        window.setMode = function(sec, meters, text) {
-            gpsFreqMs = sec * 1000; minMoveMeters = meters;
-            document.getElementById('currentModeText').innerText = text;
-            document.getElementById('settingsModal').classList.add('hidden');
-        };
+        document.getElementById('settingsBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); document.getElementById('settingsModal').classList.remove('hidden'); };
+        document.getElementById('closeSettings').onclick = (e) => { e.preventDefault(); e.stopPropagation(); document.getElementById('settingsModal').classList.add('hidden'); };
+        window.setMode = function(sec, meters, text) { gpsFreqMs = sec * 1000; minMoveMeters = meters; document.getElementById('currentModeText').innerText = text; document.getElementById('settingsModal').classList.add('hidden'); };
     </script>
 </body>
 </html>

@@ -794,6 +794,11 @@ document.getElementById('closeHistory').onclick = (e) => {
             const route = savedRoutes[selectedRouteIdx];
             if (!route.points || route.points.length < 2) return;
 
+            // 🚨 關鍵修復：開始重播前，強制關閉任何可能在背後偷偷執行的真實 GPS 追蹤，防止鏡頭被打架拉走！
+            if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+            if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
+            isRecording = false;
+
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '路線重播複習';
@@ -807,11 +812,15 @@ document.getElementById('closeHistory').onclick = (e) => {
             renderRouteMarkers(route);
 
             playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
+            
+            // 🚨 強制把相機跟隨打開
             setCameraFollow(true);
 
             const startPt = route.points[0];
             lastKnownLngLat = [startPt.lng, startPt.lat];
             vehicleMarker.setLngLat(lastKnownLngLat);
+            
+            // 🚨 確保地圖有跳到路線起點，並且把動畫關掉 (duration: 0)，防止跟 GPS 動畫衝突
             map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
 
             startSmoothPlayback();

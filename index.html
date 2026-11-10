@@ -40,12 +40,7 @@
             display: flex; align-items: center; justify-content: center;
             color: white; font-size: 16px;
         }
-<link rel="manifest" href="manifest.json">
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js');
-  }
-</script>
+
         /* 進度條拉桿 */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb {
@@ -57,6 +52,14 @@
             width: 100%; height: 8px; cursor: pointer; background: #e2e8f0; border-radius: 999px;
         }
     </style>
+
+<link rel="manifest" href="manifest.json">
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+  }
+</script>
+
 </head>
 <body class="bg-gray-900 relative">
 

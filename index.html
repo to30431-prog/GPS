@@ -96,7 +96,8 @@
     <!-- 頂部導航狀態與工具列 -->
     <div class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer">
         <div class="flex items-center gap-2 pointer-events-auto">
-            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
+            <!-- 加上 relative z-[999999] 確保按鈕在最上層 -->
+            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[999999]">
                 <i class="fa-solid fa-chevron-left text-lg"></i>
             </button>
             <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
@@ -107,18 +108,18 @@
 
         <!-- 右側浮動控制鍵 -->
         <div class="flex flex-col gap-2.5 pointer-events-auto">
-            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]" title="切換車頭朝上/正北朝上">
+            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[999999]" title="切換車頭朝上/正北朝上">
                 <i id="headingIcon" class="fa-solid fa-compass text-base"></i>
                 <span id="headingLabel" class="text-[9px] font-bold leading-none mt-0.5">車頭上</span>
             </button>
-            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[99999]" title="鎖定跟隨車輛">
+            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[999999]" title="鎖定跟隨車輛">
                 <i class="fa-solid fa-location-crosshairs text-base"></i>
                 <span id="followLabel" class="text-[9px] font-bold leading-none mt-0.5">跟隨中</span>
             </button>
-            <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95 relative z-[99999]">
+            <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95 relative z-[999999]">
                 <i class="fa-solid fa-moon text-base"></i>
             </button>
-            <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95 relative z-[99999]">
+            <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95 relative z-[999999]">
                 <i class="fa-solid fa-xmark"></i> 結束遵循
             </button>
         </div>
@@ -129,7 +130,7 @@
         <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md border border-gray-100">
             
             <div id="idleTopRow" class="flex justify-between items-center mb-3 gap-2.5">
-                <div id="settingsBtn" class="bg-green-50 text-green-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-green-200 cursor-pointer active:scale-95">
+                <div id="settingsBtn" class="bg-green-50 text-green-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-green-200 cursor-pointer active:scale-95 relative z-[999999]">
                     <div class="flex items-center gap-2">
                         <i class="fa-solid fa-satellite-dish text-green-600"></i>
                         <div>
@@ -139,7 +140,7 @@
                     </div>
                     <i class="fa-solid fa-sliders text-xs opacity-50"></i>
                 </div>
-                <div id="historyBtn" class="bg-blue-50 text-blue-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-blue-200 cursor-pointer active:scale-95">
+                <div id="historyBtn" class="bg-blue-50 text-blue-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-blue-200 cursor-pointer active:scale-95 relative z-[999999]">
                     <div class="flex items-center gap-2">
                         <i class="fa-solid fa-bookmark text-blue-600"></i>
                         <div>
@@ -156,13 +157,13 @@
                     <span class="text-[10px] text-gray-500 font-bold">GPS 精度</span>
                     <span id="recAccuracyText" class="text-xs font-extrabold text-gray-800 mt-0.5">± 5 m</span>
                 </div>
-                <button id="musicToggleBtn" class="flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[99999]">
+                <button id="musicToggleBtn" class="flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[999999]">
                     <i id="musicBtnIcon" class="fa-solid fa-volume-xmark text-lg"></i>
                     <span id="musicBtnText" class="text-sm">音樂關閉中 (點擊開啟)</span>
                 </button>
             </div>
 
-            <button id="recordBtn" class="w-full bg-green-700 text-white font-extrabold py-3.5 rounded-2xl text-base flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all relative z-[99999]">
+            <button id="recordBtn" class="w-full bg-green-700 text-white font-extrabold py-3.5 rounded-2xl text-base flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all relative z-[999999]">
                 <i class="fa-solid fa-play"></i> <span id="recordBtnText">開始紀錄路線</span>
             </button>
 
@@ -199,8 +200,8 @@
                     </div>
                 </div>
               <div class="flex gap-2">
-                <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[99999]"><i class="fa-solid fa-share-nodes"></i></button>
-                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
+                <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[999999]"><i class="fa-solid fa-share-nodes"></i></button>
+                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[999999]"><i class="fa-regular fa-trash-can"></i></button>
             </div>
         </div>
 
@@ -225,10 +226,10 @@
             </div>
 
             <div class="flex gap-3">
-                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative z-[99999]">
+                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative z-[999999]">
                     <i class="fa-solid fa-play"></i> 重播複習
                 </button>
-                <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden z-[99999]">
+                <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden z-[999999]">
                     <div class="absolute inset-0 bg-white/20 w-full transform -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
                     <i class="fa-solid fa-location-arrow"></i> 遵循導航
                 </button>
@@ -243,13 +244,13 @@
         </div>
 
         <div class="bg-white rounded-full px-4 py-2 shadow-xl pointer-events-auto w-full max-w-md flex items-center gap-3 border border-gray-100">
-            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95 relative z-[99999]">
+            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95 relative z-[999999]">
                 <i class="fa-solid fa-pause"></i>
             </button>
             <div class="flex-1 flex items-center py-2">
                 <input id="playbackSlider" type="range" min="0" max="1000" value="0" step="1">
             </div>
-            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95 relative z-[99999]">
+            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95 relative z-[999999]">
                 0.3x
             </button>
         </div>
@@ -259,7 +260,7 @@
                 <div id="playbackTitle" class="font-black text-gray-900 text-base truncate">路線名稱</div>
                 <div id="playbackSub" class="text-xs text-gray-500 truncate">雙指可自由旋轉縮放，按右上角恢復跟隨</div>
             </div>
-            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm relative z-[99999]">
+            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm relative z-[999999]">
                 <i class="fa-solid fa-stop"></i> 停止
             </button>
         </div>
@@ -270,19 +271,28 @@
         <div class="bg-white w-11/12 max-w-sm rounded-3xl p-5 shadow-2xl">
             <div class="flex justify-between items-center mb-3">
                 <h2 class="text-lg font-black">紀錄精度設定</h2>
-                <button id="closeSettings" class="text-gray-400 text-xl p-1 relative z-[99999]"><i class="fa-solid fa-xmark"></i></button>
+                <button id="closeSettings" class="text-gray-400 text-xl p-1 relative z-[999999]"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="space-y-2.5">
                 <label class="flex items-center justify-between p-3.5 border-2 border-blue-500 bg-blue-50 rounded-2xl cursor-pointer" onclick="setMode(2, 2, '高精度 (2秒)')">
-                    <div><div class="font-extrabold text-sm">高精度 (清運巷弄推薦)</div><div class="text-xs text-gray-500">2 秒 · 2 m (轉彎細節最完整)</div></div>
+                    <div>
+                        <div class="font-extrabold text-sm">高精度 (清運巷弄推薦)</div>
+                        <div class="text-xs text-gray-500">2 秒 · 2 m (轉彎細節最完整)</div>
+                    </div>
                     <input type="radio" name="gpsMode" value="2" checked class="w-5 h-5">
                 </label>
                 <label class="flex items-center justify-between p-3.5 border rounded-2xl cursor-pointer" onclick="setMode(5, 6, '均衡 (5秒)')">
-                    <div><div class="font-extrabold text-sm">均衡模式</div><div class="text-xs text-gray-500">5 秒 · 6 m (一般道路適用)</div></div>
+                    <div>
+                        <div class="font-extrabold text-sm">均衡模式</div>
+                        <div class="text-xs text-gray-500">5 秒 · 6 m (一般道路適用)</div>
+                    </div>
                     <input type="radio" name="gpsMode" value="5" class="w-5 h-5">
                 </label>
                 <label class="flex items-center justify-between p-3.5 border rounded-2xl cursor-pointer" onclick="setMode(12, 20, '省電 (12秒)')">
-                    <div><div class="font-extrabold text-sm">省電模式</div><div class="text-xs text-gray-500">12 秒 · 20 m (長途直線)</div></div>
+                    <div>
+                        <div class="font-extrabold text-sm">省電模式</div>
+                        <div class="text-xs text-gray-500">12 秒 · 20 m (長途直線)</div>
+                    </div>
                     <input type="radio" name="gpsMode" value="12" class="w-5 h-5">
                 </label>
             </div>
@@ -292,13 +302,13 @@
     <!-- 歷史紀錄清單彈窗 -->
     <div id="historyModal" class="hidden fixed inset-0 bg-gray-50 flex flex-col z-50 pointer-events-auto">
        <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
-    <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
-    <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
-    <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95 relative z-[99999]" title="匯入路線">
-        <i class="fa-solid fa-file-import"></i>
-        <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
-    </label>
-</div>
+            <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[999999]"><i class="fa-solid fa-house"></i></button>
+            <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
+            <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95 relative z-[999999]" title="匯入路線">
+                <i class="fa-solid fa-file-import"></i>
+                <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
+            </label>
+        </div>
         <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-3 pb-24"></div>
     </div>
 
@@ -321,13 +331,26 @@
             zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
         });
 
-        let isFollowingCamera = true, isHeadingUpMode = true, currentHeading = 0;
+        let isFollowingCamera = true;
+        let isHeadingUpMode = true;
+        let currentHeading = 0;
         let lastKnownLngLat = [121.346, 24.954];
-        let isRecording = false, watchId = null, wakeLock = null, musicActive = false;
-        let routePoints = [], musicEvents = [], totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
-        let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
+        let isRecording = false;
+        let watchId = null;
+        let wakeLock = null;
+        let musicActive = false;
+        let routePoints = [];
+        let musicEvents = [];
+        let totalDistanceKm = 0;
+        let startTime = 0;
+        let elapsedSec = 0;
+        let timerInterval = null;
+        let gpsFreqMs = 2000;
+        let minMoveMeters = 2;
+        let lastRecordTime = 0;
         let savedRoutes = JSON.parse(localStorage.getItem('yinggeCleanRoutes_v2')) || [];
-        let selectedRouteIdx = -1, domMarkers = []; 
+        let selectedRouteIdx = -1;
+        let domMarkers = []; 
 
         document.getElementById('historyCount').innerText = savedRoutes.length;
 
@@ -363,17 +386,19 @@
 
         function setCameraFollow(follow) {
             isFollowingCamera = follow;
-            const btn = document.getElementById('locateBtn'), label = document.getElementById('followLabel');
+            const btn = document.getElementById('locateBtn');
+            const label = document.getElementById('followLabel');
             if (follow) {
-                btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[99999]";
+                btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500 relative z-[999999]";
                 label.innerText = "跟隨中";
             } else {
-                btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200 relative z-[99999]";
+                btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200 relative z-[999999]";
                 label.innerText = "自由看";
             }
         }
 
-        document.getElementById('locateBtn').onclick = () => {
+        document.getElementById('locateBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
             setCameraFollow(true);
             map.easeTo({
                 center: lastKnownLngLat, zoom: Math.max(map.getZoom(), 17),
@@ -381,15 +406,17 @@
             });
         };
 
-        document.getElementById('headingModeBtn').onclick = () => {
+        document.getElementById('headingModeBtn').onclick = (e) => {
+            e.preventDefault(); e.stopPropagation();
             isHeadingUpMode = !isHeadingUpMode;
-            const btn = document.getElementById('headingModeBtn'), label = document.getElementById('headingLabel');
+            const btn = document.getElementById('headingModeBtn');
+            const label = document.getElementById('headingLabel');
             if (isHeadingUpMode) {
-                btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]";
+                btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[999999]";
                 label.innerText = "車頭上";
                 if (isFollowingCamera) map.easeTo({ bearing: currentHeading, duration: 300 });
             } else {
-                btn.className = "bg-white text-gray-700 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[99999]";
+                btn.className = "bg-white text-gray-700 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 relative z-[999999]";
                 label.innerText = "正北上";
                 if (isFollowingCamera) map.easeTo({ bearing: 0, duration: 300 });
             }
@@ -397,13 +424,15 @@
 
         function getDistanceKm(lng1, lat1, lng2, lat2) {
             const R = 6371;
-            const dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lng2 - lng1) * Math.PI / 180;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lng2 - lng1) * Math.PI / 180;
             const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
             return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         }
 
         function getBearing(lng1, lat1, lng2, lat2) {
-            const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+            const toRad = d => d * Math.PI / 180;
+            const toDeg = r => r * 180 / Math.PI;
             const dLon = toRad(lng2 - lng1);
             const y = Math.sin(dLon) * Math.cos(toRad(lat2));
             const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
@@ -417,9 +446,12 @@
 
         function pointToLineDistanceMeters(ptLng, ptLat, lineStart, lineEnd) {
             const R = 6371000;
-            const lat1 = lineStart.lat * Math.PI / 180, lon1 = lineStart.lng * Math.PI / 180;
-            const lat2 = lineEnd.lat * Math.PI / 180, lon2 = lineEnd.lng * Math.PI / 180;
-            const lat3 = ptLat * Math.PI / 180, lon3 = ptLng * Math.PI / 180;
+            const lat1 = lineStart.lat * Math.PI / 180;
+            const lon1 = lineStart.lng * Math.PI / 180;
+            const lat2 = lineEnd.lat * Math.PI / 180;
+            const lon2 = lineEnd.lng * Math.PI / 180;
+            const lat3 = ptLat * Math.PI / 180;
+            const lon3 = ptLng * Math.PI / 180;
             const d13 = Math.acos(Math.sin(lat1)*Math.sin(lat3) + Math.cos(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1)) * R;
             const theta13 = Math.atan2(Math.sin(lon3-lon1)*Math.cos(lat3), Math.cos(lat1)*Math.sin(lat3)-Math.sin(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1));
             const theta12 = Math.atan2(Math.sin(lon2-lon1)*Math.cos(lat2), Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(lon2-lon1));
@@ -430,24 +462,36 @@
             if (!('speechSynthesis' in window)) return;
             window.speechSynthesis.cancel();
             const u = new SpeechSynthesisUtterance(text);
-            u.lang = 'zh-TW'; u.rate = 1.05;
+            u.lang = 'zh-TW';
+            u.rate = 1.05;
             window.speechSynthesis.speak(u);
         }
 
-        function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
+        function vibrate(pattern) { 
+            if ('vibrate' in navigator) navigator.vibrate(pattern); 
+        }
 
         function updateRouteLayers(points) {
-            const musicFeatures = [], silentFeatures = [];
+            const musicFeatures = [];
+            const silentFeatures = [];
             for (let i = 1; i < points.length; i++) {
-                const prev = points[i - 1], curr = points[i];
+                const prev = points[i - 1];
+                const curr = points[i];
                 const seg = { type: 'Feature', geometry: { type: 'LineString', coordinates: [[prev.lng, prev.lat], [curr.lng, curr.lat]] } };
-                if (curr.musicActive) musicFeatures.push(seg); else silentFeatures.push(seg);
+                if (curr.musicActive) {
+                    musicFeatures.push(seg);
+                } else {
+                    silentFeatures.push(seg);
+                }
             }
             map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
             map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
         }
 
-        function clearDomMarkers() { domMarkers.forEach(m => m.remove()); domMarkers = []; }
+        function clearDomMarkers() { 
+            domMarkers.forEach(m => m.remove()); 
+            domMarkers = []; 
+        }
 
         function addPinMarker(lngLat, htmlContent) {
             const el = document.createElement('div');
@@ -549,16 +593,20 @@
             openRouteDetail(selectedRouteIdx); 
         };
         
+        // 結束導航時，強制執行回歸預覽的動作
         document.getElementById('followStopBtn').onclick = (e) => {
             e.preventDefault(); e.stopPropagation();
             if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
             if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
+            
             document.getElementById('blackOverlay').classList.add('hidden');
             document.getElementById('followStopBtn').classList.add('hidden');
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');
+            
+            // 強制重整地圖 UI 到路線預覽狀態
             openRouteDetail(selectedRouteIdx);
         };
 
@@ -566,13 +614,16 @@
 
         const musicToggleBtn = document.getElementById('musicToggleBtn');
         function renderMusicButtonState() {
-            const icon = document.getElementById('musicBtnIcon'), text = document.getElementById('musicBtnText');
+            const icon = document.getElementById('musicBtnIcon');
+            const text = document.getElementById('musicBtnText');
             if (musicActive) {
-                musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all relative z-[99999]";
-                icon.className = "fa-solid fa-music text-lg"; text.innerText = "音樂播放中 (點擊關閉)";
+                musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all relative z-[999999]";
+                icon.className = "fa-solid fa-music text-lg";
+                text.innerText = "音樂播放中 (點擊關閉)";
             } else {
-                musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[99999]";
-                icon.className = "fa-solid fa-volume-xmark text-lg"; text.innerText = "音樂關閉中 (點擊開啟)";
+                musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all relative z-[999999]";
+                icon.className = "fa-solid fa-volume-xmark text-lg";
+                text.innerText = "音樂關閉中 (點擊開啟)";
             }
         }
 
@@ -589,9 +640,16 @@
         document.getElementById('recordBtn').onclick = async (e) => {
             e.preventDefault(); e.stopPropagation();
             if (!isRecording) {
-                isRecording = true; musicActive = false; renderMusicButtonState();
-                routePoints = []; musicEvents = []; totalDistanceKm = 0; elapsedSec = 0;
-                clearDomMarkers(); updateRouteLayers([]); map.getSource('bg-route')?.setData(emptyGeoJSON());
+                isRecording = true; 
+                musicActive = false; 
+                renderMusicButtonState();
+                routePoints = []; 
+                musicEvents = []; 
+                totalDistanceKm = 0; 
+                elapsedSec = 0;
+                clearDomMarkers(); 
+                updateRouteLayers([]); 
+                map.getSource('bg-route')?.setData(emptyGeoJSON());
                 startTime = Date.now();
 
                 document.getElementById('idleTopRow').classList.add('hidden');
@@ -603,13 +661,16 @@
                 setCameraFollow(true);
 
                 try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+                
                 timerInterval = setInterval(() => {
                     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
                     document.getElementById('timeText').innerText = new Date(elapsedSec * 1000).toISOString().substr(11, 8);
                 }, 1000);
 
                 watchId = navigator.geolocation.watchPosition(pos => {
-                    const now = Date.now(), lng = pos.coords.longitude, lat = pos.coords.latitude;
+                    const now = Date.now();
+                    const lng = pos.coords.longitude;
+                    const lat = pos.coords.latitude;
                     document.getElementById('recAccuracyText').innerText = `± ${Math.round(pos.coords.accuracy)} m`;
                     if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
 
@@ -623,10 +684,13 @@
                     }
 
                     const prev = routePoints[routePoints.length - 1];
-                    const distKm = getDistanceKm(prev.lng, prev.lat, lng, lat), distM = distKm * 1000;
+                    const distKm = getDistanceKm(prev.lng, prev.lat, lng, lat);
+                    const distM = distKm * 1000;
+                    
                     if (distM >= minMoveMeters || (now - lastRecordTime >= gpsFreqMs && distM >= 1.5)) {
                         currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
-                        totalDistanceKm += distKm; document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
+                        totalDistanceKm += distKm; 
+                        document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: currentHeading });
                         vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
@@ -646,7 +710,7 @@
                 document.getElementById('recordBtn').classList.replace('bg-red-600', 'bg-green-700');
                 document.getElementById('recordBtnText').innerText = '開始紀錄路線';
                 document.getElementById('recordBtn').querySelector('i').classList.replace('fa-stop', 'fa-play');
-                document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
+                document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
 
                 if (routePoints.length >= 2) {
                     setTimeout(() => {
@@ -655,26 +719,37 @@
                         if (name) {
                             const author = prompt("請輸入這條路線的創作者署名：", localStorage.getItem('yinggeRouteLastAuthor') || '凱哥') || "熱心隊員";
                             localStorage.setItem('yinggeRouteLastAuthor', author);
-                            const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
+                            const mins = Math.floor(elapsedSec / 60);
+                            const secs = elapsedSec % 60;
                             savedRoutes.unshift({
-                                id: Date.now(), name, author,
+                                id: Date.now(), 
+                                name, 
+                                author,
                                 date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                                distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
-                                points: routePoints, events: musicEvents
+                                distance: totalDistanceKm.toFixed(2), 
+                                timeStr: `${mins}m ${secs}s`,
+                                points: routePoints, 
+                                events: musicEvents
                             });
                             localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
                             document.getElementById('historyCount').innerText = savedRoutes.length;
                             openRouteDetail(0);
                         }
                     }, 50);
-                } else alert("移動距離過短，未儲存路線。");
+                } else {
+                    alert("移動距離過短，未儲存路線。");
+                }
             }
         };
 
         const historyModal = document.getElementById('historyModal');
         function renderHistoryList() {
-            const list = document.getElementById('historyList'); list.innerHTML = '';
-            if (savedRoutes.length === 0) { list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>'; return; }
+            const list = document.getElementById('historyList'); 
+            list.innerHTML = '';
+            if (savedRoutes.length === 0) { 
+                list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>'; 
+                return; 
+            }
             savedRoutes.forEach((r, idx) => {
                 const card = document.createElement('div');
                 card.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer active:scale-[0.99]";
@@ -695,60 +770,104 @@
             });
         }
 
-        document.getElementById('historyBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); renderHistoryList(); historyModal.classList.remove('hidden'); };
+        document.getElementById('historyBtn').onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            renderHistoryList(); 
+            historyModal.classList.remove('hidden'); 
+        };
 
         function openRouteDetail(idx) {
-            selectedRouteIdx = idx; const route = savedRoutes[idx];
+            selectedRouteIdx = idx; 
+            const route = savedRoutes[idx];
             document.getElementById('historyModal').classList.add('hidden');
             document.getElementById('mainUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.add('hidden');
+            
             document.getElementById('routeDetailUI').classList.remove('hidden');
             document.getElementById('topBackBtn').classList.remove('hidden');
+            
             document.getElementById('appStatusTitle').innerText = '路線預覽';
             document.getElementById('detailTitle').innerText = route.name;
             document.getElementById('detailDate').innerText = `保存於 ${route.date} · 創作者：${route.author || '隊員'}`;
             document.getElementById('detailDist').innerText = `${route.distance} km`;
             document.getElementById('detailTime').innerText = route.timeStr;
             document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
-            updateRouteLayers(route.points); renderRouteMarkers(route);
+            
+            updateRouteLayers(route.points); 
+            renderRouteMarkers(route);
+            
             const bounds = new maplibregl.LngLatBounds();
             route.points.forEach(p => bounds.extend([p.lng, p.lat]));
             map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
         }
 
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
-        const speedOptions = [0.3, 0.5, 1, 2, 4]; let speedMultiplier = 0.3;
-        const playbackSlider = document.getElementById('playbackSlider'), playPauseBtn = document.getElementById('playPauseBtn'), speedToggleBtn = document.getElementById('speedToggleBtn');
+        const speedOptions = [0.3, 0.5, 1, 2, 4]; 
+        let speedMultiplier = 0.3;
+        const playbackSlider = document.getElementById('playbackSlider');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const speedToggleBtn = document.getElementById('speedToggleBtn');
 
         document.getElementById('startReplayBtn').onclick = (e) => {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault(); 
+            e.stopPropagation();
             const route = savedRoutes[selectedRouteIdx];
             if (!route.points || route.points.length < 2) return;
+            
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '路線重播複習';
             document.getElementById('playbackTitle').innerText = route.name;
+            
             map.getSource('bg-route')?.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: route.points.map(p => [p.lng, p.lat]) } }] });
-            updateRouteLayers([]); renderRouteMarkers(route);
-            playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
+            updateRouteLayers([]); 
+            renderRouteMarkers(route);
+            
+            playProgress = 0; 
+            playbackSlider.max = (route.points.length - 1) * 100; 
+            playbackSlider.value = 0;
             setCameraFollow(true);
-            const startPt = route.points[0]; lastKnownLngLat = [startPt.lng, startPt.lat];
-            vehicleMarker.setLngLat(lastKnownLngLat); map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
+            
+            const startPt = route.points[0]; 
+            lastKnownLngLat = [startPt.lng, startPt.lat];
+            vehicleMarker.setLngLat(lastKnownLngLat); 
+            map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
+            
             startSmoothPlayback();
         };
 
         function renderInterpolatedStep(floatIdx) {
-            const pts = savedRoutes[selectedRouteIdx].points, maxIdx = pts.length - 1, clamped = Math.min(Math.max(floatIdx, 0), maxIdx), i = Math.floor(clamped), frac = clamped - i;
-            const p1 = pts[i], p2 = pts[Math.min(i + 1, maxIdx)];
+            const pts = savedRoutes[selectedRouteIdx].points;
+            const maxIdx = pts.length - 1;
+            const clamped = Math.min(Math.max(floatIdx, 0), maxIdx);
+            const i = Math.floor(clamped);
+            const frac = clamped - i;
+            
+            const p1 = pts[i];
+            const p2 = pts[Math.min(i + 1, maxIdx)];
             lastKnownLngLat = [p1.lng + (p2.lng - p1.lng) * frac, p1.lat + (p2.lat - p1.lat) * frac];
-            if (i < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
+            
+            if (i < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) {
+                currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
+            }
+            
             vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
             updateRouteLayers(pts.slice(0, i + 1).concat([{ lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], musicActive: p2.musicActive }]));
+            
             const badge = document.getElementById('replayMusicBadge');
-            if (p2.musicActive) { badge.className = "bg-green-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; badge.innerText = "🎵 目前路段：播放回收音樂中"; } 
-            else { badge.className = "bg-gray-800/90 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)"; }
-            if (isFollowingCamera) map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80] });
+            if (p2.musicActive) { 
+                badge.className = "bg-green-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; 
+                badge.innerText = "🎵 目前路段：播放回收音樂中"; 
+            } else { 
+                badge.className = "bg-gray-800/90 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto"; 
+                badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)"; 
+            }
+            
+            if (isFollowingCamera) {
+                map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80] });
+            }
         }
 
         function playbackLoop(timestamp) {
@@ -756,84 +875,203 @@
             if (!lastFrameTime) lastFrameTime = timestamp;
             playProgress += ((timestamp - lastFrameTime) / 1000) * 2.5 * speedMultiplier;
             lastFrameTime = timestamp;
+            
             const maxIdx = savedRoutes[selectedRouteIdx].points.length - 1;
-            if (playProgress >= maxIdx) { playProgress = maxIdx; renderInterpolatedStep(playProgress); playbackSlider.value = Math.round(playProgress * 100); stopSmoothPlayback(); return; }
-            renderInterpolatedStep(playProgress); playbackSlider.value = Math.round(playProgress * 100);
+            if (playProgress >= maxIdx) { 
+                playProgress = maxIdx; 
+                renderInterpolatedStep(playProgress); 
+                playbackSlider.value = Math.round(playProgress * 100); 
+                stopSmoothPlayback(); 
+                return; 
+            }
+            
+            renderInterpolatedStep(playProgress); 
+            playbackSlider.value = Math.round(playProgress * 100);
             animFrameId = requestAnimationFrame(playbackLoop);
         }
 
-        function startSmoothPlayback() { if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) playProgress = 0; isPlaying = true; lastFrameTime = 0; playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>'; animFrameId = requestAnimationFrame(playbackLoop); }
-        function stopSmoothPlayback() { isPlaying = false; if (animFrameId) cancelAnimationFrame(animFrameId); playPauseBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; }
+        function startSmoothPlayback() { 
+            if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) playProgress = 0; 
+            isPlaying = true; 
+            lastFrameTime = 0; 
+            playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>'; 
+            animFrameId = requestAnimationFrame(playbackLoop); 
+        }
+
+        function stopSmoothPlayback() { 
+            isPlaying = false; 
+            if (animFrameId) cancelAnimationFrame(animFrameId); 
+            playPauseBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; 
+        }
         
-        playPauseBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); isPlaying ? stopSmoothPlayback() : startSmoothPlayback(); };
-        playbackSlider.oninput = (e) => { playProgress = parseInt(e.target.value, 10) / 100; renderInterpolatedStep(playProgress); };
-        speedToggleBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); speedMultiplier = speedOptions[(speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length]; speedToggleBtn.innerText = `${speedMultiplier}x`; };
+        playPauseBtn.onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            isPlaying ? stopSmoothPlayback() : startSmoothPlayback(); 
+        };
+        
+        playbackSlider.oninput = (e) => { 
+            playProgress = parseInt(e.target.value, 10) / 100; 
+            renderInterpolatedStep(playProgress); 
+        };
+        
+        speedToggleBtn.onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            speedMultiplier = speedOptions[(speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length]; 
+            speedToggleBtn.innerText = `${speedMultiplier}x`; 
+        };
 
-        let triggeredMusicIndices = new Set(), triggeredTurnIndices = new Set(), isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
-        const blackOverlay = document.getElementById('blackOverlay'), offRouteWarning = document.getElementById('offRouteWarning'), banner = document.getElementById('musicAlertBanner');
+        let triggeredMusicIndices = new Set();
+        let triggeredTurnIndices = new Set();
+        let isBlackScreenActive = false;
+        let isScreenAutoWoken = false;
+        let sleepTimer = null;
+        
+        const blackOverlay = document.getElementById('blackOverlay');
+        const offRouteWarning = document.getElementById('offRouteWarning');
+        const banner = document.getElementById('musicAlertBanner');
 
-        document.getElementById('blackScreenBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); isBlackScreenActive = true; isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); };
-        blackOverlay.onclick = () => { isBlackScreenActive = false; isScreenAutoWoken = false; if (sleepTimer) clearTimeout(sleepTimer); blackOverlay.classList.add('hidden'); };
+        document.getElementById('blackScreenBtn').onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            isBlackScreenActive = true; 
+            isScreenAutoWoken = false; 
+            blackOverlay.classList.remove('hidden'); 
+        };
+
+        blackOverlay.onclick = () => { 
+            isBlackScreenActive = false; 
+            isScreenAutoWoken = false; 
+            if (sleepTimer) clearTimeout(sleepTimer); 
+            blackOverlay.classList.add('hidden'); 
+        };
 
         function autoWakeScreen() {
             if (!isBlackScreenActive || isScreenAutoWoken) return;
-            isScreenAutoWoken = true; blackOverlay.classList.add('opacity-0');
-            setTimeout(() => { if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); }, 300);
+            isScreenAutoWoken = true; 
+            blackOverlay.classList.add('opacity-0');
+            setTimeout(() => { 
+                if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); 
+            }, 300);
             vibrate([100, 50, 100]);
         }
 
         function autoSleepScreen() {
             if (!isBlackScreenActive) return;
             if (sleepTimer) clearTimeout(sleepTimer);
-            sleepTimer = setTimeout(() => { if (isBlackScreenActive) { isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10); } }, 5000);
+            sleepTimer = setTimeout(() => { 
+                if (isBlackScreenActive) { 
+                    isScreenAutoWoken = false; 
+                    blackOverlay.classList.remove('hidden'); 
+                    setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10); 
+                } 
+            }, 5000);
         }
 
         function showNavAlert(iconHtml, text, bgColorClass) {
             banner.className = `fixed top-16 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center text-2xl nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center gap-3 ${bgColorClass}`;
             banner.innerHTML = `<span class="text-4xl drop-shadow-md">${iconHtml}</span> <span>${text}</span>`;
-            banner.classList.remove('hidden'); setTimeout(() => banner.classList.add('hidden'), 6000);
+            banner.classList.remove('hidden'); 
+            setTimeout(() => banner.classList.add('hidden'), 6000);
         }
 
         document.getElementById('startFollowBtn').onclick = async (e) => {
-            e.preventDefault(); e.stopPropagation();
+            e.preventDefault(); 
+            e.stopPropagation();
+            
             const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
-            triggeredMusicIndices.clear(); triggeredTurnIndices.clear(); isBlackScreenActive = false; isScreenAutoWoken = false;
-            updateRouteLayers(route.points); renderRouteMarkers(route); setCameraFollow(true);
+            
+            triggeredMusicIndices.clear(); 
+            triggeredTurnIndices.clear(); 
+            isBlackScreenActive = false; 
+            isScreenAutoWoken = false;
+            
+            updateRouteLayers(route.points); 
+            renderRouteMarkers(route); 
+            setCameraFollow(true);
+            
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
-                const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                if (pos.coords.heading !== null && pos.coords.heading !== NaN) currentHeading = pos.coords.heading;
-                else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) { if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat); }
-                lastKnownLngLat = [lng, lat]; vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-                if (isFollowingCamera) map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
-
-                const pts = route.points; let isOffRoute = true, closestPtIdx = 0, minDist = Infinity;
-                for (let i = 0; i < pts.length - 1; i++) {
-                    const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                    if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
+                const lng = pos.coords.longitude;
+                const lat = pos.coords.latitude;
+                
+                if (pos.coords.heading !== null && pos.coords.heading !== NaN) {
+                    currentHeading = pos.coords.heading;
+                } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) { 
+                    if (pos.coords.speed > 1) {
+                        currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat); 
+                    }
+                }
+                
+                lastKnownLngLat = [lng, lat]; 
+                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                
+                if (isFollowingCamera) {
+                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
                 }
 
-                if (minDist < 25) { isOffRoute = false; offRouteWarning.classList.add('hidden'); }
-                else { offRouteWarning.classList.remove('hidden'); if (Math.floor(Date.now() / 1000) % 10 === 0) { speakText("已偏離路線"); vibrate([200, 100, 200]); autoWakeScreen(); } }
+                const pts = route.points; 
+                let isOffRoute = true;
+                let closestPtIdx = 0;
+                let minDist = Infinity;
+                
+                for (let i = 0; i < pts.length - 1; i++) {
+                    const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
+                    if (distToSeg < minDist) { 
+                        minDist = distToSeg; 
+                        closestPtIdx = i; 
+                    }
+                }
+
+                if (minDist < 25) { 
+                    isOffRoute = false; 
+                    offRouteWarning.classList.add('hidden'); 
+                } else { 
+                    offRouteWarning.classList.remove('hidden'); 
+                    if (Math.floor(Date.now() / 1000) % 10 === 0) { 
+                        speakText("已偏離路線"); 
+                        vibrate([200, 100, 200]); 
+                        autoWakeScreen(); 
+                    } 
+                }
 
                 if (!isOffRoute) {
                     const lookAheadIdx = Math.min(closestPtIdx + 4, pts.length - 1);
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
                         const angleDiff = getAngleDiff(getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat), getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat));
-                        if (angleDiff > 45 && angleDiff < 135) { triggeredTurnIndices.add(closestPtIdx); autoWakeScreen(); showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); speakText("前方準備右轉"); autoSleepScreen(); }
-                        else if (angleDiff < -45 && angleDiff > -135) { triggeredTurnIndices.add(closestPtIdx); autoWakeScreen(); showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); speakText("前方準備左轉"); autoSleepScreen(); }
+                        if (angleDiff > 45 && angleDiff < 135) { 
+                            triggeredTurnIndices.add(closestPtIdx); 
+                            autoWakeScreen(); 
+                            showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); 
+                            speakText("前方準備右轉"); 
+                            autoSleepScreen(); 
+                        } else if (angleDiff < -45 && angleDiff > -135) { 
+                            triggeredTurnIndices.add(closestPtIdx); 
+                            autoWakeScreen(); 
+                            showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); 
+                            speakText("前方準備左轉"); 
+                            autoSleepScreen(); 
+                        }
                     }
+                    
                     (route.events || []).forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
                         if (getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000 <= 35) {
                             if (Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading)) < 60 || !ev.bearing) {
-                                triggeredMusicIndices.add(idx); autoWakeScreen();
-                                if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
-                                else { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }
+                                triggeredMusicIndices.add(idx); 
+                                autoWakeScreen();
+                                if (ev.type === 'on') { 
+                                    showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); 
+                                    speakText("前方準備開啟回收音樂"); 
+                                } else { 
+                                    showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); 
+                                    speakText("前方準備關閉回收音樂"); 
+                                }
                                 autoSleepScreen();
                             }
                         }
@@ -843,30 +1081,68 @@
         };
 
         document.getElementById('exportRouteBtn').onclick = async (e) => {
-            e.preventDefault(); e.stopPropagation();
-            const route = savedRoutes[selectedRouteIdx], blob = new Blob([JSON.stringify(route)], { type: 'text/plain' }), file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
-            if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ title: '分享清運路線', files: [file] }); return; } catch (err) { } }
-            const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = `${route.name}.txt`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+            e.preventDefault(); 
+            e.stopPropagation();
+            const route = savedRoutes[selectedRouteIdx];
+            const blob = new Blob([JSON.stringify(route)], { type: 'text/plain' });
+            const file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) { 
+                try { 
+                    await navigator.share({ title: '分享清運路線', files: [file] }); 
+                    return; 
+                } catch (err) { } 
+            }
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); 
+            a.href = url; 
+            a.download = `${route.name}.txt`; 
+            document.body.appendChild(a); 
+            a.click(); 
+            document.body.removeChild(a); 
+            URL.revokeObjectURL(url);
             alert(`✅ 已下載檔案：${route.name}.txt`);
         };
 
         document.getElementById('importRouteInput').onchange = (e) => {
-            const file = e.target.files[0]; if (!file) return;
+            const file = e.target.files[0]; 
+            if (!file) return;
             const reader = new FileReader();
             reader.onload = (event) => {
                 try {
                     const route = JSON.parse(event.target.result);
                     if (!route.points || !route.name) throw new Error("格式不對");
-                    route.id = Date.now(); savedRoutes.unshift(route); localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-                    document.getElementById('historyCount').innerText = savedRoutes.length; renderHistoryList();
+                    route.id = Date.now(); 
+                    savedRoutes.unshift(route); 
+                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    document.getElementById('historyCount').innerText = savedRoutes.length; 
+                    renderHistoryList();
                     alert(`✅ 成功匯入路線：${route.name}`);
-                } catch (err) { alert('❌ 匯入失敗！'); } e.target.value = ''; 
-            }; reader.readAsText(file);
+                } catch (err) { 
+                    alert('❌ 匯入失敗！'); 
+                } 
+                e.target.value = ''; 
+            }; 
+            reader.readAsText(file);
         };
 
-        document.getElementById('settingsBtn').onclick = (e) => { e.preventDefault(); e.stopPropagation(); document.getElementById('settingsModal').classList.remove('hidden'); };
-        document.getElementById('closeSettings').onclick = (e) => { e.preventDefault(); e.stopPropagation(); document.getElementById('settingsModal').classList.add('hidden'); };
-        window.setMode = function(sec, meters, text) { gpsFreqMs = sec * 1000; minMoveMeters = meters; document.getElementById('currentModeText').innerText = text; document.getElementById('settingsModal').classList.add('hidden'); };
+        document.getElementById('settingsBtn').onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            document.getElementById('settingsModal').classList.remove('hidden'); 
+        };
+        
+        document.getElementById('closeSettings').onclick = (e) => { 
+            e.preventDefault(); 
+            e.stopPropagation(); 
+            document.getElementById('settingsModal').classList.add('hidden'); 
+        };
+        
+        window.setMode = function(sec, meters, text) { 
+            gpsFreqMs = sec * 1000; 
+            minMoveMeters = meters; 
+            document.getElementById('currentModeText').innerText = text; 
+            document.getElementById('settingsModal').classList.add('hidden'); 
+        };
     </script>
 </body>
 </html>

@@ -654,8 +654,9 @@
 
         document.getElementById('historyBtn').onclick = () => { renderHistoryList(); historyModal.classList.remove('hidden'); };
 document.getElementById('closeHistory').onclick = (e) => { 
-    e.stopPropagation(); // 防止事件被底層吃掉
+    e.stopPropagation(); 
     historyModal.classList.add('hidden'); 
+    backToMain(); // ✅ 關鍵修復：關閉清單時，強制把底層重置回乾淨的主畫面！
 };
 
         function renderRouteMarkers(route) {

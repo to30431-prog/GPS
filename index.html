@@ -296,7 +296,7 @@
     <!-- 歷史紀錄清單彈窗 -->
     <div id="historyModal" class="hidden fixed inset-0 bg-gray-50 flex flex-col z-50 pointer-events-auto">
        <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
-    <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95"><i class="fa-solid fa-house"></i></button>
+    <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
     <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
     <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
         <i class="fa-solid fa-file-import"></i>
@@ -653,7 +653,10 @@
         }
 
         document.getElementById('historyBtn').onclick = () => { renderHistoryList(); historyModal.classList.remove('hidden'); };
-        document.getElementById('closeHistory').onclick = () => historyModal.classList.add('hidden');
+document.getElementById('closeHistory').onclick = (e) => { 
+    e.stopPropagation(); // 防止事件被底層吃掉
+    historyModal.classList.add('hidden'); 
+};
 
         function renderRouteMarkers(route) {
             clearDomMarkers();

@@ -851,7 +851,12 @@ document.getElementById('closeHistory').onclick = (e) => {
             speedMultiplier = speedOptions[nextIdx];
             speedToggleBtn.innerText = `${speedMultiplier}x`;
         };
-        document.getElementById('stopPlaybackBtn').onclick = () => { stopSmoothPlayback(); openRouteDetail(selectedRouteIdx); };
+        document.getElementById('stopPlaybackBtn').onclick = () => { 
+    stopSmoothPlayback(); 
+    document.getElementById('playbackUI').classList.add('hidden'); // ✅ 關鍵修復：把重播面板藏起來
+    document.getElementById('topBackBtn').classList.remove('hidden'); // 確保頂部返回鍵有出來
+    openRouteDetail(selectedRouteIdx); 
+};
 
         // --- 7. 🔥 Pro Max 級實戰導航引擎 (嚴格判定 + 轉彎提示 + 智慧黑屏 + 偏離警告) ---
         let triggeredMusicIndices = new Set();

@@ -715,12 +715,27 @@ document.getElementById('closeHistory').onclick = (e) => {
         }
 
         document.getElementById('deleteRouteBtn').onclick = (e) => {
-        if (confirm('確定要刪除這條清運路線嗎？')) {
-            savedRoutes.splice(selectedRouteIdx, 1);
-            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-            backToMain();
-        }
+        // 🎯 [修復] 阻止事件穿透到地圖層
+        e.preventDefault(); 
+        e.stopPropagation();
+        
+        // 🎯 [修復] 使用 setTimeout 延遲執行，避免 confirm 彈出視窗太快導致瀏覽器觸控死鎖
+        setTimeout(() => {
+            if (confirm('確定要刪除這條清運路線嗎？')) {
+                savedRoutes.splice(selectedRouteIdx, 1);
+                localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                document.getElementById('historyCount').innerText = savedRoutes.length;
+                
+                // 刪除後不要回到主畫面，而是退回歷史清單
+                document.getElementById('routeDetailUI').classList.add('hidden');
+                document.getElementById('topBackBtn').classList.add('hidden');
+                clearDomMarkers();
+                updateRouteLayers([]);
+                map.getSource('bg-route')?.setData(emptyGeoJSON());
+                renderHistoryList();
+                document.getElementById('historyModal').classList.remove('hidden');
+            }
+        }, 50);
     };
 
         function backToMain() {
@@ -948,6 +963,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             triggeredTurnIndices.clear();
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
+            currentTargetIndex = 0; // 🎯 [新增] 每次開始導航時，進度歸零
             currentTargetIndex = 0;
             
             updateRouteLayers(route.points);

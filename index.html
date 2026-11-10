@@ -720,16 +720,23 @@
             try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
         }
 
-        document.getElementById('topBackBtn').onclick = () => {
-            if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-                stopSmoothPlayback();
-                openRouteDetail(selectedRouteIdx);
-            } else {
-                backToMain();
-                renderHistoryList();
-                historyModal.classList.remove('hidden');
-            }
-        };
+        document.getElementById('topBackBtn').addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        if (!document.getElementById('playbackUI').classList.contains('hidden')) {
+            stopSmoothPlayback();
+            openRouteDetail(selectedRouteIdx);
+        } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
+            // 如果目前在路線預覽畫面，按返回要回到清單
+            document.getElementById('routeDetailUI').classList.add('hidden');
+            document.getElementById('topBackBtn').classList.add('hidden');
+            renderHistoryList();
+            document.getElementById('historyModal').classList.remove('hidden');
+        } else {
+            backToMain();
+            renderHistoryList();
+            historyModal.classList.remove('hidden');
+        }
+    });
 
         // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;

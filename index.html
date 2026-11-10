@@ -53,10 +53,10 @@
         }
     </style>
 
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/manifest.json">
 <script>
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js');
+    navigator.serviceWorker.register('/sw.js');
   }
 </script>
 
@@ -284,6 +284,7 @@
     <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
     <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
         <i class="fa-solid fa-file-import"></i>
+        <!-- ✅ 修復：允許選擇 .txt 檔案 -->
         <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
     </label>
 </div>
@@ -603,10 +604,16 @@
                     const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                     const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
                     if (name) {
+                        // ✅ 新增：儲存時記錄作者名稱
+                        const savedAuthor = localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
+                        const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
+                        localStorage.setItem('yinggeRouteLastAuthor', author);
+
                         const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
                         savedRoutes.unshift({
                             id: Date.now(),
                             name,
+                            author, // 寫入作者欄位
                             date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                             distance: totalDistanceKm.toFixed(2),
                             timeStr: `${mins}m ${secs}s`,
@@ -635,9 +642,12 @@
             savedRoutes.forEach((r, idx) => {
                 const card = document.createElement('div');
                 card.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer active:scale-[0.99]";
+                // ✅ 新增：在清單卡片顯示作者名牌
+                const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
+                
                 card.innerHTML = `
                     <div>
-                        <div class="font-black text-gray-900 text-base">${r.name}</div>
+                        <div class="font-black text-gray-900 text-base flex items-center">${r.name} ${authorTag}</div>
                         <div class="text-xs text-gray-400 mt-0.5 mb-2">${r.date}</div>
                         <div class="flex gap-3 text-xs font-bold">
                             <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
@@ -680,7 +690,8 @@
             document.getElementById('appStatusTitle').innerText = '路線預覽';
 
             document.getElementById('detailTitle').innerText = route.name;
-            document.getElementById('detailDate').innerText = `保存於 ${route.date}`;
+            // ✅ 新增：在詳情畫面顯示創作者
+            document.getElementById('detailDate').innerText = `保存於 ${route.date} · 創作者：${route.author || '隊員'}`;
             document.getElementById('detailDist').innerText = `${route.distance} km`;
             document.getElementById('detailTime').innerText = route.timeStr;
             document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
@@ -1001,7 +1012,8 @@
                     localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
                     document.getElementById('historyCount').innerText = savedRoutes.length;
                     renderHistoryList();
-                    alert(`✅ 成功匯入路線：${route.name}`);
+                    // ✅ 新增：匯入成功時顯示創作者名稱
+                    alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);
                 } catch (err) {
                     alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。');
                 }

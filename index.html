@@ -678,7 +678,7 @@ document.getElementById('closeHistory').onclick = (e) => {
 
         function renderRouteMarkers(route) {
             clearDomMarkers();
-            const pts = route.points;
+            
             if (!pts || pts.length === 0) return;
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
@@ -880,7 +880,7 @@ document.getElementById('closeHistory').onclick = (e) => {
         let triggeredTurnIndices = new Set();
         let isBlackScreenActive = false; // 紀錄使用者是否手動啟用了黑屏
         let isScreenAutoWoken = false;   // 紀錄目前是否被系統暫時喚醒
-        let sleepTimer = null;           // 重新進入黑屏的計時器
+        let sleepTimer = null, currentTargetIndex = 0;           // 重新進入黑屏的計時器
 
         const blackOverlay = document.getElementById('blackOverlay');
         const offRouteWarning = document.getElementById('offRouteWarning');
@@ -948,6 +948,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             triggeredTurnIndices.clear();
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
+            currentTargetIndex = 0;
             
             updateRouteLayers(route.points);
             renderRouteMarkers(route);
@@ -977,34 +978,43 @@ document.getElementById('closeHistory').onclick = (e) => {
                     });
                 }
 
-                // 核心導航邏輯檢查
-                const pts = route.points;
+                const pts = route.points; 
                 let isOffRoute = true;
-                let closestPtIdx = 0;
                 let minDist = Infinity;
+                let bestMatchIdx = currentTargetIndex; // 預設找原來的目標
 
-                // 1. 尋找距離最近的軌跡線段，判斷是否偏離路線
-                for (let i = 0; i < pts.length - 1; i++) {
+                // 1. 往前看：從「目前進度」開始，最多往前看 20 個點 (約 30~50 公尺)
+                const lookAheadLimit = Math.min(currentTargetIndex + 20, pts.length - 1);
+
+                for (let i = currentTargetIndex; i < lookAheadLimit; i++) {
                     const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
                     if (distToSeg < minDist) {
                         minDist = distToSeg;
-                        closestPtIdx = i;
+                        bestMatchIdx = i;
                     }
                 }
 
-                // 寬容度 25 公尺內都算在路線上
+                // 2. 判定進度：
                 if (minDist < 25) {
                     isOffRoute = false;
                     offRouteWarning.classList.add('hidden');
+                    
+                    // 自動跳關機制：如果找到的新點比現在進度還要前面，就更新記憶體
+                    if (bestMatchIdx > currentTargetIndex) {
+                        currentTargetIndex = bestMatchIdx;
+                    }
                 } else {
                     offRouteWarning.classList.remove('hidden');
-                    // 每 10 秒提示一次偏離
                     if (Math.floor(Date.now() / 1000) % 10 === 0) {
                         speakText("已偏離路線");
                         vibrate([200, 100, 200]);
                         autoWakeScreen();
                     }
                 }
+                
+                // 為了讓後面的語音轉彎和音樂開關可以無縫接軌，我們把計算出來的最新進度
+                // 塞回一個叫做 closestPtIdx 的變數（假裝它是舊系統），這樣後面的程式就不用大改了！
+                let closestPtIdx = currentTargetIndex;
 
                 if (!isOffRoute) {
                     // 2. 轉彎語音導航檢查 (檢查前方 3 到 6 個紀錄點的軌跡角度變化)

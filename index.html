@@ -692,14 +692,15 @@
             map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
         }
 
-        document.getElementById('deleteRouteBtn').onclick = () => {
-            if (confirm('確定要刪除這條清運路線嗎？')) {
-                savedRoutes.splice(selectedRouteIdx, 1);
-                localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-                document.getElementById('historyCount').innerText = savedRoutes.length;
-                backToMain();
-            }
-        };
+        document.getElementById('deleteRouteBtn').addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); // 阻止觸控事件被外層攔截
+        if (confirm('確定要刪除這條清運路線嗎？')) {
+            savedRoutes.splice(selectedRouteIdx, 1);
+            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+            document.getElementById('historyCount').innerText = savedRoutes.length;
+            backToMain();
+        }
+    });
 
         function backToMain() {
             stopSmoothPlayback();

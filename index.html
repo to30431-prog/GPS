@@ -948,55 +948,66 @@
         document.getElementById('blackScreenBtn').onclick = () => document.getElementById('blackOverlay').classList.remove('hidden');
         document.getElementById('blackOverlay').onclick = () => document.getElementById('blackOverlay').classList.add('hidden');
 
-        // --- 8. 路線分享與匯入功能 (文字代碼版，相容性最高) ---
+        // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
         document.getElementById('exportRouteBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];
-            // 把路線資料壓縮並轉成一串文字
-            const routeText = JSON.stringify(route);
+            const routeData = JSON.stringify(route);
             
-            // 優先嘗試呼叫手機原生分享選單
-            if (navigator.share) {
+            // 建立一個實體的 .txt 文字檔
+            const blob = new Blob([routeData], { type: 'text/plain' });
+            const file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
+            
+            // 嘗試直接呼叫手機分享選單 (以「檔案」形式傳送到 LINE)
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
                 try {
                     await navigator.share({
                         title: '分享清運路線',
-                        text: `【鶯歌清運路線：${route.name}】\n請複製以下整段代碼，並在助手App中點擊匯入：\n\n${routeText}`
+                        files: [file]
                     });
-                    return;
+                    return; // 分享成功就結束
                 } catch (err) {
-                    console.log('分享取消或失敗，改用複製');
+                    console.log('分享取消或失敗，改為強制下載');
                 }
             }
-
-            // 如果不支援原生分享，直接幫使用者複製到剪貼簿
-            try {
-                await navigator.clipboard.writeText(routeText);
-                alert(`✅ 路線【${route.name}】代碼已複製！\n請直接到 LINE 貼上傳送給隊員。`);
-            } catch (err) {
-                alert('❌ 複製失敗，請重試。');
-            }
+            
+            // 如果無法直接分享，強制手機下載該檔案 (相容性最高)
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${route.name}.txt`;
+            document.body.appendChild(a); // 必須加到網頁架構內才能穩定觸發下載
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            alert(`✅ 已下載檔案：${route.name}.txt\n請到手機的「下載」資料夾，以傳送檔案的方式發到 LINE 群組。`);
         };
 
-        // 匯入路線：改為從剪貼簿讀取文字代碼
-        const importBtnLabel = document.querySelector('label[title="匯入路線"]');
-        importBtnLabel.onclick = async (e) => {
-            e.preventDefault(); // 阻止原本開啟檔案的預設行為
-            try {
-                // 讀取手機剪貼簿的文字
-                const text = await navigator.clipboard.readText();
-                
-                // 嘗試解析是不是我們的路線資料
-                const route = JSON.parse(text.trim());
-                if (!route.points || !route.name) throw new Error("格式不對");
-
-                route.id = Date.now(); // 重置 ID 避免衝突
-                savedRoutes.unshift(route);
-                localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-                document.getElementById('historyCount').innerText = savedRoutes.length;
-                renderHistoryList();
-                alert(`✅ 成功匯入路線：${route.name}`);
-            } catch (err) {
-                alert('❌ 匯入失敗！請確認您有沒有先在 LINE 裡「複製」別人傳的完整路線代碼。');
-            }
+        // 解除前一版的剪貼簿設定，恢復原生的「選擇實體檔案」功能
+        document.querySelector('label[title="匯入路線"]').onclick = null;
+        
+        // 匯入路線：讀取隊員下載的文字檔
+        document.getElementById('importRouteInput').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const route = JSON.parse(event.target.result);
+                    if (!route.points || !route.name) throw new Error("格式不對");
+                    
+                    route.id = Date.now(); // 重置 ID 避免衝突
+                    savedRoutes.unshift(route);
+                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    document.getElementById('historyCount').innerText = savedRoutes.length;
+                    renderHistoryList();
+                    alert(`✅ 成功匯入路線：${route.name}`);
+                } catch (err) {
+                    alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。');
+                }
+                e.target.value = ''; // 清空以便下次能重新選取
+            };
+            reader.readAsText(file);
         };
     </script>
 </body>

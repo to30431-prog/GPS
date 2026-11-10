@@ -97,7 +97,8 @@
     <!-- 頂部導航狀態與工具列 -->
     <div class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer">
         <div class="flex items-center gap-2 pointer-events-auto">
-            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95">
+            <!-- 加上 relative z-[99999] -->
+<button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-chevron-left text-lg"></i>
             </button>
             <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
@@ -202,8 +203,8 @@
                     </div>
                 </div>
               <div class="flex gap-2">
-                <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95"><i class="fa-solid fa-share-nodes"></i></button>
-                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95"><i class="fa-regular fa-trash-can"></i></button>
+                <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[99999]"><i class="fa-solid fa-share-nodes"></i></button>
+<button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
             </div>
         </div>
 
@@ -692,15 +693,14 @@
             map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
         }
 
-        document.getElementById('deleteRouteBtn').addEventListener('pointerdown', (e) => {
-        e.stopPropagation(); // 阻止觸控事件被外層攔截
+        document.getElementById('deleteRouteBtn').onclick = (e) => {
         if (confirm('確定要刪除這條清運路線嗎？')) {
             savedRoutes.splice(selectedRouteIdx, 1);
             localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
             document.getElementById('historyCount').innerText = savedRoutes.length;
             backToMain();
         }
-    });
+    };
 
         function backToMain() {
             stopSmoothPlayback();
@@ -720,13 +720,11 @@
             try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
         }
 
-        document.getElementById('topBackBtn').addEventListener('pointerdown', (e) => {
-        e.stopPropagation();
+        document.getElementById('topBackBtn').onclick = (e) => {
         if (!document.getElementById('playbackUI').classList.contains('hidden')) {
             stopSmoothPlayback();
             openRouteDetail(selectedRouteIdx);
         } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
-            // 如果目前在路線預覽畫面，按返回要回到清單
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('topBackBtn').classList.add('hidden');
             renderHistoryList();
@@ -736,7 +734,7 @@
             renderHistoryList();
             historyModal.classList.remove('hidden');
         }
-    });
+    };
 
         // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;

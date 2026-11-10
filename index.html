@@ -1026,7 +1026,7 @@
             }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
         };
 
-        // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
+       // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
         document.getElementById('exportRouteBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];
             const routeData = JSON.stringify(route);
@@ -1070,6 +1070,15 @@
                 e.target.value = ''; 
             };
             reader.readAsText(file);
+        };
+
+        // --- 精度設定控制 (補回並放在正確的獨立位置) ---
+        document.getElementById('settingsBtn').onclick = () => document.getElementById('settingsModal').classList.remove('hidden');
+        document.getElementById('closeSettings').onclick = () => document.getElementById('settingsModal').classList.add('hidden');
+        window.setMode = function(sec, meters, text) {
+            gpsFreqMs = sec * 1000; minMoveMeters = meters;
+            document.getElementById('currentModeText').innerText = text;
+            document.getElementById('settingsModal').classList.add('hidden');
         };
     </script>
 </body>

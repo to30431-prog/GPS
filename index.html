@@ -948,43 +948,46 @@
         document.getElementById('blackScreenBtn').onclick = () => document.getElementById('blackOverlay').classList.remove('hidden');
         document.getElementById('blackOverlay').onclick = () => document.getElementById('blackOverlay').classList.add('hidden');
 
-        // --- 8. 路線分享與匯入功能 (可透過 LINE 傳送) ---
-    document.getElementById('exportRouteBtn').onclick = async () => {
-        const route = savedRoutes[selectedRouteIdx];
-        const routeData = JSON.stringify(route);
-        const blob = new Blob([routeData], { type: 'application/json' });
-        // 檔名會自動帶入您取的路線名稱
-        const file = new File([blob], `${route.name}.json`, { type: 'application/json' });
-        
-        // 呼叫手機原生的分享選單 (直接傳到 LINE 或分享給聯絡人)
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-                await navigator.share({
-                    title: '分享清運路線',
-                    text: `請匯入這條路線：${route.name}`,
-                    files: [file]
-                });
-            } catch (err) { console.log('分享取消'); }
-        } else {
-            // 如果手機不支援原生分享，改為直接下載檔案
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${route.name}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-        }
-    };
+        // --- 8. 路線分享與匯入功能 (文字代碼版，相容性最高) ---
+        document.getElementById('exportRouteBtn').onclick = async () => {
+            const route = savedRoutes[selectedRouteIdx];
+            // 把路線資料壓縮並轉成一串文字
+            const routeText = JSON.stringify(route);
+            
+            // 優先嘗試呼叫手機原生分享選單
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: '分享清運路線',
+                        text: `【鶯歌清運路線：${route.name}】\n請複製以下整段代碼，並在助手App中點擊匯入：\n\n${routeText}`
+                    });
+                    return;
+                } catch (err) {
+                    console.log('分享取消或失敗，改用複製');
+                }
+            }
 
-    document.getElementById('importRouteInput').onchange = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
+            // 如果不支援原生分享，直接幫使用者複製到剪貼簿
             try {
-                const route = JSON.parse(event.target.result);
-                if (!route.points || !route.name) throw new Error("格式錯誤");
+                await navigator.clipboard.writeText(routeText);
+                alert(`✅ 路線【${route.name}】代碼已複製！\n請直接到 LINE 貼上傳送給隊員。`);
+            } catch (err) {
+                alert('❌ 複製失敗，請重試。');
+            }
+        };
+
+        // 匯入路線：改為從剪貼簿讀取文字代碼
+        const importBtnLabel = document.querySelector('label[title="匯入路線"]');
+        importBtnLabel.onclick = async (e) => {
+            e.preventDefault(); // 阻止原本開啟檔案的預設行為
+            try {
+                // 讀取手機剪貼簿的文字
+                const text = await navigator.clipboard.readText();
                 
+                // 嘗試解析是不是我們的路線資料
+                const route = JSON.parse(text.trim());
+                if (!route.points || !route.name) throw new Error("格式不對");
+
                 route.id = Date.now(); // 重置 ID 避免衝突
                 savedRoutes.unshift(route);
                 localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
@@ -992,12 +995,9 @@
                 renderHistoryList();
                 alert(`✅ 成功匯入路線：${route.name}`);
             } catch (err) {
-                alert('❌ 匯入失敗，請確認這是不是正確的清運路線檔案！');
+                alert('❌ 匯入失敗！請確認您有沒有先在 LINE 裡「複製」別人傳的完整路線代碼。');
             }
-            e.target.value = ''; // 清空以便下次能重新選取
         };
-        reader.readAsText(file);
-    };
     </script>
 </body>
 </html>

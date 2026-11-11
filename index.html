@@ -969,6 +969,20 @@ document.getElementById('closeHistory').onclick = (e) => {
             triggeredTurnIndices.clear();
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
+
+            // 🚀 新增 1：預處理音樂事件，找出每個標記「在軌跡陣列中的順序位置 (Index)」
+            const mappedEvents = (route.events || []).map(ev => {
+                let minEvDist = Infinity, evPtIdx = 0;
+                for(let i = 0; i < route.points.length; i++) {
+                    let d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
+                    if(d < minEvDist) { minEvDist = d; evPtIdx = i; }
+                }
+                return { ...ev, ptIdx: evPtIdx };
+            });
+
+            // 🚀 新增 2：記錄目前車輛在整條路線中的「絕對進度 (Index)」
+            let currentNavIdx = 0; 
+            const SEARCH_WINDOW = 25; // 限制只往「前方 25 個記錄點」搜尋 (約 50 公尺內)
             
             updateRouteLayers(route.points);
             renderRouteMarkers(route);
@@ -979,11 +993,9 @@ document.getElementById('closeHistory').onclick = (e) => {
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
                 const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                // 如果手機有硬體羅盤 heading，優先使用
                 if (pos.coords.heading !== null && pos.coords.heading !== NaN) {
                     currentHeading = pos.coords.heading;
                 } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) {
-                    // 否則用 GPS 位移計算前進方向 (速度 > 1m/s 才算準確)
                     if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat);
                 }
                 
@@ -998,14 +1010,15 @@ document.getElementById('closeHistory').onclick = (e) => {
                     });
                 }
 
-                // 核心導航邏輯檢查
                 const pts = route.points;
                 let isOffRoute = true;
-                let closestPtIdx = 0;
+                let closestPtIdx = currentNavIdx;
                 let minDist = Infinity;
 
-                // 1. 尋找距離最近的軌跡線段，判斷是否偏離路線
-                for (let i = 0; i < pts.length - 1; i++) {
+                // 🚀 修改 3：滑動視窗搜尋法 (強制空間與時間順序)
+                // 只從「目前進度」往後找一小段，避免隔壁巷子 (其實是半小時後的路線) 距離很近被誤判
+                const searchEnd = Math.min(currentNavIdx + SEARCH_WINDOW, pts.length - 1);
+                for (let i = currentNavIdx; i < searchEnd; i++) {
                     const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
                     if (distToSeg < minDist) {
                         minDist = distToSeg;
@@ -1013,13 +1026,26 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 寬容度 25 公尺內都算在路線上
+                // 🚀 防呆機制：如果真的偏離太遠 (>40m) 或駕駛自己抄捷徑，放寬回「全域搜尋」重新定位進度
+                if (minDist > 40) {
+                    minDist = Infinity;
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
+                        if (distToSeg < minDist) {
+                            minDist = distToSeg;
+                            closestPtIdx = i;
+                        }
+                    }
+                }
+
+                // 🚀 更新目前的真實進度
+                currentNavIdx = closestPtIdx;
+
                 if (minDist < 25) {
                     isOffRoute = false;
                     offRouteWarning.classList.add('hidden');
                 } else {
                     offRouteWarning.classList.remove('hidden');
-                    // 每 10 秒提示一次偏離
                     if (Math.floor(Date.now() / 1000) % 10 === 0) {
                         speakText("已偏離路線");
                         vibrate([200, 100, 200]);
@@ -1028,8 +1054,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
 
                 if (!isOffRoute) {
-                    // 2. 轉彎語音導航檢查 (檢查前方 3 到 6 個紀錄點的軌跡角度變化)
-                    // 假設一秒記錄一個點，大約檢查前方 15~30 公尺的轉彎
+                    // 轉彎語音 (邏輯不變，但因為 closestPtIdx 變準確了，轉彎提示也會變精準)
                     const lookAheadIdx = Math.min(closestPtIdx + 4, pts.length - 1);
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
                         const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
@@ -1038,7 +1063,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                         const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
                         
                         if (angleDiff > 45 && angleDiff < 135) {
-                            triggeredTurnIndices.add(closestPtIdx); // 避免重複報
+                            triggeredTurnIndices.add(closestPtIdx);
                             autoWakeScreen();
                             showNavAlert('➡️', '前方準備右轉', 'bg-blue-600');
                             speakText("前方準備右轉");
@@ -1052,26 +1077,30 @@ document.getElementById('closeHistory').onclick = (e) => {
                         }
                     }
 
-                    // 3. 嚴格音樂標記判定 (加入車頭方向限制，解決平行巷弄誤判)
-                    (route.events || []).forEach((ev, idx) => {
+                    // 🚀 修改 4：音樂標記加入「進度(時間)」限制
+                    mappedEvents.forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
-                        const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
                         
-                        // 距離 35 米內，且「車頭方向」與「當初記錄標記時的車頭方向」誤差小於 60 度
-                        if (distMeters <= 35) {
-                            const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
-                            if (headingDiff < 60 || !ev.bearing) { // 如果是舊資料沒有 bearing 就跳過角度檢查
-                                triggeredMusicIndices.add(idx);
-                                autoWakeScreen();
-                                
-                                if (ev.type === 'on') {
-                                    showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
-                                    speakText("前方準備開啟回收音樂");
-                                } else {
-                                    showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
-                                    speakText("前方準備關閉回收音樂");
+                        // 關鍵：目前的導航進度，必須跟這個音樂標記的所在進度相差不到 15 個點
+                        // 這樣就算地理位置就在隔壁，只要「順序還沒輪到」，系統就會完全忽略它！
+                        if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
+                            const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
+                            
+                            if (distMeters <= 35) {
+                                const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
+                                if (headingDiff < 60 || !ev.bearing) {
+                                    triggeredMusicIndices.add(idx);
+                                    autoWakeScreen();
+                                    
+                                    if (ev.type === 'on') {
+                                        showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
+                                        speakText("前方準備開啟回收音樂");
+                                    } else {
+                                        showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
+                                        speakText("前方準備關閉回收音樂");
+                                    }
+                                    autoSleepScreen();
                                 }
-                                autoSleepScreen();
                             }
                         }
                     });

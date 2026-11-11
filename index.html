@@ -244,8 +244,8 @@
 
     <!-- 2.5 路線編輯操作浮條 -->
     <div id="editRouteBar" class="hidden absolute bottom-6 left-4 right-4 ui-layer flex flex-col items-center gap-2 z-50">
-        <div class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg">
-            🛠️ 點擊地圖軌跡處新增標記，點擊現有標記可刪除
+        <div id="editPromptText" class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">
+            🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』
         </div>
         <div class="bg-white rounded-3xl p-3 shadow-2xl pointer-events-auto w-full max-w-md flex gap-2 border border-gray-100">
             <button id="saveEditBtn" class="flex-1 bg-green-600 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm">
@@ -768,24 +768,33 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             }, 100);
         };
-        // --- 路線標記後製編輯引擎 ---
+        // --- 路線標記後製編輯引擎 (A點到B點 區段塗色版) ---
         let isEditingMode = false;
         let originalEventsBackup = [];
+        let originalPointsBackup = [];
+        let editStep = 0; // 0: 選擇A點, 1: 選擇B點
+        let editStartIndex = -1;
+        let tempMarkerA = null;
 
         document.getElementById('editRouteBtn').onclick = () => {
             const route = savedRoutes[selectedRouteIdx];
             if (!route) return;
 
             isEditingMode = true;
+            editStep = 0;
+            // 雙重備份：把標記跟軌跡點顏色都備份起來，防按取消
             originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
+            originalPointsBackup = JSON.parse(JSON.stringify(route.points || [])); 
 
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('editRouteBar').classList.remove('hidden');
-            document.getElementById('appStatusTitle').innerText = `編輯標記：${route.name}`;
+            document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』";
+            document.getElementById('appStatusTitle').innerText = `編輯：${route.name}`;
 
             renderEditableRouteMarkers(route);
         };
 
+        // 重新繪製標記 (只有黃色提醒可以手動刪除，音樂標記由系統自動控制)
         function renderEditableRouteMarkers(route) {
             clearDomMarkers();
             const pts = route.points;
@@ -797,124 +806,136 @@ document.getElementById('closeHistory').onclick = (e) => {
                 let badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
                 let iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
                 let text = ev.type === 'on' ? '開' : '關';
-                if (ev.type === 'alert') {
+                let isAlert = (ev.type === 'alert');
+                
+                if (isAlert) {
                     badgeClass = 'bg-amber-600';
                     iconClass = 'fa-triangle-exclamation';
                     text = ev.note || '提醒';
                 }
 
                 const markerEl = document.createElement('div');
-                markerEl.className = `music-marker ${badgeClass} cursor-pointer active:scale-90`;
-                markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text} <i class="fa-solid fa-circle-xmark ml-1 opacity-70"></i>`;
+                markerEl.className = `music-marker ${badgeClass} ${isAlert ? 'cursor-pointer active:scale-90' : ''}`;
                 
-                markerEl.onclick = (e) => {
-                    e.stopPropagation();
-                    if (confirm(`要刪除這個「${text}」標記嗎？`)) {
-                        route.events.splice(idx, 1);
-                        renderEditableRouteMarkers(route);
-                    }
-                };
+                if (isAlert) {
+                    // 黃色提醒保留手動刪除功能
+                    markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text} <i class="fa-solid fa-circle-xmark ml-1 opacity-70"></i>`;
+                    markerEl.onclick = (e) => {
+                        e.stopPropagation();
+                        if (confirm(`要刪除這個「${text}」標記嗎？`)) {
+                            route.events.splice(idx, 1);
+                            renderEditableRouteMarkers(route);
+                        }
+                    };
+                } else {
+                    // 音樂標記僅供顯示，不可手動刪
+                    markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+                }
 
                 const m = new maplibregl.Marker({ element: markerEl }).setLngLat([ev.lng, ev.lat]).addTo(map);
                 domMarkers.push(m);
             });
         }
 
+        // 核心：點擊地圖選擇 A點 到 B點
         map.on('click', (e) => {
             if (!isEditingMode) return;
             const route = savedRoutes[selectedRouteIdx];
             if (!route) return;
 
-            const clickLng = e.lngLat.lng;
-            const clickLat = e.lngLat.lat;
-
-            let minDist = Infinity, closestPt = null;
-            route.points.forEach(p => {
-                let d = getDistanceKm(clickLng, clickLat, p.lng, p.lat);
-                if (d < minDist) { minDist = d; closestPt = p; }
+            // 尋找離點擊處最近的軌跡點
+            let minDist = Infinity, closestIdx = -1;
+            route.points.forEach((p, idx) => {
+                let d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
+                if (d < minDist) { minDist = d; closestIdx = idx; }
             });
 
             if (minDist * 1000 > 50) {
-                alert("請點擊在路線軌跡附近來新增標記！");
-                return;
+                alert("請點擊在路線軌跡附近！"); return;
             }
 
-            const action = prompt("請選擇要新增的標記：\n1. 開啟音樂 (輸入 1)\n2. 關閉音樂 (輸入 2)\n3. 路段提醒 (輸入 3)");
-            if (action === '1') {
-                route.events = route.events || [];
-                route.events.push({ type: 'on', lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
-                renderEditableRouteMarkers(route);
-            } else if (action === '2') {
-                route.events = route.events || [];
-                route.events.push({ type: 'off', lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
-                renderEditableRouteMarkers(route);
-            } else if (action === '3') {
-                const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車、注意機車)：", "注意路段");
-                if (note) {
-                    route.events = route.events || [];
-                    route.events.push({ type: 'alert', note, lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
-                    renderEditableRouteMarkers(route);
+            if (editStep === 0) {
+                // 選定 A 點
+                editStartIndex = closestIdx;
+                editStep = 1;
+                
+                // 畫一個大大的 🅰️ 點標記
+                const el = document.createElement('div');
+                el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 區段起點</div>`;
+                tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
+                
+                document.getElementById('editPromptText').innerText = "🛠️ 已選擇起點！請點擊另一處選擇『終點 (B點)』";
+                
+            } else if (editStep === 1) {
+                // 選定 B 點
+                let editEndIndex = closestIdx;
+                let start = Math.min(editStartIndex, editEndIndex);
+                let end = Math.max(editStartIndex, editEndIndex);
+
+                const action = prompt("已選取路段，請選擇：\n\n1. 整段【開啟音樂】(變綠線)\n2. 整段【關閉音樂】(變灰線)\n3. 只要在此新增【單點黃色提醒】\n4. 放棄重選");
+                
+                if (action === '1' || action === '2') {
+                    const turnOn = (action === '1');
+                    // 將這段路線的狀態全部強制塗色
+                    for (let i = start; i <= end; i++) {
+                        route.points[i].musicActive = turnOn;
+                    }
+                    
+                    // 🚀 自動魔法：根據軌跡顏色，重新生成所有開/關標記！
+                    let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); // 保留黃色提醒
+                    
+                    let currentMusic = route.points[0].musicActive;
+                    if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
+                    
+                    for (let i = 1; i < route.points.length; i++) {
+                        // 只要發現前後兩個點的顏色不一樣，就在這裡插一根標記！
+                        if (route.points[i].musicActive !== currentMusic) {
+                            currentMusic = route.points[i].musicActive;
+                            let evtType = currentMusic ? 'on' : 'off';
+                            newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
+                        }
+                    }
+                    route.events = newEvents;
+
+                } else if (action === '3') {
+                    const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車)：", "注意路段");
+                    if (note) {
+                        route.events = route.events || [];
+                        route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
+                    }
                 }
+
+                // 清除暫時標記，復原狀態，重新繪製畫面
+                if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+                editStep = 0;
+                document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇下一個區段的『起點 (A點)』";
+                
+                updateRouteLayers(route.points); // 瞬間重畫綠/灰線
+                renderEditableRouteMarkers(route); // 瞬間重畫標記
             }
         });
 
-        // 儲存編輯結果 (包含重算整條路線的音樂狀態與顏色)
+        // 儲存編輯結果
         document.getElementById('saveEditBtn').onclick = () => {
-            const route = savedRoutes[selectedRouteIdx];
-            
-            // 🚀 新增：依照時間/空間順序，重新計算所有軌跡點的 musicActive 狀態
-            // 1. 先找出每個標記對應的軌跡點 Index
-            let mappedEvents = (route.events || []).map(ev => {
-                let minEvDist = Infinity, evPtIdx = 0;
-                for(let i = 0; i < route.points.length; i++) {
-                    let d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
-                    if(d < minEvDist) { minEvDist = d; evPtIdx = i; }
-                }
-                return { ...ev, ptIdx: evPtIdx };
-            });
-            
-            // 2. 依照軌跡順序把標記排好
-            mappedEvents.sort((a, b) => a.ptIdx - b.ptIdx);
-            
-            // 3. 從頭走到尾，根據經過的標記改變軌跡點的狀態
-            let currentMusicState = false; // 預設起點是關閉的
-            let nextEventIdx = 0;
-            
-            for (let i = 0; i < route.points.length; i++) {
-                // 如果走到了下一個有標記的點
-                if (nextEventIdx < mappedEvents.length && i >= mappedEvents[nextEventIdx].ptIdx) {
-                    // 根據標記類型改變當下的音樂狀態
-                    if (mappedEvents[nextEventIdx].type === 'on') currentMusicState = true;
-                    if (mappedEvents[nextEventIdx].type === 'off') currentMusicState = false;
-                    
-                    // 如果同一個點有多個標記，繼續往下處理
-                    while (nextEventIdx < mappedEvents.length - 1 && mappedEvents[nextEventIdx + 1].ptIdx === mappedEvents[nextEventIdx].ptIdx) {
-                        nextEventIdx++;
-                        if (mappedEvents[nextEventIdx].type === 'on') currentMusicState = true;
-                        if (mappedEvents[nextEventIdx].type === 'off') currentMusicState = false;
-                    }
-                    nextEventIdx++;
-                }
-                // 把計算後的狀態寫回這個軌跡點
-                route.points[i].musicActive = currentMusicState;
-            }
-
-            // 結束編輯模式
             isEditingMode = false;
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             
-            // 寫回 IndexedDB 並重新載入
             localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
                 document.getElementById('topBackBtn').classList.remove('hidden');
                 openRouteDetail(selectedRouteIdx); 
             });
         };
 
+        // 取消編輯 (安全還原)
         document.getElementById('cancelEditBtn').onclick = () => {
             isEditingMode = false;
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             
             savedRoutes[selectedRouteIdx].events = originalEventsBackup;
+            savedRoutes[selectedRouteIdx].points = originalPointsBackup;
+            
             document.getElementById('topBackBtn').classList.remove('hidden');
             openRouteDetail(selectedRouteIdx);
         };

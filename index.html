@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -338,11 +339,15 @@ let musicActive = false;
         let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
         let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
 
-        let savedRoutes = JSON.parse(localStorage.getItem('yinggeCleanRoutes_v2')) || [];
+        let savedRoutes = [];
         let selectedRouteIdx = -1;
         let domMarkers = []; 
 
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+        // 🚀 改用 localforage 讀取大容量資料庫
+        localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
+            if (value) savedRoutes = value;
+            document.getElementById('historyCount').innerText = savedRoutes.length;
+        }).catch((err) => console.log("讀取路線失敗:", err));
 
         // 導航箭頭
         const puckEl = document.createElement('div');
@@ -612,7 +617,7 @@ let musicActive = false;
                             timeStr: `${mins}m ${secs}s`,
                             points: routePoints, events: musicEvents
                         });
-                        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
                         document.getElementById('historyCount').innerText = savedRoutes.length;
                         openRouteDetail(0);
                     }
@@ -705,7 +710,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             setTimeout(() => {
                 if (confirm('確定要刪除這條清運路線嗎？')) {
                     savedRoutes.splice(selectedRouteIdx, 1);
-                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
                     document.getElementById('historyCount').innerText = savedRoutes.length;
                     
                     // 刪除後跳回歷史清單
@@ -1104,7 +1109,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                     
                     route.id = Date.now(); 
                     savedRoutes.unshift(route);
-                    localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
                     document.getElementById('historyCount').innerText = savedRoutes.length;
                     renderHistoryList();
                     alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);

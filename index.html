@@ -204,9 +204,10 @@
                     </div>
                 </div>
               <div class="flex gap-2">
+                <button id="editRouteBtn" class="text-amber-600 hover:text-amber-800 p-2 bg-amber-50 rounded-xl active:scale-95 relative z-[99999]" title="補記或編輯標記"><i class="fa-solid fa-pen-to-square"></i></button>
                 <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[99999]"><i class="fa-solid fa-share-nodes"></i></button>
-<button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
-            </div>
+                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
+              </div>
         </div>
 
             <div class="flex items-center gap-4 text-xs font-bold mb-3 px-1">
@@ -241,6 +242,21 @@
         </div>
     </div>
 
+    <!-- 2.5 路線編輯操作浮條 -->
+    <div id="editRouteBar" class="hidden absolute bottom-6 left-4 right-4 ui-layer flex flex-col items-center gap-2 z-50">
+        <div class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg">
+            🛠️ 點擊地圖軌跡處新增標記，點擊現有標記可刪除
+        </div>
+        <div class="bg-white rounded-3xl p-3 shadow-2xl pointer-events-auto w-full max-w-md flex gap-2 border border-gray-100">
+            <button id="saveEditBtn" class="flex-1 bg-green-600 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm">
+                <i class="fa-solid fa-check"></i> 完成並儲存
+            </button>
+            <button id="cancelEditBtn" class="flex-1 bg-gray-500 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm">
+                <i class="fa-solid fa-xmark"></i> 取消放棄
+            </button>
+        </div>
+    </div>
+    
     <!-- 3. 動態重播控制面板 -->
     <div id="playbackUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex flex-col items-center gap-2.5">
         <div id="replayMusicBadge" class="bg-gray-800/90 backdrop-blur text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">
@@ -745,6 +761,114 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             }, 100);
         };
+        // --- 路線標記後製編輯引擎 ---
+        let isEditingMode = false;
+        let originalEventsBackup = [];
+
+        document.getElementById('editRouteBtn').onclick = () => {
+            const route = savedRoutes[selectedRouteIdx];
+            if (!route) return;
+
+            isEditingMode = true;
+            originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
+
+            document.getElementById('routeDetailUI').classList.add('hidden');
+            document.getElementById('editRouteBar').classList.remove('hidden');
+            document.getElementById('appStatusTitle').innerText = `編輯標記：${route.name}`;
+
+            renderEditableRouteMarkers(route);
+        };
+
+        function renderEditableRouteMarkers(route) {
+            clearDomMarkers();
+            const pts = route.points;
+            if (!pts || pts.length === 0) return;
+            addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
+            addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
+
+            (route.events || []).forEach((ev, idx) => {
+                let badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
+                let iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
+                let text = ev.type === 'on' ? '開' : '關';
+                if (ev.type === 'alert') {
+                    badgeClass = 'bg-amber-600';
+                    iconClass = 'fa-triangle-exclamation';
+                    text = ev.note || '提醒';
+                }
+
+                const markerEl = document.createElement('div');
+                markerEl.className = `music-marker ${badgeClass} cursor-pointer active:scale-90`;
+                markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text} <i class="fa-solid fa-circle-xmark ml-1 opacity-70"></i>`;
+                
+                markerEl.onclick = (e) => {
+                    e.stopPropagation();
+                    if (confirm(`要刪除這個「${text}」標記嗎？`)) {
+                        route.events.splice(idx, 1);
+                        renderEditableRouteMarkers(route);
+                    }
+                };
+
+                const m = new maplibregl.Marker({ element: markerEl }).setLngLat([ev.lng, ev.lat]).addTo(map);
+                domMarkers.push(m);
+            });
+        }
+
+        map.on('click', (e) => {
+            if (!isEditingMode) return;
+            const route = savedRoutes[selectedRouteIdx];
+            if (!route) return;
+
+            const clickLng = e.lngLat.lng;
+            const clickLat = e.lngLat.lat;
+
+            let minDist = Infinity, closestPt = null;
+            route.points.forEach(p => {
+                let d = getDistanceKm(clickLng, clickLat, p.lng, p.lat);
+                if (d < minDist) { minDist = d; closestPt = p; }
+            });
+
+            if (minDist * 1000 > 50) {
+                alert("請點擊在路線軌跡附近來新增標記！");
+                return;
+            }
+
+            const action = prompt("請選擇要新增的標記：\n1. 開啟音樂 (輸入 1)\n2. 關閉音樂 (輸入 2)\n3. 路段提醒 (輸入 3)");
+            if (action === '1') {
+                route.events = route.events || [];
+                route.events.push({ type: 'on', lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
+                renderEditableRouteMarkers(route);
+            } else if (action === '2') {
+                route.events = route.events || [];
+                route.events.push({ type: 'off', lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
+                renderEditableRouteMarkers(route);
+            } else if (action === '3') {
+                const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車、注意機車)：", "注意路段");
+                if (note) {
+                    route.events = route.events || [];
+                    route.events.push({ type: 'alert', note, lng: closestPt.lng, lat: closestPt.lat, bearing: closestPt.bearing || 0 });
+                    renderEditableRouteMarkers(route);
+                }
+            }
+        });
+
+        document.getElementById('saveEditBtn').onclick = () => {
+            isEditingMode = false;
+            document.getElementById('editRouteBar').classList.add('hidden');
+            
+            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                document.getElementById('topBackBtn').classList.remove('hidden');
+                openRouteDetail(selectedRouteIdx); 
+            });
+        };
+
+        document.getElementById('cancelEditBtn').onclick = () => {
+            isEditingMode = false;
+            document.getElementById('editRouteBar').classList.add('hidden');
+            
+            savedRoutes[selectedRouteIdx].events = originalEventsBackup;
+            document.getElementById('topBackBtn').classList.remove('hidden');
+            openRouteDetail(selectedRouteIdx);
+        };
 
         function backToMain() {
             stopSmoothPlayback();
@@ -1100,9 +1224,13 @@ document.getElementById('closeHistory').onclick = (e) => {
                                     if (ev.type === 'on') {
                                         showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
                                         speakText("前方準備開啟回收音樂");
-                                    } else {
+                                    } else if (ev.type === 'off') {
                                         showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
                                         speakText("前方準備關閉回收音樂");
+                                    } else if (ev.type === 'alert') {
+                                        // 🚀 新增：自訂語音提醒播報
+                                        showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600');
+                                        speakText(`前方提醒，${ev.note}`);
                                     }
                                     autoSleepScreen();
                                 }

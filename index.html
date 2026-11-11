@@ -343,9 +343,29 @@ let musicActive = false;
         let selectedRouteIdx = -1;
         let domMarkers = []; 
 
-        // 🚀 改用 localforage 讀取大容量資料庫
+        let savedRoutes = [];
+        let selectedRouteIdx = -1;
+        let domMarkers = []; 
+
+        // 🚀 自動搬家與讀取大容量資料庫
         localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
-            if (value) savedRoutes = value;
+            // 檢查舊的 localStorage 有沒有資料
+            const oldStorage = localStorage.getItem('yinggeCleanRoutes_v2');
+            
+            if (value && value.length > 0) {
+                // 如果大倉庫 (localforage) 已經有資料，就用大倉庫的
+                savedRoutes = value;
+            } else if (oldStorage) {
+                // 如果大倉庫沒資料，但小房間 (localStorage) 有資料，就執行搬家！
+                savedRoutes = JSON.parse(oldStorage);
+                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                    // 搬家完成後，清空舊的小房間，釋放空間
+                    localStorage.removeItem('yinggeCleanRoutes_v2');
+                    console.log("✅ 舊路線已成功搬移至大容量資料庫！");
+                });
+            }
+            
+            // 更新畫面上顯示的路線數量
             document.getElementById('historyCount').innerText = savedRoutes.length;
         }).catch((err) => console.log("讀取路線失敗:", err));
 

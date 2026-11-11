@@ -858,10 +858,52 @@ document.getElementById('closeHistory').onclick = (e) => {
             }
         });
 
+        // 儲存編輯結果 (包含重算整條路線的音樂狀態與顏色)
         document.getElementById('saveEditBtn').onclick = () => {
+            const route = savedRoutes[selectedRouteIdx];
+            
+            // 🚀 新增：依照時間/空間順序，重新計算所有軌跡點的 musicActive 狀態
+            // 1. 先找出每個標記對應的軌跡點 Index
+            let mappedEvents = (route.events || []).map(ev => {
+                let minEvDist = Infinity, evPtIdx = 0;
+                for(let i = 0; i < route.points.length; i++) {
+                    let d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
+                    if(d < minEvDist) { minEvDist = d; evPtIdx = i; }
+                }
+                return { ...ev, ptIdx: evPtIdx };
+            });
+            
+            // 2. 依照軌跡順序把標記排好
+            mappedEvents.sort((a, b) => a.ptIdx - b.ptIdx);
+            
+            // 3. 從頭走到尾，根據經過的標記改變軌跡點的狀態
+            let currentMusicState = false; // 預設起點是關閉的
+            let nextEventIdx = 0;
+            
+            for (let i = 0; i < route.points.length; i++) {
+                // 如果走到了下一個有標記的點
+                if (nextEventIdx < mappedEvents.length && i >= mappedEvents[nextEventIdx].ptIdx) {
+                    // 根據標記類型改變當下的音樂狀態
+                    if (mappedEvents[nextEventIdx].type === 'on') currentMusicState = true;
+                    if (mappedEvents[nextEventIdx].type === 'off') currentMusicState = false;
+                    
+                    // 如果同一個點有多個標記，繼續往下處理
+                    while (nextEventIdx < mappedEvents.length - 1 && mappedEvents[nextEventIdx + 1].ptIdx === mappedEvents[nextEventIdx].ptIdx) {
+                        nextEventIdx++;
+                        if (mappedEvents[nextEventIdx].type === 'on') currentMusicState = true;
+                        if (mappedEvents[nextEventIdx].type === 'off') currentMusicState = false;
+                    }
+                    nextEventIdx++;
+                }
+                // 把計算後的狀態寫回這個軌跡點
+                route.points[i].musicActive = currentMusicState;
+            }
+
+            // 結束編輯模式
             isEditingMode = false;
             document.getElementById('editRouteBar').classList.add('hidden');
             
+            // 寫回 IndexedDB 並重新載入
             localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
                 document.getElementById('topBackBtn').classList.remove('hidden');
                 openRouteDetail(selectedRouteIdx); 

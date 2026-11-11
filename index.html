@@ -270,6 +270,8 @@
             <button onclick="handleRouteAction('1')" class="bg-green-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-music"></i> 整段【開啟音樂】(變綠線)</button>
             <button onclick="handleRouteAction('2')" class="bg-gray-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-volume-xmark"></i> 整段【關閉音樂】(變灰線)</button>
             <button onclick="handleRouteAction('3')" class="bg-amber-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-triangle-exclamation"></i> 單點新增【黃色提醒】</button>
+            <!-- 🚀 新增這顆藍色的定點按鈕 -->
+            <button onclick="handleRouteAction('5')" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-clock"></i> 單點新增【藍色時刻站牌】</button>
             <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-3 rounded-2xl active:scale-95 mt-1 border border-gray-200">取消重選</button>
         </div>
     </div>
@@ -881,6 +883,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
 
+            // 1. 畫出音樂與提醒標記
             (route.events || []).forEach((ev, idx) => {
                 let badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
                 let iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
@@ -888,34 +891,73 @@ document.getElementById('closeHistory').onclick = (e) => {
                 let isAlert = (ev.type === 'alert');
                 
                 if (isAlert) {
-                    badgeClass = 'bg-amber-600';
-                    iconClass = 'fa-triangle-exclamation';
-                    text = ev.note || '提醒';
+                    badgeClass = 'bg-amber-600'; iconClass = 'fa-triangle-exclamation'; text = ev.note || '提醒';
                 }
-
                 const markerEl = document.createElement('div');
                 markerEl.className = `music-marker ${badgeClass} ${isAlert ? 'cursor-pointer active:scale-90' : ''}`;
                 
                 if (isAlert) {
-                    // 黃色提醒保留手動刪除功能
                     markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text} <i class="fa-solid fa-circle-xmark ml-1 opacity-70"></i>`;
-                    markerEl.onclick = (e) => {
-                        e.stopPropagation();
-                        if (confirm(`要刪除這個「${text}」標記嗎？`)) {
-                            route.events.splice(idx, 1);
-                            renderEditableRouteMarkers(route);
-                        }
-                    };
+                    markerEl.onclick = (e) => { e.stopPropagation(); if (confirm(`要刪除這提醒嗎？`)) { route.events.splice(idx, 1); renderEditableRouteMarkers(route); } };
                 } else {
-                    // 音樂標記僅供顯示，不可手動刪
                     markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
                 }
-
                 const m = new maplibregl.Marker({ element: markerEl }).setLngLat([ev.lng, ev.lat]).addTo(map);
                 domMarkers.push(m);
             });
-        }
 
+            // 🚀 2. 畫出「可拖曳、可修改」的藍色站牌
+            (route.points || []).forEach((p, idx) => {
+                if (p.is_stop) {
+                    const markerEl = document.createElement('div');
+                    markerEl.className = `music-marker bg-indigo-600 border border-white shadow-lg cursor-grab active:cursor-grabbing`;
+                    markerEl.innerHTML = `<i class="fa-regular fa-clock"></i> ${p.scheduled_time} <i class="fa-solid fa-pen ml-1 opacity-70"></i>`;
+                    
+                    // 啟用 draggable API
+                    const m = new maplibregl.Marker({ element: markerEl, draggable: true })
+                        .setLngLat([p.lng, p.lat])
+                        .addTo(map);
+
+                    // 拖曳結束：尋找最近的軌跡點，自動吸附並轉移站點資料
+                    m.on('dragend', () => {
+                        const newLngLat = m.getLngLat();
+                        let minDist = Infinity, newIdx = idx;
+                        route.points.forEach((rp, i) => {
+                            let d = getDistanceKm(newLngLat.lng, newLngLat.lat, rp.lng, rp.lat);
+                            if (d < minDist) { minDist = d; newIdx = i; }
+                        });
+                        
+                        if (newIdx !== idx) {
+                            route.points[newIdx].is_stop = true;
+                            route.points[newIdx].stop_name = p.stop_name;
+                            route.points[newIdx].scheduled_time = p.scheduled_time;
+                            delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
+                        }
+                        renderEditableRouteMarkers(route); 
+                    });
+
+                    // 點擊彈窗：修改資料或刪除
+                    markerEl.onclick = (e) => {
+                        e.stopPropagation();
+                        const act = prompt(`編輯站牌：${p.stop_name}\n\n1. 修改時間與站名\n2. 刪除此站牌\n(請輸入 1 或 2)：`, "1");
+                        if (act === "1") {
+                            const newTime = prompt("新時間 (如 17:30)：", p.scheduled_time);
+                            const newName = prompt("新站名：", p.stop_name);
+                            if (newTime && newName) {
+                                route.points[idx].scheduled_time = newTime; route.points[idx].stop_name = newName;
+                                renderEditableRouteMarkers(route);
+                            }
+                        } else if (act === "2") {
+                            if (confirm("確定要刪除這站嗎？")) {
+                                delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
+                                renderEditableRouteMarkers(route);
+                            }
+                        }
+                    };
+                    domMarkers.push(m);
+                }
+            });
+        }
         // 核心：點擊地圖選擇 A點 到 B點
         map.on('click', (e) => {
             if (!isEditingMode) return;
@@ -992,8 +1034,16 @@ document.getElementById('closeHistory').onclick = (e) => {
                     route.events = route.events || [];
                     route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
                 }
+                } else if (action === '5') {
+                // 🚀 新增：手動加入藍色定點
+                const time = prompt("請輸入表定時間 (格式如 17:30)：", "17:00");
+                const name = prompt("請輸入站點名稱 (如：火車站前)：", "新增定點");
+                if (time && name) {
+                    route.points[editStartIndex].is_stop = true;
+                    route.points[editStartIndex].scheduled_time = time;
+                    route.points[editStartIndex].stop_name = name;
+                }
             }
-
             // 清除暫時標記，復原狀態，重新繪製畫面
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             editStep = 0;

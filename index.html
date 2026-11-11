@@ -739,20 +739,23 @@ document.getElementById('closeHistory').onclick = (e) => {
         }
 
         document.getElementById('topBackBtn').onclick = (e) => {
-        if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-            stopSmoothPlayback();
-            openRouteDetail(selectedRouteIdx);
-        } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
-            document.getElementById('routeDetailUI').classList.add('hidden');
-            document.getElementById('topBackBtn').classList.add('hidden');
-            renderHistoryList();
-            document.getElementById('historyModal').classList.remove('hidden');
-        } else {
-            backToMain();
-            renderHistoryList();
-            historyModal.classList.remove('hidden');
-        }
-    };
+            if (!document.getElementById('playbackUI').classList.contains('hidden')) {
+                stopSmoothPlayback();
+                openRouteDetail(selectedRouteIdx);
+            } else if (!document.getElementById('followStopBtn').classList.contains('hidden')) {
+                // 新增：如果在導航中，按左上角也退回詳情並觸發結束遵循
+                document.getElementById('followStopBtn').click();
+            } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
+                document.getElementById('routeDetailUI').classList.add('hidden');
+                document.getElementById('topBackBtn').classList.add('hidden');
+                renderHistoryList();
+                document.getElementById('historyModal').classList.remove('hidden');
+            } else {
+                backToMain();
+                renderHistoryList();
+                historyModal.classList.remove('hidden');
+            }
+        };
 
         // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
@@ -1054,7 +1057,19 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
         };
-
+// --- 結束遵循導航按鈕動作 ---
+        document.getElementById('followStopBtn').onclick = () => {
+            if (followWatchId) {
+                navigator.geolocation.clearWatch(followWatchId);
+                followWatchId = null;
+            }
+            document.getElementById('followStopBtn').classList.add('hidden');
+            document.getElementById('musicAlertBanner').classList.add('hidden');
+            document.getElementById('offRouteWarning').classList.add('hidden');
+            document.getElementById('blackOverlay').classList.add('hidden');
+            try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
+            openRouteDetail(selectedRouteIdx);
+        };
        // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
         document.getElementById('exportRouteBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];

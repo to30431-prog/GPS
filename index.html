@@ -343,10 +343,6 @@ let musicActive = false;
         let selectedRouteIdx = -1;
         let domMarkers = []; 
 
-        let savedRoutes = [];
-        let selectedRouteIdx = -1;
-        let domMarkers = []; 
-
         // 🚀 自動搬家與讀取大容量資料庫
         localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
             // 檢查舊的 localStorage 有沒有資料

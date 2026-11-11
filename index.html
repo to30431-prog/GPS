@@ -256,6 +256,16 @@
             </button>
         </div>
     </div>
+<!-- 2.6 自訂區段動作大按鈕選單 -->
+    <div id="customActionModal" class="hidden fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center pointer-events-auto transition-opacity">
+        <div class="bg-white w-11/12 max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3">
+            <h3 class="text-lg font-black text-gray-900 mb-2 text-center">已選取路段，請選擇動作</h3>
+            <button onclick="handleRouteAction('1')" class="bg-green-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-music"></i> 整段【開啟音樂】(變綠線)</button>
+            <button onclick="handleRouteAction('2')" class="bg-gray-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-volume-xmark"></i> 整段【關閉音樂】(變灰線)</button>
+            <button onclick="handleRouteAction('3')" class="bg-amber-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-triangle-exclamation"></i> 單點新增【黃色提醒】</button>
+            <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-3 rounded-2xl active:scale-95 mt-1 border border-gray-200">取消重選</button>
+        </div>
+    </div>
     
     <!-- 3. 動態重播控制面板 -->
     <div id="playbackUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex flex-col items-center gap-2.5">
@@ -872,49 +882,56 @@ document.getElementById('closeHistory').onclick = (e) => {
                 let start = Math.min(editStartIndex, editEndIndex);
                 let end = Math.max(editStartIndex, editEndIndex);
 
-                const action = prompt("已選取路段，請選擇：\n\n1. 整段【開啟音樂】(變綠線)\n2. 整段【關閉音樂】(變灰線)\n3. 只要在此新增【單點黃色提醒】\n4. 放棄重選");
+                // 把座標進度存到全域，給按鈕使用
+                window.currentEditData = { route, start, end, editStartIndex };
                 
-                if (action === '1' || action === '2') {
-                    const turnOn = (action === '1');
-                    // 將這段路線的狀態全部強制塗色
-                    for (let i = start; i <= end; i++) {
-                        route.points[i].musicActive = turnOn;
-                    }
-                    
-                    // 🚀 自動魔法：根據軌跡顏色，重新生成所有開/關標記！
-                    let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); // 保留黃色提醒
-                    
-                    let currentMusic = route.points[0].musicActive;
-                    if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
-                    
-                    for (let i = 1; i < route.points.length; i++) {
-                        // 只要發現前後兩個點的顏色不一樣，就在這裡插一根標記！
-                        if (route.points[i].musicActive !== currentMusic) {
-                            currentMusic = route.points[i].musicActive;
-                            let evtType = currentMusic ? 'on' : 'off';
-                            newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
-                        }
-                    }
-                    route.events = newEvents;
+                // 呼叫漂亮的大按鈕選單
+                document.getElementById('customActionModal').classList.remove('hidden');
+            }
+        }); // 結束 map.on('click')
 
-                } else if (action === '3') {
-                    const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車)：", "注意路段");
-                    if (note) {
-                        route.events = route.events || [];
-                        route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
+        // 🚀 新增：處理大按鈕點擊的專屬功能
+        window.handleRouteAction = function(action) {
+            document.getElementById('customActionModal').classList.add('hidden'); // 關閉彈窗
+            if (!window.currentEditData) return;
+
+            const { route, start, end, editStartIndex } = window.currentEditData;
+
+            if (action === '1' || action === '2') {
+                const turnOn = (action === '1');
+                for (let i = start; i <= end; i++) {
+                    route.points[i].musicActive = turnOn;
+                }
+                
+                let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); 
+                let currentMusic = route.points[0].musicActive;
+                if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
+                
+                for (let i = 1; i < route.points.length; i++) {
+                    if (route.points[i].musicActive !== currentMusic) {
+                        currentMusic = route.points[i].musicActive;
+                        let evtType = currentMusic ? 'on' : 'off';
+                        newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
                     }
                 }
+                route.events = newEvents;
 
-                // 清除暫時標記，復原狀態，重新繪製畫面
-                if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
-                editStep = 0;
-                document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇下一個區段的『起點 (A點)』";
-                
-                updateRouteLayers(route.points); // 瞬間重畫綠/灰線
-                renderEditableRouteMarkers(route); // 瞬間重畫標記
+            } else if (action === '3') {
+                // 只有黃色提醒需要輸入自訂文字，這裡保留文字輸入框
+                const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車)：", "注意路段");
+                if (note) {
+                    route.events = route.events || [];
+                    route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
+                }
             }
-        });
 
+            // 清除暫時標記，復原狀態，重新繪製畫面
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+            editStep = 0;
+            document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇下一個區段的『起點 (A點)』";
+            updateRouteLayers(route.points); 
+            renderEditableRouteMarkers(route);
+        };
         // 儲存編輯結果
         document.getElementById('saveEditBtn').onclick = () => {
             isEditingMode = false;

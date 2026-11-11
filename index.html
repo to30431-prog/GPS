@@ -605,6 +605,11 @@ let musicActive = false;
                 }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
             } else {
+                // 🚀 新增：停止紀錄前的二次確認防呆機制
+                if (!confirm("確定要「停止紀錄並儲存」這條路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) {
+                    return; // 如果按下取消，就直接跳出，不會執行下面的停止動作
+                }
+
                 isRecording = false;
                 if (watchId) navigator.geolocation.clearWatch(watchId);
                 clearInterval(timerInterval);

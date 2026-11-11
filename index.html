@@ -275,7 +275,26 @@
             <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-3 rounded-2xl active:scale-95 mt-1 border border-gray-200">取消重選</button>
         </div>
     </div>
-    
+    <!-- 🚀 2.7 編輯現有站牌專用大選單 -->
+    <div id="editStopModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center pointer-events-auto transition-opacity">
+        <div class="bg-white w-11/12 max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4">
+            <h3 class="text-xl font-black text-indigo-700 mb-1 flex items-center justify-center gap-2"><i class="fa-regular fa-clock"></i> 編輯時刻站牌</h3>
+            
+            <div class="flex flex-col gap-1">
+                <label class="text-sm font-bold text-gray-600 ml-1">表定時間 (格式如 17:30)</label>
+                <input type="time" id="editStopTimeInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none">
+            </div>
+            
+            <div class="flex flex-col gap-1 mb-2">
+                <label class="text-sm font-bold text-gray-600 ml-1">站點名稱</label>
+                <input type="text" id="editStopNameInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如：火車站前">
+            </div>
+
+            <button id="btnSaveStopEdit" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-lg shadow-md"><i class="fa-solid fa-check"></i> 儲存修改</button>
+            <button id="btnDeleteStop" class="bg-red-50 text-red-600 border border-red-200 font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-trash-can"></i> 刪除此站牌</button>
+            <button id="btnCancelStopEdit" class="text-gray-500 font-extrabold py-2 mt-1 active:scale-95">取消</button>
+        </div>
+    </div>
     <!-- 3. 動態重播控制面板 -->
     <div id="playbackUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex flex-col items-center gap-2.5">
         <div id="replayMusicBadge" class="bg-gray-800/90 backdrop-blur text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">
@@ -936,23 +955,46 @@ document.getElementById('closeHistory').onclick = (e) => {
                         renderEditableRouteMarkers(route); 
                     });
 
-                    // 點擊彈窗：修改資料或刪除
+                    // 🚀 點擊呼叫 Pro Max 級編輯站牌彈窗
                     markerEl.onclick = (e) => {
                         e.stopPropagation();
-                        const act = prompt(`編輯站牌：${p.stop_name}\n\n1. 修改時間與站名\n2. 刪除此站牌\n(請輸入 1 或 2)：`, "1");
-                        if (act === "1") {
-                            const newTime = prompt("新時間 (如 17:30)：", p.scheduled_time);
-                            const newName = prompt("新站名：", p.stop_name);
+                        // 1. 把現在的時間跟站名填入輸入框
+                        document.getElementById('editStopTimeInput').value = p.scheduled_time || "";
+                        document.getElementById('editStopNameInput').value = p.stop_name || "";
+                        
+                        // 2. 顯示彈窗
+                        const modal = document.getElementById('editStopModal');
+                        modal.classList.remove('hidden');
+
+                        // 3. 綁定「儲存修改」按鈕
+                        document.getElementById('btnSaveStopEdit').onclick = () => {
+                            const newTime = document.getElementById('editStopTimeInput').value;
+                            const newName = document.getElementById('editStopNameInput').value;
                             if (newTime && newName) {
-                                route.points[idx].scheduled_time = newTime; route.points[idx].stop_name = newName;
+                                route.points[idx].scheduled_time = newTime; 
+                                route.points[idx].stop_name = newName;
+                                modal.classList.add('hidden');
+                                renderEditableRouteMarkers(route);
+                            } else {
+                                alert("時間與站名不可空白！");
+                            }
+                        };
+
+                        // 4. 綁定「刪除」按鈕
+                        document.getElementById('btnDeleteStop').onclick = () => {
+                            if (confirm(`確定要刪除【${p.stop_name}】這個站牌嗎？`)) {
+                                delete route.points[idx].is_stop; 
+                                delete route.points[idx].stop_name; 
+                                delete route.points[idx].scheduled_time;
+                                modal.classList.add('hidden');
                                 renderEditableRouteMarkers(route);
                             }
-                        } else if (act === "2") {
-                            if (confirm("確定要刪除這站嗎？")) {
-                                delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
-                                renderEditableRouteMarkers(route);
-                            }
-                        }
+                        };
+
+                        // 5. 綁定「取消」按鈕
+                        document.getElementById('btnCancelStopEdit').onclick = () => {
+                            modal.classList.add('hidden');
+                        };
                     };
                     domMarkers.push(m);
                 }

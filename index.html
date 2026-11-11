@@ -81,6 +81,12 @@
         <!-- 內容由 JS 動態填入 -->
     </div>
 
+    <!-- 🚀 戰術倒數儀表板 (定點路線自動觸發) -->
+    <div id="tacticalTimePanel" class="hidden fixed top-20 left-4 right-4 z-[45] bg-gray-900/95 backdrop-blur-md border border-gray-700 rounded-3xl p-3.5 shadow-[0_10px_25px_rgba(0,0,0,0.5)] text-white pointer-events-none transition-all duration-300 flex flex-col items-center">
+        <div id="nextStopName" class="text-xs font-extrabold text-gray-400 truncate w-full text-center mb-1">正在載入下一站...</div>
+        <div id="timeRemainingDisplay" class="text-4xl font-black tracking-wider drop-shadow-md font-mono mt-0.5">--:--</div>
+    </div>
+    
     <!-- OLED 黑屏省電模式 -->
     <div id="blackOverlay" class="hidden fixed inset-0 bg-black z-[9999] flex flex-col items-center justify-center text-gray-500 cursor-pointer pointer-events-auto transition-opacity duration-300">
         <i class="fa-solid fa-moon text-5xl mb-6 text-gray-700"></i>
@@ -774,6 +780,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
             
+            // 1. 畫出音樂與自訂標記
             (route.events || []).forEach(ev => {
                 let html = '';
                 if (ev.type === 'on') {
@@ -781,10 +788,17 @@ document.getElementById('closeHistory').onclick = (e) => {
                 } else if (ev.type === 'off') {
                     html = `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
                 } else if (ev.type === 'alert') {
-                    // 🚀 新增：正確顯示黃色的自訂提醒標記
                     html = `<div class="music-marker bg-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.note || '提醒'}</div>`;
                 }
                 if (html) addPinMarker([ev.lng, ev.lat], html);
+            });
+
+            // 🚀 2. 畫出定點時刻表站牌 (如果這條路線有站點的話)
+            (route.points || []).forEach(p => {
+                if (p.is_stop) {
+                    const html = `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`;
+                    addPinMarker([p.lng, p.lat], html);
+                }
             });
         }
 
@@ -1230,6 +1244,48 @@ document.getElementById('closeHistory').onclick = (e) => {
             setTimeout(() => banner.classList.add('hidden'), 6000);
         }
 
+        // 🚀 --- 戰術倒數儀表板專用引擎 ---
+        window.tacticalTimer = null;
+        function updateTacticalDisplay() {
+            const nameEl = document.getElementById('nextStopName');
+            const timeEl = document.getElementById('timeRemainingDisplay');
+            if (!nameEl || !timeEl) return;
+
+            if (!window.stopsQueue || window.currentStopIndex >= window.stopsQueue.length) {
+                nameEl.innerText = "🚩 本路線所有定點清運已完成！";
+                timeEl.innerText = "--:--";
+                timeEl.className = "text-3xl font-black text-gray-500 mt-0.5";
+                if (window.tacticalTimer) clearInterval(window.tacticalTimer);
+                return;
+            }
+
+            const nextStop = window.stopsQueue[window.currentStopIndex];
+            const timeStr = nextStop.scheduled_time || "00:00";
+            nameEl.innerText = `下一站 (${window.currentStopIndex + 1}/${window.stopsQueue.length})：${nextStop.stop_name || '定點收運'}`;
+
+            const now = new Date();
+            const [hours, minutes] = timeStr.split(':');
+            const targetTime = new Date();
+            targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+
+            const diffSecs = Math.floor((targetTime - now) / 1000);
+            const absSecs = Math.abs(diffSecs);
+            const m = Math.floor(absSecs / 60).toString().padStart(2, '0');
+            const s = (absSecs % 60).toString().padStart(2, '0');
+
+            if (diffSecs > 0) {
+                timeEl.innerText = `+ ${m}:${s}`;
+                timeEl.className = "text-4xl font-black tracking-wider text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.5)] font-mono mt-0.5";
+            } else if (diffSecs === 0) {
+                timeEl.innerText = "即將抵達";
+                timeEl.className = "text-4xl font-black tracking-wider text-yellow-400 animate-pulse font-mono mt-0.5";
+            } else {
+                timeEl.innerText = `- ${m}:${s}`;
+                timeEl.className = "text-4xl font-black tracking-wider text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.6)] font-mono mt-0.5";
+            }
+        }
+
+        // --- 遵循導航引擎 ---
         document.getElementById('startFollowBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
@@ -1241,7 +1297,6 @@ document.getElementById('closeHistory').onclick = (e) => {
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
 
-            // 🚀 新增 1：預處理音樂事件，找出每個標記「在軌跡陣列中的順序位置 (Index)」
             const mappedEvents = (route.events || []).map(ev => {
                 let minEvDist = Infinity, evPtIdx = 0;
                 for(let i = 0; i < route.points.length; i++) {
@@ -1251,20 +1306,33 @@ document.getElementById('closeHistory').onclick = (e) => {
                 return { ...ev, ptIdx: evPtIdx };
             });
 
-            // 🚀 新增 2：記錄目前車輛在整條路線中的「絕對進度 (Index)」
+            // 🚀 雙模式啟動：檢查是否有站點資料，若有則啟動戰術面板
+            window.stopsQueue = (route.points || [])
+                .map((p, index) => ({ ...p, ptIdx: index }))
+                .filter(p => p.is_stop === true);
+            window.currentStopIndex = 0;
+            
+            if (window.tacticalTimer) clearInterval(window.tacticalTimer);
+            if (window.stopsQueue.length > 0) {
+                document.getElementById('tacticalTimePanel').classList.remove('hidden');
+                updateTacticalDisplay(); // 先刷新一次
+                window.tacticalTimer = setInterval(updateTacticalDisplay, 1000); // 一秒跳一次
+            } else {
+                document.getElementById('tacticalTimePanel').classList.add('hidden');
+            }
+
             let currentNavIdx = 0; 
-            const SEARCH_WINDOW = 25; // 限制只往「前方 25 個記錄點」搜尋 (約 50 公尺內)
+            const SEARCH_WINDOW = 25; 
             
             updateRouteLayers(route.points);
             renderRouteMarkers(route);
             setCameraFollow(true);
 
-            // 請求螢幕常亮
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
                 const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                if (pos.coords.heading !== null && pos.coords.heading !== NaN) {
+                if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
                     currentHeading = pos.coords.heading;
                 } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) {
                     if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat);
@@ -1286,8 +1354,6 @@ document.getElementById('closeHistory').onclick = (e) => {
                 let closestPtIdx = currentNavIdx;
                 let minDist = Infinity;
 
-                // 🚀 修改 3：滑動視窗搜尋法 (強制空間與時間順序)
-                // 只從「目前進度」往後找一小段，避免隔壁巷子 (其實是半小時後的路線) 距離很近被誤判
                 const searchEnd = Math.min(currentNavIdx + SEARCH_WINDOW, pts.length - 1);
                 for (let i = currentNavIdx; i < searchEnd; i++) {
                     const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
@@ -1297,7 +1363,6 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🚀 防呆機制：如果真的偏離太遠 (>40m) 或駕駛自己抄捷徑，放寬回「全域搜尋」重新定位進度
                 if (minDist > 40) {
                     minDist = Infinity;
                     for (let i = 0; i < pts.length - 1; i++) {
@@ -1309,8 +1374,18 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🚀 更新目前的真實進度
                 currentNavIdx = closestPtIdx;
+
+                // 🚀 防呆進度推進：即使你沒停在站點，只要車子「經過」了該站點的順序，就會自動切下一站
+                if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
+                    const targetStop = window.stopsQueue[window.currentStopIndex];
+                    const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
+                    
+                    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
+                        window.currentStopIndex++;
+                        updateTacticalDisplay(); // 瞬間更新畫面
+                    }
+                }
 
                 if (minDist < 25) {
                     isOffRoute = false;
@@ -1325,7 +1400,6 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
 
                 if (!isOffRoute) {
-                    // 轉彎語音 (邏輯不變，但因為 closestPtIdx 變準確了，轉彎提示也會變精準)
                     const lookAheadIdx = Math.min(closestPtIdx + 4, pts.length - 1);
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
                         const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
@@ -1348,15 +1422,11 @@ document.getElementById('closeHistory').onclick = (e) => {
                         }
                     }
 
-                    // 🚀 修改 4：音樂標記加入「進度(時間)」限制
                     mappedEvents.forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
                         
-                        // 關鍵：目前的導航進度，必須跟這個音樂標記的所在進度相差不到 15 個點
-                        // 這樣就算地理位置就在隔壁，只要「順序還沒輪到」，系統就會完全忽略它！
                         if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
                             const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
-                            
                             if (distMeters <= 35) {
                                 const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
                                 if (headingDiff < 60 || !ev.bearing) {
@@ -1370,7 +1440,6 @@ document.getElementById('closeHistory').onclick = (e) => {
                                         showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
                                         speakText("前方準備關閉回收音樂");
                                     } else if (ev.type === 'alert') {
-                                        // 🚀 新增：自訂語音提醒播報
                                         showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600');
                                         speakText(`前方提醒，${ev.note}`);
                                     }
@@ -1382,12 +1451,18 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
         };
-// --- 結束遵循導航按鈕動作 ---
+
+        // --- 結束遵循導航按鈕動作 ---
         document.getElementById('followStopBtn').onclick = () => {
             if (followWatchId) {
                 navigator.geolocation.clearWatch(followWatchId);
                 followWatchId = null;
             }
+            
+            // 清理儀表板
+            if (window.tacticalTimer) clearInterval(window.tacticalTimer);
+            document.getElementById('tacticalTimePanel').classList.add('hidden');
+            
             document.getElementById('followStopBtn').classList.add('hidden');
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');

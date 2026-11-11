@@ -8,6 +8,7 @@
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -679,29 +680,83 @@ let musicActive = false;
         function renderHistoryList() {
             const list = document.getElementById('historyList');
             list.innerHTML = '';
+            
             if (savedRoutes.length === 0) {
                 list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>';
+                if (window.sortableInstance) { window.sortableInstance.destroy(); window.sortableInstance = null; }
                 return;
             }
+
             savedRoutes.forEach((r, idx) => {
                 const card = document.createElement('div');
-                card.className = "bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer active:scale-[0.99]";
-                const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
+                // 調整卡片版型：加入拖拉把手與編輯按鈕的空間
+                card.className = "bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
+                
+                const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5 whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
                 
                 card.innerHTML = `
-                    <div>
-                        <div class="font-black text-gray-900 text-base flex items-center">${r.name} ${authorTag}</div>
-                        <div class="text-xs text-gray-400 mt-0.5 mb-2">${r.date}</div>
-                        <div class="flex gap-3 text-xs font-bold">
+                    <!-- 左側：拖曳把手 -->
+                    <div class="drag-handle text-gray-300 w-8 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500">
+                        <i class="fa-solid fa-grip-vertical text-xl"></i>
+                    </div>
+                    
+                    <!-- 中間：路線資訊 (點擊開啟路線) -->
+                    <div class="flex-1 min-w-0 py-1 cursor-pointer">
+                        <div class="font-black text-gray-900 text-base flex items-center">
+                            <span class="truncate">${r.name}</span> 
+                            ${authorTag}
+                        </div>
+                        <div class="text-xs text-gray-400 mt-0.5 mb-1">${r.date}</div>
+                        <div class="flex gap-3 text-[11px] font-bold">
                             <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
-                            <span class="text-gray-600"><i class="fa-regular fa-clock mr-1"></i>${r.timeStr}</span>
                             <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
                         </div>
                     </div>
-                    <i class="fa-solid fa-chevron-right text-gray-300"></i>
+                    
+                    <!-- 右側：編輯名稱按鈕 -->
+                    <button class="edit-name-btn text-gray-300 hover:text-amber-500 w-10 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
                 `;
-                card.onclick = () => openRouteDetail(idx);
+
+                // 綁定：點擊中間區域打開路線
+                const contentArea = card.querySelector('.flex-1');
+                contentArea.onclick = () => openRouteDetail(idx);
+
+                // 綁定：點擊右側筆按鈕改名
+                const editBtn = card.querySelector('.edit-name-btn');
+                editBtn.onclick = (e) => {
+                    e.stopPropagation(); // 避免點擊時同時觸發打開路線
+                    const newName = prompt('請輸入新的路線名稱：', r.name);
+                    if (newName && newName.trim() !== '') {
+                        savedRoutes[idx].name = newName.trim();
+                        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                            renderHistoryList(); // 儲存後立即更新畫面
+                        });
+                    }
+                };
+
                 list.appendChild(card);
+            });
+
+            // 🚀 啟動 SortableJS 拖曳排序功能
+            if (window.sortableInstance) {
+                window.sortableInstance.destroy(); // 避免重複綁定
+            }
+            window.sortableInstance = new Sortable(list, {
+                handle: '.drag-handle', // 關鍵：只能按住左邊的把手才能拖曳，避免滑動清單時誤觸
+                animation: 200,         // 拖拉時的平滑動畫
+                ghostClass: 'opacity-50', // 拖曳中卡片變半透明
+                onEnd: function (evt) {
+                    // 根據拖曳結果，將陣列重新洗牌
+                    const movedItem = savedRoutes.splice(evt.oldIndex, 1)[0];
+                    savedRoutes.splice(evt.newIndex, 0, movedItem);
+                    
+                    // 將新順序寫入資料庫
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                        renderHistoryList(); // 刷新確保內部 Index 重新對齊
+                    });
+                }
             });
         }
 

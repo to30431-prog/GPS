@@ -708,11 +708,18 @@ document.getElementById('closeHistory').onclick = (e) => {
             if (!pts || pts.length === 0) return;
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
+            
             (route.events || []).forEach(ev => {
-                const html = ev.type === 'on'
-                    ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`
-                    : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
-                addPinMarker([ev.lng, ev.lat], html);
+                let html = '';
+                if (ev.type === 'on') {
+                    html = `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`;
+                } else if (ev.type === 'off') {
+                    html = `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
+                } else if (ev.type === 'alert') {
+                    // 🚀 新增：正確顯示黃色的自訂提醒標記
+                    html = `<div class="music-marker bg-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.note || '提醒'}</div>`;
+                }
+                if (html) addPinMarker([ev.lng, ev.lat], html);
             });
         }
 

@@ -327,12 +327,13 @@
         });
 
         // 核心狀態變數
-        let isFollowingCamera = true;
-        let isHeadingUpMode = true; 
-        let currentHeading = 0;
-        let lastKnownLngLat = [121.346, 24.954];
-        let isRecording = false, watchId = null, wakeLock = null;
-        let musicActive = false;
+let isFollowingCamera = true;
+let isHeadingUpMode = true; 
+let currentHeading = 0;
+let lastKnownLngLat = [121.346, 24.954];
+let isRecording = false, watchId = null, wakeLock = null;
+let followWatchId = null; // 🚀 補上這行，預先宣告導航定位變數
+let musicActive = false;
         let routePoints = [], musicEvents = []; 
         let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
         let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;

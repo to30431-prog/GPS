@@ -348,17 +348,28 @@
         </div>
     </div>
 
-    <!-- 歷史紀錄清單彈窗 -->
+    <!-- 歷史紀錄清單彈窗 (加入備份/還原) -->
     <div id="historyModal" class="hidden fixed inset-0 bg-gray-50 flex flex-col z-50 pointer-events-auto">
-       <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
-    <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
-    <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
-    <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
-        <i class="fa-solid fa-file-import"></i>
-        <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
-    </label>
-</div>
-        <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-3 pb-24"></div>
+        <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
+            <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
+            <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
+            <!-- 單筆匯入按鈕隱藏，因為我們現在有全部還原了 -->
+            <div class="w-10 h-10"></div> 
+        </div>
+        
+        <!-- 路線清單本體 -->
+        <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+        
+        <!-- 🚀 清單底部按鈕 (一鍵備份與還原) -->
+        <div class="bg-gray-50 flex flex-col gap-2 p-4 border-t border-gray-200">
+            <div class="flex gap-2 w-full">
+                <button id="exportAllBtn" class="flex-1 bg-green-100 text-green-700 font-extrabold py-2.5 rounded-xl border border-green-300 active:scale-95 text-sm shadow-sm"><i class="fa-solid fa-download"></i> 備份全部路線</button>
+                <button id="importAllBtn" class="flex-1 bg-blue-100 text-blue-700 font-extrabold py-2.5 rounded-xl border border-blue-300 active:scale-95 text-sm shadow-sm"><i class="fa-solid fa-upload"></i> 還原路線檔</button>
+                <input type="file" id="importFileInput" class="hidden" accept=".json">
+            </div>
+            <!-- 原本的返回鍵，因為上面加了 home 鍵所以這個可保留或刪除，為了方便我留著並改小 -->
+            <button id="closeHistoryBtn" class="hidden"></button> 
+        </div>
     </div>
 
     <script>

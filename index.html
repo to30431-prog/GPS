@@ -1377,17 +1377,25 @@ document.getElementById('closeHistory').onclick = (e) => {
             }
         }
 
-        // --- 遵循導航引擎 ---
+        // --- 🚀 遵循導航引擎 (含情境語音與修復偏離邏輯) ---
         document.getElementById('startFollowBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
             
+            // 🎬 劇本 1：剛按下導航的瞬間
+            speakText(`準備導航：${route.name}`);
+
             triggeredMusicIndices.clear();
             triggeredTurnIndices.clear();
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
+
+            // 語音狀態鎖 (Flag) - 確保每個情境只唸一次
+            let hasAnnouncedStart = false;
+            let hasAnnouncedEnd = false;
+            let wasOffRoute = false; // 紀錄前一秒是不是在迷航狀態
 
             const mappedEvents = (route.events || []).map(ev => {
                 let minEvDist = Infinity, evPtIdx = 0;
@@ -1398,23 +1406,20 @@ document.getElementById('closeHistory').onclick = (e) => {
                 return { ...ev, ptIdx: evPtIdx };
             });
 
-            // 🚀 雙模式啟動：檢查是否有站點資料，若有則啟動戰術面板
-            window.stopsQueue = (route.points || [])
-                .map((p, index) => ({ ...p, ptIdx: index }))
-                .filter(p => p.is_stop === true);
+            // 戰術面板初始化
+            window.stopsQueue = (route.points || []).map((p, index) => ({ ...p, ptIdx: index })).filter(p => p.is_stop === true);
             window.currentStopIndex = 0;
-            
             if (window.tacticalTimer) clearInterval(window.tacticalTimer);
             if (window.stopsQueue.length > 0) {
                 document.getElementById('tacticalTimePanel').classList.remove('hidden');
-                updateTacticalDisplay(); // 先刷新一次
-                window.tacticalTimer = setInterval(updateTacticalDisplay, 1000); // 一秒跳一次
+                updateTacticalDisplay(); 
+                window.tacticalTimer = setInterval(updateTacticalDisplay, 1000); 
             } else {
                 document.getElementById('tacticalTimePanel').classList.add('hidden');
             }
 
             let currentNavIdx = 0; 
-            const SEARCH_WINDOW = 25; 
+            const SEARCH_WINDOW = 35; // 稍微拉大搜尋視窗，避免開太快系統跟不上
             
             updateRouteLayers(route.points);
             renderRouteMarkers(route);
@@ -1434,11 +1439,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                 vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
                 if (isFollowingCamera) {
-                    map.easeTo({
-                        center: lastKnownLngLat,
-                        bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
-                        offset: [0, -80], duration: 300
-                    });
+                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
                 }
 
                 const pts = route.points;
@@ -1446,105 +1447,117 @@ document.getElementById('closeHistory').onclick = (e) => {
                 let closestPtIdx = currentNavIdx;
                 let minDist = Infinity;
 
+                // 尋找最近的軌跡線段
                 const searchEnd = Math.min(currentNavIdx + SEARCH_WINDOW, pts.length - 1);
                 for (let i = currentNavIdx; i < searchEnd; i++) {
                     const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                    if (distToSeg < minDist) {
-                        minDist = distToSeg;
-                        closestPtIdx = i;
-                    }
+                    if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
                 }
 
-                if (minDist > 40) {
+                // 全域搜索防呆：如果剛剛算出來還是很遠，代表可能路線重疊或迷航，掃描整條路線
+                if (minDist > 30) {
                     minDist = Infinity;
                     for (let i = 0; i < pts.length - 1; i++) {
                         const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                        if (distToSeg < minDist) {
-                            minDist = distToSeg;
-                            closestPtIdx = i;
-                        }
+                        if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
                     }
                 }
 
                 currentNavIdx = closestPtIdx;
 
-                // 🚀 防呆進度推進：即使你沒停在站點，只要車子「經過」了該站點的順序，就會自動切下一站
+                // 戰術面板進度推進
                 if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
                     const targetStop = window.stopsQueue[window.currentStopIndex];
                     const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
-                    
                     if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
-                        window.currentStopIndex++;
-                        updateTacticalDisplay(); // 瞬間更新畫面
+                        window.currentStopIndex++; updateTacticalDisplay(); 
                     }
                 }
 
+                // 🎬 劇本 2 & 3：起點距離與抵達播報
+                if (!hasAnnouncedStart) {
+                    const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+                    if (distToStart > 60) {
+                        // 距離太遠，播報引導，但這句不鎖 flag，直到他進到起點為止
+                        if (!window.startGuidanceSpoken) {
+                            speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
+                            window.startGuidanceSpoken = true;
+                        }
+                    } else if (distToStart <= 30 || currentNavIdx > 2) {
+                        speakText("已抵達起點，開始清運任務，請遵循軌跡行駛。");
+                        hasAnnouncedStart = true;
+                    }
+                }
+
+                // 🎬 劇本 5：抵達終點
+                if (!hasAnnouncedEnd) {
+                    const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;
+                    if (distToEnd <= 40 || currentNavIdx >= pts.length - 3) {
+                        speakText("已抵達路線終點，本次清運任務結束，辛苦了！");
+                        hasAnnouncedEnd = true;
+                        document.getElementById('tacticalTimePanel').classList.add('hidden'); // 抵達終點收起面板
+                    }
+                }
+
+                // 偏離路線與歸隊判定
                 if (minDist < 25) {
                     isOffRoute = false;
                     offRouteWarning.classList.add('hidden');
+                    
+                    // 🎬 劇本 4：從偏離狀態重新回到軌跡
+                    if (wasOffRoute) {
+                        speakText("已重新回到原定路線。");
+                        wasOffRoute = false;
+                    }
                 } else {
+                    isOffRoute = true;
+                    wasOffRoute = true; // 標記進入迷航狀態
                     offRouteWarning.classList.remove('hidden');
-                    if (Math.floor(Date.now() / 1000) % 10 === 0) {
-                        speakText("已偏離路線");
-                        vibrate([200, 100, 200]);
-                        autoWakeScreen();
+                    if (Math.floor(Date.now() / 1000) % 12 === 0) {
+                        speakText("已偏離路線"); vibrate([200, 100, 200]); autoWakeScreen();
                     }
                 }
 
+                // 轉彎與音樂判定 (保持在路線上才判定)
                 if (!isOffRoute) {
-                    // 🚀 升級：基於「實際距離 (約30公尺)」的轉彎預判，取代原本死板的點數
+                    // 雷達距離轉彎預判 (30公尺)
                     let lookAheadIdx = closestPtIdx;
                     let scanDist = 0;
-                    // 往前掃描大約 30 公尺的軌跡
                     while (lookAheadIdx < pts.length - 1 && scanDist < 30) {
                         scanDist += (getDistanceKm(pts[lookAheadIdx].lng, pts[lookAheadIdx].lat, pts[lookAheadIdx+1].lng, pts[lookAheadIdx+1].lat) * 1000);
                         lookAheadIdx++;
                     }
 
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
-                        // 取得現在車頭與前方 30 公尺處的路線角度差
                         const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
                         const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
                         const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
                         
-                        // 轉彎角度判定 (放寬到 40~140 度，抓得更精準)
                         if (angleDiff > 40 && angleDiff < 140) {
-                            // 將這段距離內的點都鎖定，避免系統碎碎念重複播報
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen();
-                            showNavAlert('➡️', '前方準備右轉', 'bg-blue-600');
-                            speakText("前方準備右轉");
+                            showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); speakText("前方準備右轉");
                             autoSleepScreen();
                         } else if (angleDiff < -40 && angleDiff > -140) {
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen();
-                            showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600');
-                            speakText("前方準備左轉");
+                            showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); speakText("前方準備左轉");
                             autoSleepScreen();
                         }
                     }
 
+                    // 音樂判定
                     mappedEvents.forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
-                        
                         if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
                             const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
                             if (distMeters <= 35) {
                                 const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
                                 if (headingDiff < 60 || !ev.bearing) {
-                                    triggeredMusicIndices.add(idx);
-                                    autoWakeScreen();
-                                    
-                                    if (ev.type === 'on') {
-                                        showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
-                                        speakText("前方準備開啟回收音樂");
-                                    } else if (ev.type === 'off') {
-                                        showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
-                                        speakText("前方準備關閉回收音樂");
-                                    } else if (ev.type === 'alert') {
-                                        showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600');
-                                        speakText(`前方提醒，${ev.note}`);
-                                    }
+                                    triggeredMusicIndices.add(idx); autoWakeScreen();
+                                    if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
+                                    else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }
+                                    else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600'); speakText(`前方提醒，${ev.note}`); }
                                     autoSleepScreen();
                                 }
                             }

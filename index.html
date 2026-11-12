@@ -1077,45 +1077,62 @@ document.getElementById('closeHistory').onclick = (e) => {
             
             // 🎯 模式二：軌跡微調 (動態插入圓點並拉線)
             else if (editSubMode === 'path') {
-                let minDist = Infinity;
+                // 🚀 終極防呆 1：利用地圖視覺引擎，確認手指「真的」有戳到線上 (容錯範圍 20px)
+                const bbox = [ [e.point.x - 20, e.point.y - 20], [e.point.x + 20, e.point.y + 20] ];
+                const features = map.queryRenderedFeatures(bbox, { layers: ['bg-route-line', 'route-silent-line', 'route-music-line'] });
+                
+                // 如果點擊的地方沒有這三個圖層的線條，直接擋掉！
+                if (features.length === 0) {
+                    alert("請確實點擊在『軌跡線條』上才能新增編輯點喔！");
+                    return;
+                }
+
+                let bestScore = Infinity;
                 let insertIndex = -1;
                 
-                // 尋找你點擊的位置，離哪一條線段最近
+                // 🚀 終極防呆 2：利用「三角形兩邊之和」尋找被點擊的精確線段 (徹底消滅無限延伸線 Bug)
                 for (let i = 0; i < route.points.length - 1; i++) {
-                    let dist = pointToLineDistanceMeters(e.lngLat.lng, e.lngLat.lat, route.points[i], route.points[i+1]);
-                    if (dist < minDist) { minDist = dist; insertIndex = i + 1; }
+                    const d1 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat);
+                    const d2 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i+1].lng, route.points[i+1].lat);
+                    const segL = getDistanceKm(route.points[i].lng, route.points[i].lat, route.points[i+1].lng, route.points[i+1].lat);
+                    
+                    // 分數 = (點到A距離 + 點到B距離) - AB總長。
+                    // 如果點在線段上，這個分數會無限接近 0。
+                    const score = (d1 + d2) - segL;
+                    
+                    if (score < bestScore) {
+                        bestScore = score;
+                        insertIndex = i + 1;
+                    }
                 }
                 
-                // 如果點擊在軌跡 30 公尺內，就在那裡生出一個「新點」
-                if (minDist < 30) {
-                    // 繼承前一個點的音樂狀態，避免顏色斷掉
-                    const newPoint = { 
-                        lng: e.lngLat.lng, 
-                        lat: e.lngLat.lat, 
-                        musicActive: route.points[insertIndex-1].musicActive 
-                    };
+                // 繼承前一個點的音樂狀態，避免顏色斷掉
+                const newPoint = { 
+                    lng: e.lngLat.lng, 
+                    lat: e.lngLat.lat, 
+                    musicActive: route.points[insertIndex-1].musicActive 
+                };
+                
+                // 把新點插入陣列
+                route.points.splice(insertIndex, 0, newPoint);
+                updateRouteLayers(route.points);
+                
+                // 創造一顆可以拖拉的白底綠框小圓點
+                const el = document.createElement('div');
+                el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
+                const m = new maplibregl.Marker({ element: el, draggable: true })
+                    .setLngLat([newPoint.lng, newPoint.lat])
+                    .addTo(map);
                     
-                    // 把新點插入陣列
-                    route.points.splice(insertIndex, 0, newPoint);
-                    updateRouteLayers(route.points);
-                    
-                    // 創造一顆可以拖拉的白底藍框小圓點
-                    const el = document.createElement('div');
-                    el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
-                    const m = new maplibregl.Marker({ element: el, draggable: true })
-                        .setLngLat([newPoint.lng, newPoint.lat])
-                        .addTo(map);
-                        
-                    // 拖拉時，即時更新軌跡線條！
-                    m.on('drag', () => {
-                        const lngLat = m.getLngLat();
-                        newPoint.lng = lngLat.lng; // 直接更新物件座標
-                        newPoint.lat = lngLat.lat;
-                        updateRouteLayers(route.points); 
-                    });
-                    
-                    pathEditMarkers.push(m);
-                }
+                // 拖拉時，即時更新軌跡線條！
+                m.on('drag', () => {
+                    const lngLat = m.getLngLat();
+                    newPoint.lng = lngLat.lng; 
+                    newPoint.lat = lngLat.lat;
+                    updateRouteLayers(route.points); 
+                });
+                
+                pathEditMarkers.push(m);
             }
         });
         // 🚀 新增：處理大按鈕點擊的專屬功能

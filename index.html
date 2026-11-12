@@ -1596,29 +1596,6 @@ document.getElementById('closeHistory').onclick = (e) => {
             alert(`✅ 已下載檔案：${route.name}.txt\n請到手機的「下載」資料夾，以傳送檔案的方式發到 LINE 群組。`);
         };
 
-        document.getElementById('importRouteInput').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                try {
-                    const route = JSON.parse(event.target.result);
-                    if (!route.points || !route.name) throw new Error("格式不對");
-                    
-                    route.id = Date.now(); 
-                    savedRoutes.unshift(route);
-                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-                    document.getElementById('historyCount').innerText = savedRoutes.length;
-                    renderHistoryList();
-                    alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);
-                } catch (err) {
-                    alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。');
-                }
-                e.target.value = ''; 
-            };
-            reader.readAsText(file);
-        };
-
         // --- 精度設定控制 (補回並放在正確的獨立位置) ---
         document.getElementById('settingsBtn').onclick = () => document.getElementById('settingsModal').classList.remove('hidden');
         document.getElementById('closeSettings').onclick = () => document.getElementById('settingsModal').classList.add('hidden');

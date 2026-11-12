@@ -77,12 +77,12 @@
     <div id="map"></div>
 
     <!-- 語音與視覺警報橫幅 (提前 30 公尺觸發音樂開關或轉彎) -->
-    <div id="musicAlertBanner" class="hidden fixed top-20 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex items-center justify-center gap-3">
+    <div id="musicAlertBanner" class="hidden fixed bottom-32 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex items-center justify-center gap-3">
         <!-- 內容由 JS 動態填入 -->
     </div>
 
     <!-- 🚀 戰術倒數儀表板 (定點路線自動觸發) -->
-    <div id="tacticalTimePanel" class="hidden fixed top-20 left-4 right-4 z-[45] bg-gray-900/95 backdrop-blur-md border border-gray-700 rounded-3xl p-3.5 shadow-[0_10px_25px_rgba(0,0,0,0.5)] text-white pointer-events-none transition-all duration-300 flex flex-col items-center">
+    <div id="tacticalTimePanel" class="hidden fixed top-24 left-4 right-4 z-[45] bg-gray-900/95 backdrop-blur-md border border-gray-700 rounded-3xl p-3.5 shadow-[0_10px_25px_rgba(0,0,0,0.5)] text-white pointer-events-none transition-all duration-300 flex flex-col items-center">
         <div id="nextStopName" class="text-xs font-extrabold text-gray-400 truncate w-full text-center mb-1">正在載入下一站...</div>
         <div id="timeRemainingDisplay" class="text-4xl font-black tracking-wider drop-shadow-md font-mono mt-0.5">--:--</div>
     </div>
@@ -1330,7 +1330,7 @@ document.getElementById('closeHistory').onclick = (e) => {
 
         // 顯示頂部大字報警告
         function showNavAlert(iconHtml, text, bgColorClass) {
-            banner.className = `fixed top-16 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center text-2xl nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center gap-3 ${bgColorClass}`;
+            banner.className = `fixed bottom-32 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center text-2xl nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center gap-3 ${bgColorClass}`;
             banner.innerHTML = `<span class="text-4xl drop-shadow-md">${iconHtml}</span> <span>${text}</span>`;
             banner.classList.remove('hidden');
             setTimeout(() => banner.classList.add('hidden'), 6000);

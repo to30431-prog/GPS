@@ -1445,27 +1445,18 @@ document.getElementById('closeHistory').onclick = (e) => {
                     map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
                 }
 
-                const pts = route.points;
                 let isOffRoute = true;
                 let closestPtIdx = currentNavIdx;
                 let minDist = Infinity;
 
-                // 尋找最近的軌跡線段
-                const searchEnd = Math.min(currentNavIdx + SEARCH_WINDOW, pts.length - 1);
-                for (let i = currentNavIdx; i < searchEnd; i++) {
-                    const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                    if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
-                }
-
-                // 全域搜索防呆：如果剛剛算出來還是很遠，代表可能路線重疊或迷航，掃描整條路線
-                if (minDist > 30) {
-                    minDist = Infinity;
-                    for (let i = 0; i < pts.length - 1; i++) {
-                        const distToSeg = pointToLineDistanceMeters(lng, lat, pts[i], pts[i+1]);
-                        if (distToSeg < minDist) { minDist = distToSeg; closestPtIdx = i; }
+                // 🚀 修復：改用「尋找最近的軌跡點」代替「點到線段距離」，避免遠距離無限延伸誤判
+                for (let i = 0; i < pts.length; i++) {
+                    const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+                    if (d < minDist) {
+                        minDist = d;
+                        closestPtIdx = i;
                     }
                 }
-
                 currentNavIdx = closestPtIdx;
 
                 // 戰術面板進度推進
@@ -1486,7 +1477,8 @@ document.getElementById('closeHistory').onclick = (e) => {
                             speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
                             window.startGuidanceSpoken = true;
                         }
-                    } else if (distToStart <= 30 || currentNavIdx > 2) {
+                    // 🚀 修復：必須真的在路線上 (minDist < 25) 且進度大於 2，或是距離起點很近，才算抵達
+                    } else if (distToStart <= 40 || (minDist < 25 && currentNavIdx > 2)) {
                         speakText("已抵達起點，開始清運任務，請遵循軌跡行駛。");
                         hasAnnouncedStart = true;
                     }

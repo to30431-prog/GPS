@@ -1470,19 +1470,25 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🎬 劇本 2 & 3：起點距離與抵達播報
+                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版)
                 if (!hasAnnouncedStart) {
                     const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
-                    if (distToStart > 60) {
-                        // 距離太遠，播報引導，但這句不鎖 flag，直到他進到起點為止
+                    
+                    // 條件 1：如果距離起點大於 30 公尺，且還沒真正在軌跡上移動
+                    if (distToStart > 30 && !(minDist < 25 && currentNavIdx > 2)) {
                         if (!window.startGuidanceSpoken) {
-                            speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
                             window.startGuidanceSpoken = true;
+                            // 延遲 2.5 秒，避免與剛按下的「準備導航」語音互相卡死
+                            setTimeout(() => {
+                                showNavAlert('🚩', `請前往起點 (${Math.round(distToStart)}m)`, 'bg-blue-600');
+                                speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
+                            }, 2500);
                         }
-                    // 🚀 修復：必須真的在路線上 (minDist < 25) 且進度大於 2，或是距離起點很近，才算抵達
-                    } else if (distToStart <= 40 || (minDist < 25 && currentNavIdx > 2)) {
-                        speakText("已抵達起點，開始清運任務，請遵循軌跡行駛。");
+                    } else {
+                        // 條件 2：已經靠近起點 (小於 30 公尺)，或是已經切進路線上開了一小段了
                         hasAnnouncedStart = true;
+                        showNavAlert('✅', '抵達起點，開始任務', 'bg-green-600');
+                        speakText("已抵達起點，開始清運任務，請遵循軌跡行駛。");
                     }
                 }
 

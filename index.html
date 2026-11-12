@@ -1389,7 +1389,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             
             // 🎬 劇本 1：剛按下導航的瞬間 (🚀 終極破解版：瞬間算距離，一句話連著講！)
             const initialDist = getDistanceKm(lastKnownLngLat[0], lastKnownLngLat[1], route.points[0].lng, route.points[0].lat) * 1000;
-            let welcomeText = `凱哥，為您啟動導航：${route.name}。`;
+            let welcomeText = `啟動導航：${route.name}。`;
             
             // 語音狀態鎖設定
             let hasAnnouncedStart = false;

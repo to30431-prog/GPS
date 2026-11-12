@@ -1,5 +1,5 @@
 {
-  "name": "清運路線助手",
+  "name": "鶯歌清運路線助手 Pro Max",
   "short_name": "清運助手",
   "start_url": "/",
   "display": "standalone",
@@ -8,7 +8,13 @@
   "icons": [
     {
       "src": "/icon-512.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
   ]
+}

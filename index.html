@@ -1388,7 +1388,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
             
             // 🎬 劇本 1：剛按下導航的瞬間
-            speakText(`準備導航：${route.name}`);
+            //speakText(`準備導航：${route.name}`);
 
             triggeredMusicIndices.clear();
             triggeredTurnIndices.clear();
@@ -1470,25 +1470,24 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版)
+                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版 3.0)
                 if (!hasAnnouncedStart) {
                     const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
                     
-                    // 條件 1：如果距離起點大於 30 公尺，且還沒真正在軌跡上移動
-                    if (distToStart > 30 && !(minDist < 25 && currentNavIdx > 2)) {
+                    // 條件 1：距離起點超過 30 公尺，而且距離整條軌跡也超過 25 公尺 (還沒切進路線)
+                    if (distToStart > 30 && minDist > 25) {
                         if (!window.startGuidanceSpoken) {
                             window.startGuidanceSpoken = true;
-                            // 延遲 2.5 秒，避免與剛按下的「準備導航」語音互相卡死
-                            setTimeout(() => {
-                                showNavAlert('🚩', `請前往起點 (${Math.round(distToStart)}m)`, 'bg-blue-600');
-                                speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
-                            }, 2500);
+                            // 🚀 修復 2：絕對不要用 setTimeout！直接彈出大字報並播報，避免手機瀏覽器阻擋背景語音
+                            showNavAlert('🚩', `請前往起點 (${Math.round(distToStart)}m)`, 'bg-blue-600');
+                            speakText(`距離起點大約 ${Math.round(distToStart)} 公尺，請前往起始點。`);
                         }
-                    } else {
-                        // 條件 2：已經靠近起點 (小於 30 公尺)，或是已經切進路線上開了一小段了
+                    } 
+                    // 條件 2：已經靠近起點 (小於 30 公尺)，或是已經切進路線中間的軌跡了 (minDist <= 25)
+                    else if (distToStart <= 30 || minDist <= 25) {
                         hasAnnouncedStart = true;
-                        showNavAlert('✅', '抵達起點，開始任務', 'bg-green-600');
-                        speakText("已抵達起點，開始清運任務，請遵循軌跡行駛。");
+                        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+                        speakText("已抵達路線，開始清運任務，請遵循軌跡行駛。");
                     }
                 }
 

@@ -1399,6 +1399,8 @@ document.getElementById('closeHistory').onclick = (e) => {
             let hasAnnouncedStart = false;
             let hasAnnouncedEnd = false;
             let wasOffRoute = false; // 紀錄前一秒是不是在迷航狀態
+            window.startGuidanceSpoken = false; // 🚀 新增：每次按導航，都忘記上次唸過，重新提醒
+            window.lastOffRouteTime = 0;        // 🚀 新增：偏離路線的計時器歸零
 
             const mappedEvents = (route.events || []).map(ev => {
                 let minEvDist = Infinity, evPtIdx = 0;
@@ -1499,17 +1501,29 @@ document.getElementById('closeHistory').onclick = (e) => {
                     isOffRoute = false;
                     offRouteWarning.classList.add('hidden');
                     
-                    // 🎬 劇本 4：從偏離狀態重新回到軌跡
-                    if (wasOffRoute) {
+                    // 🎬 劇本 4：從偏離狀態重新回到軌跡 (🚀 修改：必須是抵達起點開跑後，才有回到路線的概念)
+                    if (wasOffRoute && hasAnnouncedStart) {
                         speakText("已重新回到原定路線。");
                         wasOffRoute = false;
                     }
                 } else {
                     isOffRoute = true;
                     wasOffRoute = true; // 標記進入迷航狀態
-                    offRouteWarning.classList.remove('hidden');
-                    if (Math.floor(Date.now() / 1000) % 12 === 0) {
-                        speakText("已偏離路線"); vibrate([200, 100, 200]); autoWakeScreen();
+                    
+                    // 🚀 關鍵修復：只有在「已經抵達起點開跑後」，偏離路線才會跳紅色警告跟語音。
+                    if (hasAnnouncedStart) {
+                        offRouteWarning.classList.remove('hidden');
+                        
+                        // 用時間限制每 15 秒最多唸一次，避免GPS連續跳動時語音瘋狂打架
+                        if (Date.now() - window.lastOffRouteTime > 15000) {
+                            speakText("已偏離路線，請注意。");
+                            vibrate([200, 100, 200]);
+                            autoWakeScreen();
+                            window.lastOffRouteTime = Date.now();
+                        }
+                    } else {
+                        // 還沒抵達起點前，隱藏紅色偏離警告，讓畫面乾淨
+                        offRouteWarning.classList.add('hidden'); 
                     }
                 }
 

@@ -1639,6 +1639,24 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('currentModeText').innerText = text;
             document.getElementById('settingsModal').classList.add('hidden');
         };
+        // --- 9. 螢幕常亮 (WakeLock) 保護機制 ---
+        // 解決手機切換到 LINE 或其他 App 再切回來時，螢幕常亮失效的問題
+        document.addEventListener('visibilitychange', async () => {
+            // 當畫面重新顯示給使用者看的時候
+            if (document.visibilityState === 'visible') {
+                // 如果目前正在「紀錄中」或「導航中」，就重新要一次保持螢幕長亮的權限
+                if (isRecording || followWatchId) {
+                    try {
+                        if ('wakeLock' in navigator) {
+                            wakeLock = await navigator.wakeLock.request('screen');
+                            console.log('重新取得螢幕常亮權限成功！');
+                        }
+                    } catch (err) {
+                        console.log('重新申請 WakeLock 失敗', err);
+                    }
+                }
+            }
+        });
     </script>
 </body>
 </html>

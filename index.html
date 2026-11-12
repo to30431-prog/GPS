@@ -656,7 +656,7 @@ let musicActive = false;
                         }
                         lastRecordTime = now;
                     }
-                }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+                }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 0 });
 
             } else {
                 // 🚀 新增：停止紀錄前的二次確認防呆機制
@@ -1100,9 +1100,12 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('editRouteBar').classList.add('hidden');
             
             localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-                document.getElementById('topBackBtn').classList.remove('hidden');
-                openRouteDetail(selectedRouteIdx); 
-            });
+    document.getElementById('topBackBtn').classList.remove('hidden');
+    openRouteDetail(selectedRouteIdx); 
+}).catch((err) => {
+    alert("儲存失敗！可能是手機儲存空間不足，請清理後再試。");
+    console.error(err);
+});
         };
 
         // 取消編輯 (安全還原)
@@ -1552,8 +1555,9 @@ document.getElementById('closeHistory').onclick = (e) => {
                         if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
                             const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
                             if (distMeters <= 35) {
-                                const headingDiff = Math.abs(getAngleDiff(currentHeading, ev.bearing || currentHeading));
-                                if (headingDiff < 60 || !ev.bearing) {
+                                const targetBearing = ev.bearing !== undefined ? ev.bearing : currentHeading;
+const headingDiff = Math.abs(getAngleDiff(currentHeading, targetBearing));
+if (headingDiff < 60 || ev.bearing === undefined) {
                                     triggeredMusicIndices.add(idx); autoWakeScreen();
                                     if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
                                     else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }

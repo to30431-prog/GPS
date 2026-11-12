@@ -1387,23 +1387,32 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
             
-            // 🎬 劇本 1：剛按下導航的瞬間 (⚠️ 必須在這裡講話，才能解鎖手機的語音權限！)
-            speakText(`為您啟動導航：${route.name}`);
-            window.navStartTime = Date.now(); // 🚀 紀錄啟動時間，開啟 3.5 秒保護罩
+            // 🎬 劇本 1：剛按下導航的瞬間 (🚀 終極破解版：瞬間算距離，一句話連著講！)
+            const initialDist = getDistanceKm(lastKnownLngLat[0], lastKnownLngLat[1], route.points[0].lng, route.points[0].lat) * 1000;
+            let welcomeText = `凱哥，為您啟動導航：${route.name}。`;
+            
+            // 語音狀態鎖設定
+            let hasAnnouncedStart = false;
+            let hasAnnouncedEnd = false;
+            let wasOffRoute = false; 
+            window.startGuidanceSpoken = true; // 開場已經講了，後面不需要再講前往起點
+            window.lastOffRouteTime = 0;       
 
-            triggeredMusicIndices.clear();
+            // 趁著手指按鈕解鎖權限的瞬間，直接判定距離！
+            if (initialDist > 30) {
+                welcomeText += `距離起點還有 ${Math.round(initialDist)} 公尺，請慢慢開，準備前往出發點囉。`;
+                showNavAlert('🚩', `請前往起點 (${Math.round(initialDist)}m)`, 'bg-blue-600');
+            } else {
+                welcomeText += `我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。`;
+                hasAnnouncedStart = true;
+                showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+            }
+            speakText(welcomeText); // 一次把話講完，完美避開瀏覽器的靜音機制！
 
             triggeredMusicIndices.clear();
             triggeredTurnIndices.clear();
             isBlackScreenActive = false;
             isScreenAutoWoken = false;
-
-            // 語音狀態鎖 (Flag) - 確保每個情境只唸一次
-            let hasAnnouncedStart = false;
-            let hasAnnouncedEnd = false;
-            let wasOffRoute = false; // 紀錄前一秒是不是在迷航狀態
-            window.startGuidanceSpoken = false; // 🚀 新增：每次按導航，都忘記上次唸過，重新提醒
-            window.lastOffRouteTime = 0;        // 🚀 新增：偏離路線的計時器歸零
 
             const mappedEvents = (route.events || []).map(ev => {
                 let minEvDist = Infinity, evPtIdx = 0;
@@ -1473,30 +1482,15 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版 5.0 - 靜止狀態破解版)
+                // 🎬 劇本 2 & 3：行進中抵達路線播報 (🚀 極簡版)
+                // 因為按鈕已經講過「前往起點」了，這裡只負責盯著你是不是開到路線上了
                 if (!hasAnnouncedStart) {
                     const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
-                    
-                    // 條件 1：距離起點超過 30 公尺，而且距離整條軌跡也超過 25 公尺 (還沒切進路線)
-                    if (distToStart > 30 && minDist > 25) {
-                        if (!window.startGuidanceSpoken) {
-                            window.startGuidanceSpoken = true;
-                            // 🚀 關鍵修復：用 setTimeout 倒數。因為按鈕已經解鎖過權限，
-                            // 這樣就算車子停在原地不動，3.5秒後也保證會開口！
-                            setTimeout(() => {
-                                showNavAlert('🚩', `請前往起點 (${Math.round(distToStart)}m)`, 'bg-blue-600');
-                                speakText(`凱哥，距離起點還有 ${Math.round(distToStart)} 公尺，請慢慢開，準備前往出發點囉。`);
-                            }, 3500);
-                        }
-                    } 
-                    // 條件 2：已經靠近起點 (小於 30 公尺)，或是已經切進路線中間的軌跡了 (minDist <= 25)
-                    else if (distToStart <= 30 || minDist <= 25) {
+                    // 只要靠近起點，或是半路切入綠色軌跡 (minDist <= 25)，就觸發抵達！
+                    if (distToStart <= 30 || minDist <= 25) {
                         hasAnnouncedStart = true;
-                        // 剛好在起點按導航的話，一樣等 3.5 秒再講這句
-                        setTimeout(() => {
-                            showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
-                            speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
-                        }, 3500);
+                        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+                        speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
                     }
                 }
                 // 🎬 劇本 5：抵達終點

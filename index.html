@@ -251,7 +251,14 @@
 
     <!-- 2.5 路線編輯操作浮條 -->
     <div id="editRouteBar" class="hidden absolute bottom-6 left-4 right-4 ui-layer flex flex-col items-center gap-2 z-50">
-        <div id="editPromptText" class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">
+        
+        <!-- 🚀 新增：編輯模式切換開關 -->
+        <div class="bg-white p-1.5 rounded-full shadow-lg pointer-events-auto flex gap-1 border border-gray-200">
+            <button id="modeMarkerBtn" class="bg-blue-100 text-blue-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95">📍 標記 (A到B)</button>
+            <button id="modePathBtn" class="text-gray-400 font-extrabold text-sm px-5 py-2 rounded-full transition-colors hover:bg-gray-100 active:scale-95">🛣️ 軌跡微調</button>
+        </div>
+
+        <div id="editPromptText" class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors">
             🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』
         </div>
         <div class="bg-white rounded-3xl p-3 shadow-2xl pointer-events-auto w-full max-w-md flex gap-2 border border-gray-100">
@@ -875,6 +882,42 @@ document.getElementById('closeHistory').onclick = (e) => {
         let editStep = 0; // 0: 選擇A點, 1: 選擇B點
         let editStartIndex = -1;
         let tempMarkerA = null;
+        // 🚀 新增：模式切換變數與清空圓點工具
+        let editSubMode = 'marker'; // 'marker' (A到B) 或 'path' (拉線)
+        let pathEditMarkers = [];
+        function clearPathEditMarkers() {
+            pathEditMarkers.forEach(m => m.remove());
+            pathEditMarkers = [];
+        }
+
+        // 綁定切換到「標記編輯 (A到B)」
+        document.getElementById('modeMarkerBtn').onclick = () => {
+            editSubMode = 'marker';
+            document.getElementById('modeMarkerBtn').className = "bg-blue-100 text-blue-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95";
+            document.getElementById('modePathBtn').className = "text-gray-400 font-extrabold text-sm px-5 py-2 rounded-full transition-colors hover:bg-gray-100 active:scale-95";
+            
+            const promptEl = document.getElementById('editPromptText');
+            promptEl.className = "bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors";
+            promptEl.innerText = "🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』";
+            
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+            editStep = 0;
+            clearPathEditMarkers(); // 切換模式時清空拉線圓點
+        };
+
+        // 綁定切換到「軌跡微調 (手動拉線)」
+        document.getElementById('modePathBtn').onclick = () => {
+            editSubMode = 'path';
+            document.getElementById('modePathBtn').className = "bg-emerald-100 text-emerald-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95";
+            document.getElementById('modeMarkerBtn').className = "text-gray-400 font-extrabold text-sm px-5 py-2 rounded-full transition-colors hover:bg-gray-100 active:scale-95";
+            
+            const promptEl = document.getElementById('editPromptText');
+            promptEl.className = "bg-emerald-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors";
+            promptEl.innerText = "🛣️ 點擊綠/藍色軌跡產生「編輯點」，並拖拉修改路線";
+            
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+            editStep = 0;
+        };
 
         document.getElementById('editRouteBtn').onclick = () => {
             const route = savedRoutes[selectedRouteIdx];
@@ -1000,49 +1043,81 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             });
         }
-        // 核心：點擊地圖選擇 A點 到 B點
+        // 核心：地圖點擊編輯引擎 (支援 A/B點 與 軌跡拉線 雙模式)
         map.on('click', (e) => {
             if (!isEditingMode) return;
             const route = savedRoutes[selectedRouteIdx];
             if (!route) return;
 
-            // 尋找離點擊處最近的軌跡點
-            let minDist = Infinity, closestIdx = -1;
-            route.points.forEach((p, idx) => {
-                let d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
-                if (d < minDist) { minDist = d; closestIdx = idx; }
-            });
+            // 🎯 模式一：標記編輯 (A點到B點)
+            if (editSubMode === 'marker') {
+                let minDist = Infinity, closestIdx = -1;
+                route.points.forEach((p, idx) => {
+                    let d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
+                    if (d < minDist) { minDist = d; closestIdx = idx; }
+                });
 
-            if (minDist * 1000 > 50) {
-                alert("請點擊在路線軌跡附近！"); return;
+                if (minDist * 1000 > 50) { alert("請點擊在路線軌跡附近！"); return; }
+
+                if (editStep === 0) {
+                    editStartIndex = closestIdx;
+                    editStep = 1;
+                    const el = document.createElement('div');
+                    el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 區段起點</div>`;
+                    tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
+                    document.getElementById('editPromptText').innerText = "🛠️ 已選擇起點！請點擊另一處選擇『終點 (B點)』";
+                } else if (editStep === 1) {
+                    let editEndIndex = closestIdx;
+                    let start = Math.min(editStartIndex, editEndIndex);
+                    let end = Math.max(editStartIndex, editEndIndex);
+                    window.currentEditData = { route, start, end, editStartIndex };
+                    document.getElementById('customActionModal').classList.remove('hidden');
+                }
+            } 
+            
+            // 🎯 模式二：軌跡微調 (動態插入圓點並拉線)
+            else if (editSubMode === 'path') {
+                let minDist = Infinity;
+                let insertIndex = -1;
+                
+                // 尋找你點擊的位置，離哪一條線段最近
+                for (let i = 0; i < route.points.length - 1; i++) {
+                    let dist = pointToLineDistanceMeters(e.lngLat.lng, e.lngLat.lat, route.points[i], route.points[i+1]);
+                    if (dist < minDist) { minDist = dist; insertIndex = i + 1; }
+                }
+                
+                // 如果點擊在軌跡 30 公尺內，就在那裡生出一個「新點」
+                if (minDist < 30) {
+                    // 繼承前一個點的音樂狀態，避免顏色斷掉
+                    const newPoint = { 
+                        lng: e.lngLat.lng, 
+                        lat: e.lngLat.lat, 
+                        musicActive: route.points[insertIndex-1].musicActive 
+                    };
+                    
+                    // 把新點插入陣列
+                    route.points.splice(insertIndex, 0, newPoint);
+                    updateRouteLayers(route.points);
+                    
+                    // 創造一顆可以拖拉的白底藍框小圓點
+                    const el = document.createElement('div');
+                    el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
+                    const m = new maplibregl.Marker({ element: el, draggable: true })
+                        .setLngLat([newPoint.lng, newPoint.lat])
+                        .addTo(map);
+                        
+                    // 拖拉時，即時更新軌跡線條！
+                    m.on('drag', () => {
+                        const lngLat = m.getLngLat();
+                        newPoint.lng = lngLat.lng; // 直接更新物件座標
+                        newPoint.lat = lngLat.lat;
+                        updateRouteLayers(route.points); 
+                    });
+                    
+                    pathEditMarkers.push(m);
+                }
             }
-
-            if (editStep === 0) {
-                // 選定 A 點
-                editStartIndex = closestIdx;
-                editStep = 1;
-                
-                // 畫一個大大的 🅰️ 點標記
-                const el = document.createElement('div');
-                el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 區段起點</div>`;
-                tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
-                
-                document.getElementById('editPromptText').innerText = "🛠️ 已選擇起點！請點擊另一處選擇『終點 (B點)』";
-                
-            } else if (editStep === 1) {
-                // 選定 B 點
-                let editEndIndex = closestIdx;
-                let start = Math.min(editStartIndex, editEndIndex);
-                let end = Math.max(editStartIndex, editEndIndex);
-
-                // 把座標進度存到全域，給按鈕使用
-                window.currentEditData = { route, start, end, editStartIndex };
-                
-                // 呼叫漂亮的大按鈕選單
-                document.getElementById('customActionModal').classList.remove('hidden');
-            }
-        }); // 結束 map.on('click')
-
+        });
         // 🚀 新增：處理大按鈕點擊的專屬功能
         window.handleRouteAction = function(action) {
             document.getElementById('customActionModal').classList.add('hidden'); // 關閉彈窗
@@ -1096,6 +1171,7 @@ document.getElementById('closeHistory').onclick = (e) => {
         // 儲存編輯結果
         document.getElementById('saveEditBtn').onclick = () => {
             isEditingMode = false;
+            clearPathEditMarkers();
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             
@@ -1111,6 +1187,7 @@ document.getElementById('closeHistory').onclick = (e) => {
         // 取消編輯 (安全還原)
         document.getElementById('cancelEditBtn').onclick = () => {
             isEditingMode = false;
+            clearPathEditMarkers();
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             

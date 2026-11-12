@@ -1627,6 +1627,61 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('currentModeText').innerText = text;
             document.getElementById('settingsModal').classList.add('hidden');
         };
+
+        // 🚀 --- 一鍵備份與還原引擎 ---
+        // 1. 匯出（備份）所有路線
+        document.getElementById('exportAllBtn').onclick = () => {
+            if (savedRoutes.length === 0) {
+                alert("目前沒有任何路線可以備份喔！");
+                return;
+            }
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(savedRoutes));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            // 檔名會自動壓上日期時間
+            downloadAnchorNode.setAttribute("download", `清運助手備份_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(downloadAnchorNode); 
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        };
+
+        // 2. 觸發匯入（還原）選擇檔案
+        document.getElementById('importAllBtn').onclick = () => {
+            document.getElementById('importFileInput').click();
+        };
+
+        // 3. 讀取並寫入資料庫
+        document.getElementById('importFileInput').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const importedRoutes = JSON.parse(event.target.result);
+                    if (Array.isArray(importedRoutes)) {
+                        // 詢問要覆蓋還是合併
+                        if (confirm(`成功讀取 ${importedRoutes.length} 條路線！\n\n按「確定」：完全覆蓋手機現有路線\n按「取消」：將這些路線附加到現有清單後面`)) {
+                            savedRoutes = importedRoutes;
+                        } else {
+                            savedRoutes = savedRoutes.concat(importedRoutes);
+                        }
+                        
+                        // 寫回 IndexedDB 並重新繪製畫面
+                        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                            alert("✅ 路線還原成功！");
+                            renderHistoryList();
+                        });
+                    } else {
+                        alert("檔案格式不對喔！請選擇正確的備份檔。");
+                    }
+                } catch(err) {
+                    alert("讀取失敗，這可能不是正確的 JSON 備份檔！");
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = ''; // 重置 input，讓下次選同一個檔案也能觸發
+        };
+        
     </script>
 </body>
 </html>

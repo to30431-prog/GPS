@@ -1492,21 +1492,31 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
 
                 if (!isOffRoute) {
-                    const lookAheadIdx = Math.min(closestPtIdx + 4, pts.length - 1);
+                    // 🚀 升級：基於「實際距離 (約30公尺)」的轉彎預判，取代原本死板的點數
+                    let lookAheadIdx = closestPtIdx;
+                    let scanDist = 0;
+                    // 往前掃描大約 30 公尺的軌跡
+                    while (lookAheadIdx < pts.length - 1 && scanDist < 30) {
+                        scanDist += (getDistanceKm(pts[lookAheadIdx].lng, pts[lookAheadIdx].lat, pts[lookAheadIdx+1].lng, pts[lookAheadIdx+1].lat) * 1000);
+                        lookAheadIdx++;
+                    }
+
                     if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
+                        // 取得現在車頭與前方 30 公尺處的路線角度差
                         const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
                         const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
-                        
                         const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
                         
-                        if (angleDiff > 45 && angleDiff < 135) {
-                            triggeredTurnIndices.add(closestPtIdx);
+                        // 轉彎角度判定 (放寬到 40~140 度，抓得更精準)
+                        if (angleDiff > 40 && angleDiff < 140) {
+                            // 將這段距離內的點都鎖定，避免系統碎碎念重複播報
+                            for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen();
                             showNavAlert('➡️', '前方準備右轉', 'bg-blue-600');
                             speakText("前方準備右轉");
                             autoSleepScreen();
-                        } else if (angleDiff < -45 && angleDiff > -135) {
-                            triggeredTurnIndices.add(closestPtIdx);
+                        } else if (angleDiff < -40 && angleDiff > -140) {
+                            for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen();
                             showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600');
                             speakText("前方準備左轉");

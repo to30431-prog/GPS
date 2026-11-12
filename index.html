@@ -469,7 +469,7 @@ let musicActive = false;
             map.easeTo({
                 center: lastKnownLngLat, zoom: Math.max(map.getZoom(), 17),
                 bearing: isHeadingUpMode ? currentHeading : 0,
-                offset: [0, -80], duration: 400
+                offset: [0, 100], duration: 400
             });
         };
 
@@ -651,7 +651,7 @@ let musicActive = false;
                             map.easeTo({
                                 center: [lng, lat],
                                 bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
-                                offset: [0, -80], duration: 300
+                                offset: [0, 100], duration: 300
                             });
                         }
                         lastRecordTime = now;
@@ -1186,7 +1186,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             const startPt = route.points[0];
             lastKnownLngLat = [startPt.lng, startPt.lat];
             vehicleMarker.setLngLat(lastKnownLngLat);
-            map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, -80] });
+            map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, 100] });
 
             startSmoothPlayback();
         };
@@ -1220,7 +1220,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                 badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)";
             }
 
-            if (isFollowingCamera) map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80] });
+            if (isFollowingCamera) map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100] });
         }
 
         function playbackLoop(timestamp) {
@@ -1439,7 +1439,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                 vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
                 if (isFollowingCamera) {
-                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, -80], duration: 300 });
+                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
                 }
 
                 const pts = route.points;

@@ -1473,32 +1473,32 @@ document.getElementById('closeHistory').onclick = (e) => {
                     }
                 }
 
-                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版 4.0 - 防打架保護罩)
+                // 🎬 劇本 2 & 3：起點距離與抵達播報 (🚀 終極修復版 5.0 - 靜止狀態破解版)
                 if (!hasAnnouncedStart) {
                     const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
                     
                     // 條件 1：距離起點超過 30 公尺，而且距離整條軌跡也超過 25 公尺 (還沒切進路線)
                     if (distToStart > 30 && minDist > 25) {
                         if (!window.startGuidanceSpoken) {
-                            // 🚀 關鍵：檢查是不是已經過了 3.5 秒？等第一句話講完再講下一句！
-                            if (Date.now() - window.navStartTime > 3500) {
-                                window.startGuidanceSpoken = true;
+                            window.startGuidanceSpoken = true;
+                            // 🚀 關鍵修復：用 setTimeout 倒數。因為按鈕已經解鎖過權限，
+                            // 這樣就算車子停在原地不動，3.5秒後也保證會開口！
+                            setTimeout(() => {
                                 showNavAlert('🚩', `請前往起點 (${Math.round(distToStart)}m)`, 'bg-blue-600');
                                 speakText(`凱哥，距離起點還有 ${Math.round(distToStart)} 公尺，請慢慢開，準備前往出發點囉。`);
-                            }
+                            }, 3500);
                         }
                     } 
                     // 條件 2：已經靠近起點 (小於 30 公尺)，或是已經切進路線中間的軌跡了 (minDist <= 25)
                     else if (distToStart <= 30 || minDist <= 25) {
-                        // 🚀 關鍵：就算一開始就在起點，也要等第一句話講完再說這句！
-                        if (Date.now() - window.navStartTime > 3500) {
-                            hasAnnouncedStart = true;
+                        hasAnnouncedStart = true;
+                        // 剛好在起點按導航的話，一樣等 3.5 秒再講這句
+                        setTimeout(() => {
                             showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
                             speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
-                        }
+                        }, 3500);
                     }
                 }
-
                 // 🎬 劇本 5：抵達終點
                 if (!hasAnnouncedEnd) {
                     const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;

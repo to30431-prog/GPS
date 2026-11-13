@@ -495,7 +495,7 @@ let musicActive = false;
 navigator.geolocation?.getCurrentPosition(pos => {
     map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
 });
-
+});
         function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
         // --- 2. 視角操作 ---

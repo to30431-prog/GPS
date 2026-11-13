@@ -1641,17 +1641,20 @@ if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
     }
 }
 
-                // 🎬 劇本 2 & 3：行進中抵達路線播報 (🚀 極簡版)
-                // 因為按鈕已經講過「前往起點」了，這裡只負責盯著你是不是開到路線上了
-                if (!hasAnnouncedStart) {
-                    const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
-                    // 只要靠近起點，或是半路切入綠色軌跡 (minDist <= 25)，就觸發抵達！
-                    if (distToStart <= 30 || minDist <= 25) {
-                        hasAnnouncedStart = true;
-                        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
-                        speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
-                    }
-                }
+                // 🎬 劇本 2 & 3：行進中抵達路線播報 (🚀 加入動態倒數)
+if (!hasAnnouncedStart) {
+    const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+    if (distToStart <= 35 || minDist <= 25) {
+        hasAnnouncedStart = true;
+        document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
+        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+        speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
+        vibrate([200, 100, 200]);
+    } else {
+        // 動態顯示距離起點還有多遠，讓駕駛知道系統有在運作！
+        document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+    }
+}
                 // 🎬 劇本 5：抵達終點
                 if (!hasAnnouncedEnd) {
                     const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;

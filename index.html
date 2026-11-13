@@ -35,14 +35,15 @@
         .music-off-pin { background: #dc2626; }
 
         /* 導航車頭圖示 (無框圖片版) */
+        /* 導航車頭圖示 (SVG 完美透明版) */
         .nav-puck {
-            width: 38px; height: 60px; /* 調整為細長比例，更適合卡車 */
+            width: 42px; height: 70px; /* 長寬比例微調 */
             background: transparent; 
             border: none;
             display: flex; align-items: center; justify-content: center;
             transition: transform 0.1s ease-out;
-            /* 加上柔和的陰影讓車子更立體 */
-            filter: drop-shadow(0px 3px 4px rgba(0, 0, 0, 0.45));
+            /* 讓整台車子浮在地圖上的立體陰影 */
+            filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.45));
         }
         
         .nav-puck img {
@@ -432,12 +433,35 @@ let musicActive = false;
             document.getElementById('historyCount').innerText = savedRoutes.length;
         }).catch((err) => console.log("讀取路線失敗:", err));
 
-        // 導航箭頭 (改為 3D 俯視小車圖片)
+        // 導航箭頭 (改為 100% 透明的 SVG 向量繪圖小車)
         const puckEl = document.createElement('div');
         puckEl.className = 'nav-puck';
         
-        // 🚀 修改：使用你自己專案中的這張資源回收車去背圖片 (車頭朝上 rotate 0度)
-        puckEl.innerHTML = '<img src="./garbage-truck.png" style="transform: rotate(0deg);">';
+        // 🚀 修改：直接用純代碼畫一台黃色資源回收車，絕對透明、不破圖！
+        puckEl.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 100" style="width:100%; height:100%; transform: rotate(0deg);">
+            <!-- 輪胎 -->
+            <rect x="4" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
+            <rect x="48" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
+            <rect x="4" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
+            <rect x="48" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
+            
+            <!-- 車體主體 (黃色) -->
+            <rect x="8" y="5" width="44" height="90" rx="10" fill="#facc15" stroke="#ca8a04" stroke-width="2"/>
+            
+            <!-- 車頭擋風玻璃 -->
+            <path d="M 14 30 L 46 30 L 42 12 L 18 12 Z" fill="#1e293b"/>
+            <!-- 車頂紅色警示燈 -->
+            <rect x="22" y="6" width="16" height="3" rx="1.5" fill="#ef4444"/>
+            
+            <!-- 後方壓縮斗 -->
+            <rect x="12" y="62" width="36" height="30" rx="4" fill="#eab308" stroke="#ca8a04" stroke-width="1.5"/>
+            
+            <!-- 車尾紅藍白警示條紋 -->
+            <rect x="14" y="85" width="32" height="6" fill="#ffffff"/>
+            <polygon points="14,91 22,85 30,91" fill="#ef4444"/>
+            <polygon points="30,91 38,85 46,91" fill="#3b82f6"/>
+        </svg>`;
         
         const vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' })
             .setLngLat(lastKnownLngLat).addTo(map);

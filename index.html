@@ -1353,7 +1353,13 @@
                 if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
                     const targetStop = window.stopsQueue[window.currentStopIndex];
                     const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
-                    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
+                    const indexDiff = currentNavIdx - targetStop.ptIdx;
+                    
+                    // 🚀 核心修復：距離嚴格縮小為 15 公尺，並加入「軌跡進度鎖」(防止隔壁巷子誤觸)
+                    const isNearStop = (distToStop <= 15 && Math.abs(indexDiff) <= 30);
+                    const isPassedStop = (indexDiff >= 0 && indexDiff <= 15); // 順著軌跡剛好開過頭
+
+                    if (isNearStop || isPassedStop) {
                         const nowTime = new Date(), [hours, minutes] = (targetStop.scheduled_time || "00:00").split(':');
                         const targetTime = new Date(); targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
                         
@@ -1410,9 +1416,10 @@
 
                     mappedEvents.forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
-                        if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
+                        // 🚀 軌跡進度誤差稍微放寬，但物理距離嚴格縮小到 15 公尺
+                        if (Math.abs(currentNavIdx - ev.ptIdx) <= 25) {
                             const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
-                            if (distMeters <= 35) {
+                            if (distMeters <= 15) {
                                 triggeredMusicIndices.add(idx); autoWakeScreen();
                                 if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
                                 else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }

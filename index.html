@@ -1653,6 +1653,7 @@ if (!hasAnnouncedStart) {
     } else {
         // 動態顯示距離起點還有多遠，讓駕駛知道系統有在運作！
         document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+        return;
     }
 }
                 // 🎬 劇本 5：抵達終點

@@ -34,16 +34,22 @@
         .music-on-pin { background: #16a34a; }
         .music-off-pin { background: #dc2626; }
 
-        /* 導航車頭箭頭 */
+        /* 導航車頭圖示 (無框圖片版) */
         .nav-puck {
-            width: 36px; height: 36px; border-radius: 50%;
-            background: #2563eb; border: 3px solid #ffffff;
-            box-shadow: 0 3px 10px rgba(37,99,235,0.6);
+            width: 38px; height: 60px; /* 調整為細長比例，更適合卡車 */
+            background: transparent; 
+            border: none;
             display: flex; align-items: center; justify-content: center;
-            color: white; font-size: 16px;
-            transition: transform 0.1s ease-out; /* 讓轉向更平滑 */
+            transition: transform 0.1s ease-out;
+            /* 加上柔和的陰影讓車子更立體 */
+            filter: drop-shadow(0px 3px 4px rgba(0, 0, 0, 0.45));
         }
-
+        
+        .nav-puck img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
         /* 進度條拉桿 */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb {
@@ -426,16 +432,15 @@ let musicActive = false;
             document.getElementById('historyCount').innerText = savedRoutes.length;
         }).catch((err) => console.log("讀取路線失敗:", err));
 
-        // 導航箭頭
+        // 導航箭頭 (改為 3D 俯視小車圖片)
         const puckEl = document.createElement('div');
         puckEl.className = 'nav-puck';
         
-        // 🚀 修改：換成可愛的側邊小卡車 (fa-truck)，並設定朝向正前方 (-90度)，顏色改成亮黃色
-        puckEl.innerHTML = '<div style="transform: rotate(-90deg); font-size: 22px; margin-bottom: 2px;">🚛</div>';
+        // 🚀 修改：使用你自己專案中的這張資源回收車去背圖片 (車頭朝上 rotate 0度)
+        puckEl.innerHTML = '<img src="./garbage-truck.png" style="transform: rotate(0deg);">';
         
         const vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' })
             .setLngLat(lastKnownLngLat).addTo(map);
-
         map.on('load', () => {
             map.addSource('bg-route', { type: 'geojson', data: emptyGeoJSON() });
             map.addLayer({ id: 'bg-route-line', type: 'line', source: 'bg-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#94a3b8', 'line-width': 6, 'line-opacity': 0.45 } });

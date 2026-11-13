@@ -131,6 +131,11 @@
                 <i class="fa-solid fa-location-crosshairs text-base"></i>
                 <span id="followLabel" class="text-[9px] font-bold leading-none mt-0.5">跟隨中</span>
             </button>
+            <!-- 🚀 語音播報開關按鈕 -->
+            <button id="voiceToggleBtn" class="bg-indigo-500 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-indigo-400">
+                <i id="voiceIcon" class="fa-solid fa-volume-high text-base"></i>
+                <span id="voiceLabel" class="text-[9px] font-bold leading-none mt-0.5">語音開</span>
+            </button>
             <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95">
                 <i class="fa-solid fa-moon text-base"></i>
             </button>
@@ -516,13 +521,40 @@
             return diff < -180 ? diff + 360 : diff;
         }
 
+        // 🚀 新增全域語音開關變數
+        let isVoiceEnabled = true;
+
         function speakText(text) {
-            if (!('speechSynthesis' in window)) return;
+            // 如果開關被關掉，或是手機不支援語音，就直接中斷不講話！
+            if (!isVoiceEnabled || !('speechSynthesis' in window)) return;
             const u = new SpeechSynthesisUtterance(text);
             u.lang = 'zh-TW'; u.rate = 1.05;
             window.speechSynthesis.speak(u);
         }
-
+// 🚀 綁定語音開關按鈕切換邏輯
+        document.getElementById('voiceToggleBtn').onclick = () => {
+            isVoiceEnabled = !isVoiceEnabled;
+            const btn = document.getElementById('voiceToggleBtn');
+            const icon = document.getElementById('voiceIcon');
+            const label = document.getElementById('voiceLabel');
+            
+            if (isVoiceEnabled) {
+                // 開啟狀態的樣式 (紫色)
+                btn.className = "bg-indigo-500 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-indigo-400";
+                icon.className = "fa-solid fa-volume-high text-base";
+                label.innerText = "語音開";
+                speakText("語音播報已開啟"); // 唸出提示音
+            } else {
+                // 關閉狀態的樣式 (灰色)
+                btn.className = "bg-gray-400 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-300";
+                icon.className = "fa-solid fa-volume-xmark text-base";
+                label.innerText = "語音關";
+                
+                // 強制中斷目前正在唸的語音
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            }
+        };
+        
         function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
 
         function updateRouteLayers(points) {

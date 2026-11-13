@@ -429,7 +429,10 @@ let musicActive = false;
         // 導航箭頭
         const puckEl = document.createElement('div');
         puckEl.className = 'nav-puck';
-        puckEl.innerHTML = '<i class="fa-solid fa-location-arrow" style="transform: rotate(-45deg);"></i>';
+        
+        // 🚀 修改：換成可愛的側邊小卡車 (fa-truck)，並設定朝向正前方 (-90度)，顏色改成亮黃色
+        puckEl.innerHTML = '<div style="transform: rotate(-90deg); font-size: 22px; margin-bottom: 2px;">🚛</div>';
+        
         const vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' })
             .setLngLat(lastKnownLngLat).addTo(map);
 

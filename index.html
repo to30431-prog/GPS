@@ -84,15 +84,16 @@
     <!-- 語音與視覺警報橫幅 (移至畫面上方) -->
     <div id="musicAlertBanner" class="hidden fixed top-24 left-4 right-4 z-50 rounded-2xl p-5 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex flex-col items-center justify-center gap-2"></div>
 
-    <!-- 🚀 戰術倒數儀表板 (移至底部面板風格) -->
-    <div id="tacticalTimePanel" class="hidden absolute bottom-0 left-0 right-0 z-[45] bg-gray-900/90 backdrop-blur-md px-4 py-3 shadow-[0_-4px_15px_rgba(0,0,0,0.3)] text-white pointer-events-auto transition-all duration-300 flex flex-col items-center border-t border-gray-700">
+    <!-- 🚀 戰術倒數儀表板 (底部面板風格，純顯示資訊) -->
+    <div id="tacticalTimePanel" class="hidden absolute bottom-0 left-0 right-0 z-[45] bg-gray-900/90 backdrop-blur-md px-4 py-3 shadow-[0_-4px_15px_rgba(0,0,0,0.3)] text-white pointer-events-auto transition-all duration-300 flex flex-col items-center border-t border-gray-700 pb-5">
         <div id="nextStopName" class="text-sm font-extrabold text-gray-300 truncate w-full text-center">正在載入下一站...</div>
         <div id="timeRemainingDisplay" class="text-3xl font-black tracking-wider font-mono mt-1">--:--</div>
-        <!-- 這裡把結束導航的叉叉放進來 -->
-        <button id="tacticalStopBtn" class="absolute left-4 top-1/2 -translate-y-1/2 bg-gray-700 text-gray-300 w-10 h-10 rounded-full flex flex-col items-center justify-center active:scale-95">
-            <i class="fa-solid fa-xmark text-lg"></i>
-        </button>
     </div>
+
+    <!-- 🛑 獨立的結束導航按鈕 (固定在右下角，不管有沒有站牌都看得到) -->
+    <button id="tacticalStopBtn" class="hidden absolute bottom-6 right-4 z-[60] bg-red-600 text-white w-14 h-14 rounded-full shadow-2xl flex items-center justify-center active:scale-95 pointer-events-auto border-2 border-white">
+        <i class="fa-solid fa-xmark text-2xl"></i>
+    </button>
     
     <!-- OLED 黑屏省電模式 -->
     <div id="blackOverlay" class="hidden fixed inset-0 bg-black z-[9999] flex flex-col items-center justify-center text-gray-500 cursor-pointer pointer-events-auto transition-opacity duration-300">
@@ -1276,7 +1277,8 @@
             stopIdleGPS();
             const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
-            document.getElementById('followStopBtn').classList.remove('hidden');
+            // 顯示右下角的獨立結束按鈕
+            document.getElementById('tacticalStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
             
             let hasAnnouncedStart = false, hasAnnouncedEnd = false, wasOffRoute = false; 
@@ -1427,7 +1429,8 @@
             if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
             if (window.tacticalTimer) clearInterval(window.tacticalTimer);
             document.getElementById('tacticalTimePanel').classList.add('hidden');
-            document.getElementById('followStopBtn').classList.add('hidden');
+            // 隱藏右下角的獨立結束按鈕
+            document.getElementById('tacticalStopBtn').classList.add('hidden');
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');
             document.getElementById('blackOverlay').classList.add('hidden');

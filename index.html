@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
@@ -36,23 +36,17 @@
         .music-on-pin { background: #16a34a; }
         .music-off-pin { background: #dc2626; }
 
-        /* 導航車頭圖示 (無框圖片版) */
         /* 導航車頭圖示 (SVG 完美透明版) */
         .nav-puck {
-            width: 42px; height: 70px; /* 長寬比例微調 */
+            width: 42px; height: 70px;
             background: transparent; 
             border: none;
             display: flex; align-items: center; justify-content: center;
             transition: transform 0.1s ease-out;
-            /* 讓整台車子浮在地圖上的立體陰影 */
             filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.45));
         }
+        .nav-puck img { width: 100%; height: 100%; object-fit: contain; }
         
-        .nav-puck img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
         /* 進度條拉桿 */
         input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb {
@@ -76,7 +70,9 @@
 <link rel="manifest" href="/manifest.json">
 <script>
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js');
+    navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(r => r.unregister());
+    });
   }
 </script>
 
@@ -85,12 +81,10 @@
 
     <div id="map"></div>
 
-    <!-- 語音與視覺警報橫幅 (提前 30 公尺觸發音樂開關或轉彎) -->
-    <div id="musicAlertBanner" class="hidden fixed bottom-32 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex items-center justify-center gap-3">
-        <!-- 內容由 JS 動態填入 -->
-    </div>
+    <!-- 語音與視覺警報橫幅 -->
+    <div id="musicAlertBanner" class="hidden fixed bottom-32 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex items-center justify-center gap-3"></div>
 
-    <!-- 🚀 戰術倒數儀表板 (高透視膠囊版) -->
+    <!-- 🚀 戰術倒數儀表板 -->
     <div id="tacticalTimePanel" class="hidden fixed top-24 left-1/2 -translate-x-1/2 z-[45] bg-gray-900/30 backdrop-blur-sm border border-gray-500/30 rounded-full px-6 py-2 shadow-md text-white pointer-events-none transition-all duration-300 flex flex-col items-center w-auto min-w-[220px] max-w-[90vw]">
         <div id="nextStopName" class="text-xs font-extrabold text-gray-200 truncate w-full text-center">正在載入下一站...</div>
         <div id="timeRemainingDisplay" class="text-3xl font-black tracking-wider drop-shadow-md font-mono mt-0.5">--:--</div>
@@ -114,8 +108,7 @@
     <!-- 頂部導航狀態與工具列 -->
     <div class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer">
         <div class="flex items-center gap-2 pointer-events-auto">
-            <!-- 加上 relative z-[99999] -->
-<button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
+            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
                 <i class="fa-solid fa-chevron-left text-lg"></i>
             </button>
             <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
@@ -124,13 +117,12 @@
             </div>
         </div>
 
-        <!-- 右側浮動控制鍵 -->
         <div class="flex flex-col gap-2.5 pointer-events-auto">
-            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95" title="切換車頭朝上/正北朝上">
+            <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95">
                 <i id="headingIcon" class="fa-solid fa-compass text-base"></i>
                 <span id="headingLabel" class="text-[9px] font-bold leading-none mt-0.5">車頭上</span>
             </button>
-            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500" title="鎖定跟隨車輛">
+            <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500">
                 <i class="fa-solid fa-location-crosshairs text-base"></i>
                 <span id="followLabel" class="text-[9px] font-bold leading-none mt-0.5">跟隨中</span>
             </button>
@@ -146,8 +138,6 @@
     <!-- 1. 主介面底部控制面板 -->
     <div id="mainUI" class="absolute bottom-4 left-4 right-4 ui-layer flex justify-center">
         <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md border border-gray-100">
-            
-            <!-- 待機時顯示：精度設定 & 已儲存路線 -->
             <div id="idleTopRow" class="flex justify-between items-center mb-3 gap-2.5">
                 <div id="settingsBtn" class="bg-green-50 text-green-800 px-3.5 py-2.5 rounded-2xl flex-1 flex items-center justify-between border border-green-200 cursor-pointer active:scale-95">
                     <div class="flex items-center gap-2">
@@ -171,7 +161,6 @@
                 </div>
             </div>
 
-            <!-- 紀錄中顯示：GPS精度小格 + 回收車音樂開關大按鈕 (不擋地圖中間！) -->
             <div id="recordingTopRow" class="hidden flex items-stretch gap-2.5 mb-3">
                 <div class="bg-gray-100 px-3 py-2 rounded-2xl flex flex-col justify-center items-center w-24 flex-shrink-0">
                     <span class="text-[10px] text-gray-500 font-bold">GPS 精度</span>
@@ -211,9 +200,7 @@
         <div class="bg-white rounded-3xl p-5 shadow-2xl pointer-events-auto w-full max-w-md">
             <div class="flex items-start justify-between mb-3">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
-                        <i class="fa-solid fa-route"></i>
-                    </div>
+                    <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg"><i class="fa-solid fa-route"></i></div>
                     <div>
                         <h3 id="detailTitle" class="font-black text-gray-900 text-lg leading-tight">路線名稱</h3>
                         <p id="detailDate" class="text-xs text-gray-500 mt-0.5">保存於 日期</p>
@@ -225,12 +212,10 @@
                 <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
               </div>
         </div>
-
             <div class="flex items-center gap-4 text-xs font-bold mb-3 px-1">
                 <span class="flex items-center gap-1.5 text-green-700"><span class="w-3 h-1.5 bg-green-600 rounded-full inline-block"></span> 綠線：音樂收運</span>
                 <span class="flex items-center gap-1.5 text-gray-500"><span class="w-3 h-1.5 bg-gray-400 rounded-full inline-block"></span> 灰虛線：音樂關閉</span>
             </div>
-
             <div class="grid grid-cols-3 gap-2 mb-4">
                 <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
                     <div class="text-[11px] text-gray-400">距離</div>
@@ -245,11 +230,8 @@
                     <div id="detailEvents" class="font-black text-sm text-blue-600 mt-0.5">0 處</div>
                 </div>
             </div>
-
             <div class="flex gap-3">
-                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95">
-                    <i class="fa-solid fa-play"></i> 重播複習
-                </button>
+                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95"><i class="fa-solid fa-play"></i> 重播複習</button>
                 <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden">
                     <div class="absolute inset-0 bg-white/20 w-full transform -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
                     <i class="fa-solid fa-location-arrow"></i> 遵循導航
@@ -260,83 +242,63 @@
 
     <!-- 2.5 路線編輯操作浮條 -->
     <div id="editRouteBar" class="hidden absolute bottom-6 left-4 right-4 ui-layer flex flex-col items-center gap-2 z-50">
-        
-        <!-- 🚀 新增：編輯模式切換開關 -->
         <div class="bg-white p-1.5 rounded-full shadow-lg pointer-events-auto flex gap-1 border border-gray-200">
             <button id="modeMarkerBtn" class="bg-blue-100 text-blue-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95">📍 標記 (A到B)</button>
             <button id="modePathBtn" class="text-gray-400 font-extrabold text-sm px-5 py-2 rounded-full transition-colors hover:bg-gray-100 active:scale-95">🛣️ 軌跡微調</button>
         </div>
-
         <div id="editPromptText" class="bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors">
             🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』
         </div>
         <div class="bg-white rounded-3xl p-3 shadow-2xl pointer-events-auto w-full max-w-md flex gap-2 border border-gray-100">
-            <button id="saveEditBtn" class="flex-1 bg-green-600 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm">
-                <i class="fa-solid fa-check"></i> 完成並儲存
-            </button>
-            <button id="cancelEditBtn" class="flex-1 bg-gray-500 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm">
-                <i class="fa-solid fa-xmark"></i> 取消放棄
-            </button>
+            <button id="saveEditBtn" class="flex-1 bg-green-600 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm"><i class="fa-solid fa-check"></i> 完成並儲存</button>
+            <button id="cancelEditBtn" class="flex-1 bg-gray-500 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 text-sm"><i class="fa-solid fa-xmark"></i> 取消放棄</button>
         </div>
     </div>
-<!-- 2.6 自訂區段動作大按鈕選單 -->
+    
+    <!-- 2.6 自訂區段動作大按鈕選單 -->
     <div id="customActionModal" class="hidden fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center pointer-events-auto transition-opacity">
         <div class="bg-white w-11/12 max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3">
             <h3 class="text-lg font-black text-gray-900 mb-2 text-center">已選取路段，請選擇動作</h3>
             <button onclick="handleRouteAction('1')" class="bg-green-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-music"></i> 整段【開啟音樂】(變綠線)</button>
             <button onclick="handleRouteAction('2')" class="bg-gray-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-volume-xmark"></i> 整段【關閉音樂】(變灰線)</button>
             <button onclick="handleRouteAction('3')" class="bg-amber-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-triangle-exclamation"></i> 單點新增【黃色提醒】</button>
-            <!-- 🚀 新增這顆藍色的定點按鈕 -->
             <button onclick="handleRouteAction('5')" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-clock"></i> 單點新增【藍色時刻站牌】</button>
             <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-3 rounded-2xl active:scale-95 mt-1 border border-gray-200">取消重選</button>
         </div>
     </div>
+
     <!-- 🚀 2.7 編輯現有站牌專用大選單 -->
     <div id="editStopModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center pointer-events-auto transition-opacity">
         <div class="bg-white w-11/12 max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4">
             <h3 class="text-xl font-black text-indigo-700 mb-1 flex items-center justify-center gap-2"><i class="fa-regular fa-clock"></i> 編輯時刻站牌</h3>
-            
             <div class="flex flex-col gap-1">
                 <label class="text-sm font-bold text-gray-600 ml-1">表定時間 (格式如 17:30)</label>
                 <input type="time" id="editStopTimeInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none">
             </div>
-            
             <div class="flex flex-col gap-1 mb-2">
                 <label class="text-sm font-bold text-gray-600 ml-1">站點名稱</label>
                 <input type="text" id="editStopNameInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如：火車站前">
             </div>
-
             <button id="btnSaveStopEdit" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-lg shadow-md"><i class="fa-solid fa-check"></i> 儲存修改</button>
             <button id="btnDeleteStop" class="bg-red-50 text-red-600 border border-red-200 font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-trash-can"></i> 刪除此站牌</button>
             <button id="btnCancelStopEdit" class="text-gray-500 font-extrabold py-2 mt-1 active:scale-95">取消</button>
         </div>
     </div>
+
     <!-- 3. 動態重播控制面板 -->
     <div id="playbackUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex flex-col items-center gap-2.5">
-        <div id="replayMusicBadge" class="bg-gray-800/90 backdrop-blur text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">
-            🔇 目前路段：音樂關閉
-        </div>
-
+        <div id="replayMusicBadge" class="bg-gray-800/90 backdrop-blur text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto">🔇 目前路段：音樂關閉</div>
         <div class="bg-white rounded-full px-4 py-2 shadow-xl pointer-events-auto w-full max-w-md flex items-center gap-3 border border-gray-100">
-            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95">
-                <i class="fa-solid fa-pause"></i>
-            </button>
-            <div class="flex-1 flex items-center py-2">
-                <input id="playbackSlider" type="range" min="0" max="1000" value="0" step="1">
-            </div>
-            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95">
-                0.3x
-            </button>
+            <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95"><i class="fa-solid fa-pause"></i></button>
+            <div class="flex-1 flex items-center py-2"><input id="playbackSlider" type="range" min="0" max="1000" value="0" step="1"></div>
+            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95">0.3x</button>
         </div>
-
         <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md flex items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
                 <div id="playbackTitle" class="font-black text-gray-900 text-base truncate">路線名稱</div>
                 <div id="playbackSub" class="text-xs text-gray-500 truncate">雙指可自由旋轉縮放，按右上角恢復跟隨</div>
             </div>
-            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm">
-                <i class="fa-solid fa-stop"></i> 停止
-            </button>
+            <button id="stopPlaybackBtn" class="bg-red-600 text-white font-extrabold px-5 py-3 rounded-2xl flex items-center gap-1.5 shadow-md active:scale-95 flex-shrink-0 text-sm"><i class="fa-solid fa-stop"></i> 停止</button>
         </div>
     </div>
 
@@ -378,7 +340,55 @@
     </div>
 
     <script>
-        // --- 1. 初始化 MapLibre GL 向量旋轉地圖 (免金鑰 Google Maps) ---
+        // 核心狀態變數
+        let idleWatchId = null;
+
+        function startIdleGPS() {
+            if (idleWatchId) return;
+            idleWatchId = navigator.geolocation.watchPosition(pos => {
+                const lng = pos.coords.longitude, lat = pos.coords.latitude;
+                lastKnownLngLat = [lng, lat];
+                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
+                const acc = Math.round(pos.coords.accuracy);
+                if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
+            }, () => {}, { enableHighAccuracy: true });
+        }
+
+        function stopIdleGPS() {
+            if (idleWatchId) { navigator.geolocation.clearWatch(idleWatchId); idleWatchId = null; }
+        }
+
+        let isFollowingCamera = true;
+        let isHeadingUpMode = true; 
+        let currentHeading = 0;
+        let lastKnownLngLat = [121.346, 24.954];
+        let isRecording = false, watchId = null, wakeLock = null;
+        let followWatchId = null; 
+        let musicActive = false;
+        let routePoints = [], musicEvents = []; 
+        let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
+        let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
+
+        let savedRoutes = [];
+        let selectedRouteIdx = -1;
+        let domMarkers = []; 
+
+        // 🚀 自動搬家與讀取大容量資料庫
+        localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
+            const oldStorage = localStorage.getItem('yinggeCleanRoutes_v2');
+            if (value && value.length > 0) {
+                savedRoutes = value;
+            } else if (oldStorage) {
+                savedRoutes = JSON.parse(oldStorage);
+                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+                    localStorage.removeItem('yinggeCleanRoutes_v2');
+                    console.log("✅ 舊路線已成功搬移至大容量資料庫！");
+                });
+            }
+            document.getElementById('historyCount').innerText = savedRoutes.length;
+        }).catch((err) => console.log("讀取路線失敗:", err));
+
+        // --- 1. 初始化 MapLibre GL 向量旋轉地圖 ---
         const map = new maplibregl.Map({
             container: 'map',
             style: {
@@ -393,111 +403,48 @@
                 },
                 layers: [{ id: 'google-maps-layer', type: 'raster', source: 'google-maps' }]
             },
-            center: [121.346, 24.954], // 鶯歌區
+            center: [121.346, 24.954],
             zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
         });
-setTimeout(() => { map.resize(); }, 500);
-        // 核心狀態變數
-        let idleWatchId = null;
 
-function startIdleGPS() {
-    if (idleWatchId) return;
-    idleWatchId = navigator.geolocation.watchPosition(pos => {
-        const lng = pos.coords.longitude, lat = pos.coords.latitude;
-        lastKnownLngLat = [lng, lat];
-        vehicleMarker.setLngLat(lastKnownLngLat);
-        const acc = Math.round(pos.coords.accuracy);
-        if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
-    }, () => {}, { enableHighAccuracy: true });
-}
+        setTimeout(() => { map.resize(); }, 500);
+        window.addEventListener('resize', () => map.resize());
 
-function stopIdleGPS() {
-    if (idleWatchId) { navigator.geolocation.clearWatch(idleWatchId); idleWatchId = null; }
-}
-let isFollowingCamera = true;
-let isHeadingUpMode = true; 
-let currentHeading = 0;
-let lastKnownLngLat = [121.346, 24.954];
-let isRecording = false, watchId = null, wakeLock = null;
-let followWatchId = null; // 🚀 補上這行，預先宣告導航定位變數
-let musicActive = false;
-        let routePoints = [], musicEvents = []; 
-        let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
-        let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
-
-        let savedRoutes = [];
-        let selectedRouteIdx = -1;
-        let domMarkers = []; 
-
-        // 🚀 自動搬家與讀取大容量資料庫
-        localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
-            // 檢查舊的 localStorage 有沒有資料
-            const oldStorage = localStorage.getItem('yinggeCleanRoutes_v2');
-            
-            if (value && value.length > 0) {
-                // 如果大倉庫 (localforage) 已經有資料，就用大倉庫的
-                savedRoutes = value;
-            } else if (oldStorage) {
-                // 如果大倉庫沒資料，但小房間 (localStorage) 有資料，就執行搬家！
-                savedRoutes = JSON.parse(oldStorage);
-                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-                    // 搬家完成後，清空舊的小房間，釋放空間
-                    localStorage.removeItem('yinggeCleanRoutes_v2');
-                    console.log("✅ 舊路線已成功搬移至大容量資料庫！");
-                });
-            }
-            
-            // 更新畫面上顯示的路線數量
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-        }).catch((err) => console.log("讀取路線失敗:", err));
-
-        // 導航箭頭 (改為 100% 透明的 SVG 向量繪圖小車)
         const puckEl = document.createElement('div');
         puckEl.className = 'nav-puck';
-        
-        // 🚀 修改：直接用純代碼畫一台黃色資源回收車，絕對透明、不破圖！
         puckEl.innerHTML = `
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 100" style="width:100%; height:100%; transform: rotate(0deg);">
-            <!-- 輪胎 -->
             <rect x="4" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
             <rect x="48" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
             <rect x="4" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
             <rect x="48" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
-            
-            <!-- 車體主體 (黃色) -->
             <rect x="8" y="5" width="44" height="90" rx="10" fill="#facc15" stroke="#ca8a04" stroke-width="2"/>
-            
-            <!-- 車頭擋風玻璃 -->
             <path d="M 14 30 L 46 30 L 42 12 L 18 12 Z" fill="#1e293b"/>
-            <!-- 車頂紅色警示燈 -->
             <rect x="22" y="6" width="16" height="3" rx="1.5" fill="#ef4444"/>
-            
-            <!-- 後方壓縮斗 -->
             <rect x="12" y="62" width="36" height="30" rx="4" fill="#eab308" stroke="#ca8a04" stroke-width="1.5"/>
-            
-            <!-- 車尾紅藍白警示條紋 -->
             <rect x="14" y="85" width="32" height="6" fill="#ffffff"/>
             <polygon points="14,91 22,85 30,91" fill="#ef4444"/>
             <polygon points="30,91 38,85 46,91" fill="#3b82f6"/>
         </svg>`;
         
-        const vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' })
-            .setLngLat(lastKnownLngLat).addTo(map);
+        let vehicleMarker = null;
+
         map.on('load', () => {
+            vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
+            
             map.addSource('bg-route', { type: 'geojson', data: emptyGeoJSON() });
             map.addLayer({ id: 'bg-route-line', type: 'line', source: 'bg-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#94a3b8', 'line-width': 6, 'line-opacity': 0.45 } });
-
             map.addSource('route-Silent', { type: 'geojson', data: emptyGeoJSON() });
             map.addLayer({ id: 'route-silent-line', type: 'line', source: 'route-Silent', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#3b82f6', 'line-width': 6, 'line-dasharray': [2, 2] } });
-
             map.addSource('route-music', { type: 'geojson', data: emptyGeoJSON() });
             map.addLayer({ id: 'route-music-line', type: 'line', source: 'route-music', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#16a34a', 'line-width': 7 } });
 
-            startIdleGPS(); // 啟動待機跟隨
-navigator.geolocation?.getCurrentPosition(pos => {
-    map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
-});
-});
+            startIdleGPS();
+            navigator.geolocation?.getCurrentPosition(pos => {
+                map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+            });
+        });
+
         function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
         // --- 2. 視角操作 ---
@@ -522,8 +469,7 @@ navigator.geolocation?.getCurrentPosition(pos => {
             setCameraFollow(true);
             map.easeTo({
                 center: lastKnownLngLat, zoom: Math.max(map.getZoom(), 17),
-                bearing: isHeadingUpMode ? currentHeading : 0,
-                offset: [0, 100], duration: 400
+                bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, 100], duration: 400
             });
         };
 
@@ -560,47 +506,26 @@ navigator.geolocation?.getCurrentPosition(pos => {
             return (toDeg(Math.atan2(y, x)) + 360) % 360;
         }
 
-        // 兩角度的最小差值 (-180 到 180)
         function getAngleDiff(angle1, angle2) {
             let diff = (angle2 - angle1 + 180) % 360 - 180;
             return diff < -180 ? diff + 360 : diff;
         }
 
-        // 點到線段的最短距離 (公尺) - 判斷偏離路線用
-        function pointToLineDistanceMeters(ptLng, ptLat, lineStart, lineEnd) {
-            const R = 6371000;
-            const lat1 = lineStart.lat * Math.PI / 180, lon1 = lineStart.lng * Math.PI / 180;
-            const lat2 = lineEnd.lat * Math.PI / 180, lon2 = lineEnd.lng * Math.PI / 180;
-            const lat3 = ptLat * Math.PI / 180, lon3 = ptLng * Math.PI / 180;
-
-            const d13 = Math.acos(Math.sin(lat1)*Math.sin(lat3) + Math.cos(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1)) * R;
-            const theta13 = Math.atan2(Math.sin(lon3-lon1)*Math.cos(lat3), Math.cos(lat1)*Math.sin(lat3)-Math.sin(lat1)*Math.cos(lat3)*Math.cos(lon3-lon1));
-            const theta12 = Math.atan2(Math.sin(lon2-lon1)*Math.cos(lat2), Math.cos(lat1)*Math.sin(lat2)-Math.sin(lat1)*Math.cos(lat2)*Math.cos(lon2-lon1));
-            
-            const crossTrackDist = Math.asin(Math.sin(d13/R) * Math.sin(theta13-theta12)) * R;
-            return Math.abs(crossTrackDist);
-        }
-
         function speakText(text) {
             if (!('speechSynthesis' in window)) return;
             const u = new SpeechSynthesisUtterance(text);
-            u.lang = 'zh-TW';
-            u.rate = 1.05;
+            u.lang = 'zh-TW'; u.rate = 1.05;
             window.speechSynthesis.speak(u);
         }
 
-        // 手機震動提示 (如果支援)
-        function vibrate(pattern) {
-            if ('vibrate' in navigator) navigator.vibrate(pattern);
-        }
+        function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
 
         function updateRouteLayers(points) {
             const musicFeatures = [], silentFeatures = [];
             for (let i = 1; i < points.length; i++) {
                 const prev = points[i - 1], curr = points[i];
                 const seg = { type: 'Feature', geometry: { type: 'LineString', coordinates: [[prev.lng, prev.lat], [curr.lng, curr.lat]] } };
-                if (curr.musicActive) musicFeatures.push(seg);
-                else silentFeatures.push(seg);
+                if (curr.musicActive) musicFeatures.push(seg); else silentFeatures.push(seg);
             }
             map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
             map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
@@ -615,19 +540,17 @@ navigator.geolocation?.getCurrentPosition(pos => {
             domMarkers.push(m);
         }
 
-        // --- 4. 紀錄路線 (支援寫入方向 bearing 供後續精準導航) ---
+        // --- 4. 紀錄路線 ---
         const musicToggleBtn = document.getElementById('musicToggleBtn');
         function renderMusicButtonState() {
             const icon = document.getElementById('musicBtnIcon');
             const text = document.getElementById('musicBtnText');
             if (musicActive) {
                 musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all";
-                icon.className = "fa-solid fa-music text-lg";
-                text.innerText = "音樂播放中 (點擊關閉)";
+                icon.className = "fa-solid fa-music text-lg"; text.innerText = "音樂播放中 (點擊關閉)";
             } else {
                 musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all";
-                icon.className = "fa-solid fa-volume-xmark text-lg";
-                text.innerText = "音樂關閉中 (點擊開啟)";
+                icon.className = "fa-solid fa-volume-xmark text-lg"; text.innerText = "音樂關閉中 (點擊開啟)";
             }
         }
 
@@ -645,14 +568,11 @@ navigator.geolocation?.getCurrentPosition(pos => {
         };
 
         document.getElementById('recordBtn').onclick = async () => {
-    stopIdleGPS();
-    if (!isRecording) {
-                isRecording = true;
-                musicActive = false;
-                renderMusicButtonState();
+            stopIdleGPS();
+            if (!isRecording) {
+                isRecording = true; musicActive = false; renderMusicButtonState();
                 routePoints = []; musicEvents = []; totalDistanceKm = 0; elapsedSec = 0;
-                clearDomMarkers();
-                updateRouteLayers([]);
+                clearDomMarkers(); updateRouteLayers([]);
                 map.getSource('bg-route')?.setData(emptyGeoJSON());
                 startTime = Date.now();
 
@@ -682,7 +602,7 @@ navigator.geolocation?.getCurrentPosition(pos => {
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: 0 });
                         addPinMarker([lng, lat], '<div class="pin-s"><span>S</span></div>');
-                        vehicleMarker.setLngLat([lng, lat]);
+                        if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]);
                         lastRecordTime = now;
                         return;
                     }
@@ -698,25 +618,18 @@ navigator.geolocation?.getCurrentPosition(pos => {
                         
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: currentHeading });
-                        vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
+                        if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
                         updateRouteLayers(routePoints);
 
                         if (isFollowingCamera) {
-                            map.easeTo({
-                                center: [lng, lat],
-                                bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
-                                offset: [0, 100], duration: 300
-                            });
+                            map.easeTo({ center: [lng, lat], bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
                         }
                         lastRecordTime = now;
                     }
                 }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
             } else {
-                // 🚀 新增：停止紀錄前的二次確認防呆機制
-                if (!confirm("確定要「停止紀錄並儲存」這條路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) {
-                    return; // 如果按下取消，就直接跳出，不會執行下面的停止動作
-                }
+                if (!confirm("確定要「停止紀錄並儲存」這條路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) return;
 
                 isRecording = false;
                 if (watchId) navigator.geolocation.clearWatch(watchId);
@@ -742,8 +655,7 @@ navigator.geolocation?.getCurrentPosition(pos => {
                         savedRoutes.unshift({
                             id: Date.now(), name, author,
                             date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                            distance: totalDistanceKm.toFixed(2),
-                            timeStr: `${mins}m ${secs}s`,
+                            distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
                             points: routePoints, events: musicEvents
                         });
                         localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
@@ -753,6 +665,7 @@ navigator.geolocation?.getCurrentPosition(pos => {
                 } else {
                     alert("移動距離過短，未儲存路線。");
                 }
+                startIdleGPS();
             }
         };
 
@@ -770,83 +683,51 @@ navigator.geolocation?.getCurrentPosition(pos => {
 
             savedRoutes.forEach((r, idx) => {
                 const card = document.createElement('div');
-                // 調整卡片版型：加入拖拉把手與編輯按鈕的空間
                 card.className = "bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
-                
                 const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5 whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
                 
                 card.innerHTML = `
-                    <!-- 左側：拖曳把手 -->
                     <div class="drag-handle text-gray-300 w-8 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500">
                         <i class="fa-solid fa-grip-vertical text-xl"></i>
                     </div>
-                    
-                    <!-- 中間：路線資訊 (點擊開啟路線) -->
                     <div class="flex-1 min-w-0 py-1 cursor-pointer">
-                        <div class="font-black text-gray-900 text-base flex items-center">
-                            <span class="truncate">${r.name}</span> 
-                            ${authorTag}
-                        </div>
+                        <div class="font-black text-gray-900 text-base flex items-center"><span class="truncate">${r.name}</span> ${authorTag}</div>
                         <div class="text-xs text-gray-400 mt-0.5 mb-1">${r.date}</div>
                         <div class="flex gap-3 text-[11px] font-bold">
                             <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
                             <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
                         </div>
                     </div>
-                    
-                    <!-- 右側：編輯名稱按鈕 -->
-                    <button class="edit-name-btn text-gray-300 hover:text-amber-500 w-10 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱">
-                        <i class="fa-solid fa-pen"></i>
-                    </button>
+                    <button class="edit-name-btn text-gray-300 hover:text-amber-500 w-10 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱"><i class="fa-solid fa-pen"></i></button>
                 `;
 
-                // 綁定：點擊中間區域打開路線
-                const contentArea = card.querySelector('.flex-1');
-                contentArea.onclick = () => openRouteDetail(idx);
-
-                // 綁定：點擊右側筆按鈕改名
-                const editBtn = card.querySelector('.edit-name-btn');
-                editBtn.onclick = (e) => {
-                    e.stopPropagation(); // 避免點擊時同時觸發打開路線
+                card.querySelector('.flex-1').onclick = () => openRouteDetail(idx);
+                card.querySelector('.edit-name-btn').onclick = (e) => {
+                    e.stopPropagation();
                     const newName = prompt('請輸入新的路線名稱：', r.name);
                     if (newName && newName.trim() !== '') {
                         savedRoutes[idx].name = newName.trim();
-                        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-                            renderHistoryList(); // 儲存後立即更新畫面
-                        });
+                        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
                     }
                 };
-
                 list.appendChild(card);
             });
 
-            // 🚀 啟動 SortableJS 拖曳排序功能
-            if (window.sortableInstance) {
-                window.sortableInstance.destroy(); // 避免重複綁定
-            }
+            if (window.sortableInstance) window.sortableInstance.destroy();
             window.sortableInstance = new Sortable(list, {
-                handle: '.drag-handle', // 關鍵：只能按住左邊的把手才能拖曳，避免滑動清單時誤觸
-                animation: 200,         // 拖拉時的平滑動畫
-                ghostClass: 'opacity-50', // 拖曳中卡片變半透明
+                handle: '.drag-handle', animation: 200, ghostClass: 'opacity-50',
                 onEnd: function (evt) {
-                    // 根據拖曳結果，將陣列重新洗牌
                     const movedItem = savedRoutes.splice(evt.oldIndex, 1)[0];
                     savedRoutes.splice(evt.newIndex, 0, movedItem);
-                    
-                    // 將新順序寫入資料庫
-                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-                        renderHistoryList(); // 刷新確保內部 Index 重新對齊
-                    });
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
                 }
             });
         }
 
         document.getElementById('historyBtn').onclick = () => { renderHistoryList(); historyModal.classList.remove('hidden'); };
-document.getElementById('closeHistory').onclick = (e) => { 
-    e.stopPropagation(); 
-    historyModal.classList.add('hidden'); 
-    backToMain(); // ✅ 關鍵修復：關閉清單時，強制把底層重置回乾淨的主畫面！
-};
+        document.getElementById('closeHistory').onclick = (e) => { 
+            e.stopPropagation(); historyModal.classList.add('hidden'); backToMain(); 
+        };
 
         function renderRouteMarkers(route) {
             clearDomMarkers();
@@ -855,31 +736,21 @@ document.getElementById('closeHistory').onclick = (e) => {
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
             
-            // 1. 畫出音樂與自訂標記
             (route.events || []).forEach(ev => {
                 let html = '';
-                if (ev.type === 'on') {
-                    html = `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`;
-                } else if (ev.type === 'off') {
-                    html = `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
-                } else if (ev.type === 'alert') {
-                    html = `<div class="music-marker bg-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.note || '提醒'}</div>`;
-                }
+                if (ev.type === 'on') html = `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`;
+                else if (ev.type === 'off') html = `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`;
+                else if (ev.type === 'alert') html = `<div class="music-marker bg-amber-600"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.note || '提醒'}</div>`;
                 if (html) addPinMarker([ev.lng, ev.lat], html);
             });
 
-            // 🚀 2. 畫出定點時刻表站牌 (如果這條路線有站點的話)
             (route.points || []).forEach(p => {
-                if (p.is_stop) {
-                    const html = `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`;
-                    addPinMarker([p.lng, p.lat], html);
-                }
+                if (p.is_stop) addPinMarker([p.lng, p.lat], `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`);
             });
         }
 
         function openRouteDetail(idx) {
-            selectedRouteIdx = idx;
-            const route = savedRoutes[idx];
+            selectedRouteIdx = idx; const route = savedRoutes[idx];
             historyModal.classList.add('hidden');
             document.getElementById('mainUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.add('hidden');
@@ -903,15 +774,12 @@ document.getElementById('closeHistory').onclick = (e) => {
 
         document.getElementById('deleteRouteBtn').ontouchend = (e) => {
             e.preventDefault(); e.stopPropagation();
-            
-            // 用 setTimeout 延遲執行，避開系統彈窗死鎖
             setTimeout(() => {
                 if (confirm('確定要刪除這條清運路線嗎？')) {
                     savedRoutes.splice(selectedRouteIdx, 1);
                     localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
                     document.getElementById('historyCount').innerText = savedRoutes.length;
                     
-                    // 刪除後跳回歷史清單
                     document.getElementById('routeDetailUI').classList.add('hidden');
                     document.getElementById('topBackBtn').classList.add('hidden');
                     clearDomMarkers(); updateRouteLayers([]);
@@ -922,22 +790,13 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
             }, 100);
         };
-        // --- 路線標記後製編輯引擎 (A點到B點 區段塗色版) ---
-        let isEditingMode = false;
-        let originalEventsBackup = [];
-        let originalPointsBackup = [];
-        let editStep = 0; // 0: 選擇A點, 1: 選擇B點
-        let editStartIndex = -1;
-        let tempMarkerA = null;
-        // 🚀 新增：模式切換變數與清空圓點工具
-        let editSubMode = 'marker'; // 'marker' (A到B) 或 'path' (拉線)
-        let pathEditMarkers = [];
-        function clearPathEditMarkers() {
-            pathEditMarkers.forEach(m => m.remove());
-            pathEditMarkers = [];
-        }
 
-        // 綁定切換到「標記編輯 (A到B)」
+        // --- 路線標記後製編輯引擎 ---
+        let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [];
+        let editStep = 0, editStartIndex = -1, tempMarkerA = null;
+        let editSubMode = 'marker', pathEditMarkers = [];
+        function clearPathEditMarkers() { pathEditMarkers.forEach(m => m.remove()); pathEditMarkers = []; }
+
         document.getElementById('modeMarkerBtn').onclick = () => {
             editSubMode = 'marker';
             document.getElementById('modeMarkerBtn').className = "bg-blue-100 text-blue-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95";
@@ -948,11 +807,9 @@ document.getElementById('closeHistory').onclick = (e) => {
             promptEl.innerText = "🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』";
             
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
-            editStep = 0;
-            clearPathEditMarkers(); // 切換模式時清空拉線圓點
+            editStep = 0; clearPathEditMarkers();
         };
 
-        // 綁定切換到「軌跡微調 (手動拉線)」
         document.getElementById('modePathBtn').onclick = () => {
             editSubMode = 'path';
             document.getElementById('modePathBtn').className = "bg-emerald-100 text-emerald-700 font-extrabold text-sm px-5 py-2 rounded-full transition-colors active:scale-95";
@@ -970,9 +827,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             const route = savedRoutes[selectedRouteIdx];
             if (!route) return;
 
-            isEditingMode = true;
-            editStep = 0;
-            // 雙重備份：把標記跟軌跡點顏色都備份起來，防按取消
+            isEditingMode = true; editStep = 0;
             originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
             originalPointsBackup = JSON.parse(JSON.stringify(route.points || [])); 
 
@@ -984,7 +839,6 @@ document.getElementById('closeHistory').onclick = (e) => {
             renderEditableRouteMarkers(route);
         };
 
-        // 重新繪製標記 (只有黃色提醒可以手動刪除，音樂標記由系統自動控制)
         function renderEditableRouteMarkers(route) {
             clearDomMarkers();
             const pts = route.points;
@@ -992,16 +846,13 @@ document.getElementById('closeHistory').onclick = (e) => {
             addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
             addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
 
-            // 1. 畫出音樂與提醒標記
             (route.events || []).forEach((ev, idx) => {
                 let badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
                 let iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
                 let text = ev.type === 'on' ? '開' : '關';
                 let isAlert = (ev.type === 'alert');
                 
-                if (isAlert) {
-                    badgeClass = 'bg-amber-600'; iconClass = 'fa-triangle-exclamation'; text = ev.note || '提醒';
-                }
+                if (isAlert) { badgeClass = 'bg-amber-600'; iconClass = 'fa-triangle-exclamation'; text = ev.note || '提醒'; }
                 const markerEl = document.createElement('div');
                 markerEl.className = `music-marker ${badgeClass} ${isAlert ? 'cursor-pointer active:scale-90' : ''}`;
                 
@@ -1015,19 +866,14 @@ document.getElementById('closeHistory').onclick = (e) => {
                 domMarkers.push(m);
             });
 
-            // 🚀 2. 畫出「可拖曳、可修改」的藍色站牌
             (route.points || []).forEach((p, idx) => {
                 if (p.is_stop) {
                     const markerEl = document.createElement('div');
                     markerEl.className = `music-marker bg-indigo-600 border border-white shadow-lg cursor-grab active:cursor-grabbing`;
                     markerEl.innerHTML = `<i class="fa-regular fa-clock"></i> ${p.scheduled_time} <i class="fa-solid fa-pen ml-1 opacity-70"></i>`;
                     
-                    // 啟用 draggable API
-                    const m = new maplibregl.Marker({ element: markerEl, draggable: true })
-                        .setLngLat([p.lng, p.lat])
-                        .addTo(map);
+                    const m = new maplibregl.Marker({ element: markerEl, draggable: true }).setLngLat([p.lng, p.lat]).addTo(map);
 
-                    // 拖曳結束：尋找最近的軌跡點，自動吸附並轉移站點資料
                     m.on('dragend', () => {
                         const newLngLat = m.getLngLat();
                         let minDist = Infinity, newIdx = idx;
@@ -1045,18 +891,14 @@ document.getElementById('closeHistory').onclick = (e) => {
                         renderEditableRouteMarkers(route); 
                     });
 
-                    // 🚀 點擊呼叫 Pro Max 級編輯站牌彈窗
                     markerEl.onclick = (e) => {
                         e.stopPropagation();
-                        // 1. 把現在的時間跟站名填入輸入框
                         document.getElementById('editStopTimeInput').value = p.scheduled_time || "";
                         document.getElementById('editStopNameInput').value = p.stop_name || "";
                         
-                        // 2. 顯示彈窗
                         const modal = document.getElementById('editStopModal');
                         modal.classList.remove('hidden');
 
-                        // 3. 綁定「儲存修改」按鈕
                         document.getElementById('btnSaveStopEdit').onclick = () => {
                             const newTime = document.getElementById('editStopTimeInput').value;
                             const newName = document.getElementById('editStopNameInput').value;
@@ -1065,38 +907,29 @@ document.getElementById('closeHistory').onclick = (e) => {
                                 route.points[idx].stop_name = newName;
                                 modal.classList.add('hidden');
                                 renderEditableRouteMarkers(route);
-                            } else {
-                                alert("時間與站名不可空白！");
-                            }
+                            } else { alert("時間與站名不可空白！"); }
                         };
 
-                        // 4. 綁定「刪除」按鈕
                         document.getElementById('btnDeleteStop').onclick = () => {
                             if (confirm(`確定要刪除【${p.stop_name}】這個站牌嗎？`)) {
-                                delete route.points[idx].is_stop; 
-                                delete route.points[idx].stop_name; 
-                                delete route.points[idx].scheduled_time;
+                                delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
                                 modal.classList.add('hidden');
                                 renderEditableRouteMarkers(route);
                             }
                         };
 
-                        // 5. 綁定「取消」按鈕
-                        document.getElementById('btnCancelStopEdit').onclick = () => {
-                            modal.classList.add('hidden');
-                        };
+                        document.getElementById('btnCancelStopEdit').onclick = () => modal.classList.add('hidden');
                     };
                     domMarkers.push(m);
                 }
             });
         }
-        // 核心：地圖點擊編輯引擎 (支援 A/B點 與 軌跡拉線 雙模式)
+
         map.on('click', (e) => {
             if (!isEditingMode) return;
             const route = savedRoutes[selectedRouteIdx];
             if (!route) return;
 
-            // 🎯 模式一：標記編輯 (A點到B點)
             if (editSubMode === 'marker') {
                 let minDist = Infinity, closestIdx = -1;
                 route.points.forEach((p, idx) => {
@@ -1107,8 +940,7 @@ document.getElementById('closeHistory').onclick = (e) => {
                 if (minDist * 1000 > 50) { alert("請點擊在路線軌跡附近！"); return; }
 
                 if (editStep === 0) {
-                    editStartIndex = closestIdx;
-                    editStep = 1;
+                    editStartIndex = closestIdx; editStep = 1;
                     const el = document.createElement('div');
                     el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 區段起點</div>`;
                     tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
@@ -1120,80 +952,49 @@ document.getElementById('closeHistory').onclick = (e) => {
                     window.currentEditData = { route, start, end, editStartIndex };
                     document.getElementById('customActionModal').classList.remove('hidden');
                 }
-            } 
-            
-            // 🎯 模式二：軌跡微調 (動態插入圓點並拉線)
-            else if (editSubMode === 'path') {
-                // 🚀 終極防呆 1：利用地圖視覺引擎，確認手指「真的」有戳到線上 (容錯範圍 20px)
+            } else if (editSubMode === 'path') {
                 const bbox = [ [e.point.x - 20, e.point.y - 20], [e.point.x + 20, e.point.y + 20] ];
                 const features = map.queryRenderedFeatures(bbox, { layers: ['bg-route-line', 'route-silent-line', 'route-music-line'] });
                 
-                // 如果點擊的地方沒有這三個圖層的線條，直接擋掉！
-                if (features.length === 0) {
-                    alert("請確實點擊在『軌跡線條』上才能新增編輯點喔！");
-                    return;
-                }
+                if (features.length === 0) { alert("請確實點擊在『軌跡線條』上才能新增編輯點喔！"); return; }
 
-                let bestScore = Infinity;
-                let insertIndex = -1;
+                let bestScore = Infinity, insertIndex = -1;
                 
-                // 🚀 終極防呆 2：利用「三角形兩邊之和」尋找被點擊的精確線段 (徹底消滅無限延伸線 Bug)
                 for (let i = 0; i < route.points.length - 1; i++) {
                     const d1 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat);
                     const d2 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i+1].lng, route.points[i+1].lat);
                     const segL = getDistanceKm(route.points[i].lng, route.points[i].lat, route.points[i+1].lng, route.points[i+1].lat);
-                    
-                    // 分數 = (點到A距離 + 點到B距離) - AB總長。
-                    // 如果點在線段上，這個分數會無限接近 0。
                     const score = (d1 + d2) - segL;
-                    
-                    if (score < bestScore) {
-                        bestScore = score;
-                        insertIndex = i + 1;
-                    }
+                    if (score < bestScore) { bestScore = score; insertIndex = i + 1; }
                 }
                 
-                // 繼承前一個點的音樂狀態，避免顏色斷掉
-                const newPoint = { 
-                    lng: e.lngLat.lng, 
-                    lat: e.lngLat.lat, 
-                    musicActive: route.points[insertIndex-1].musicActive 
-                };
-                
-                // 把新點插入陣列
+                const newPoint = { lng: e.lngLat.lng, lat: e.lngLat.lat, musicActive: route.points[insertIndex-1].musicActive };
                 route.points.splice(insertIndex, 0, newPoint);
                 updateRouteLayers(route.points);
                 
-                // 創造一顆可以拖拉的白底綠框小圓點
                 const el = document.createElement('div');
                 el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
-                const m = new maplibregl.Marker({ element: el, draggable: true })
-                    .setLngLat([newPoint.lng, newPoint.lat])
-                    .addTo(map);
+                const m = new maplibregl.Marker({ element: el, draggable: true }).setLngLat([newPoint.lng, newPoint.lat]).addTo(map);
                     
-                // 拖拉時，即時更新軌跡線條！
                 m.on('drag', () => {
                     const lngLat = m.getLngLat();
-                    newPoint.lng = lngLat.lng; 
-                    newPoint.lat = lngLat.lat;
+                    newPoint.lng = lngLat.lng; newPoint.lat = lngLat.lat;
                     updateRouteLayers(route.points); 
                 });
                 
                 pathEditMarkers.push(m);
             }
         });
-        // 🚀 新增：處理大按鈕點擊的專屬功能
+
         window.handleRouteAction = function(action) {
-            document.getElementById('customActionModal').classList.add('hidden'); // 關閉彈窗
+            document.getElementById('customActionModal').classList.add('hidden');
             if (!window.currentEditData) return;
 
             const { route, start, end, editStartIndex } = window.currentEditData;
 
             if (action === '1' || action === '2') {
                 const turnOn = (action === '1');
-                for (let i = start; i <= end; i++) {
-                    route.points[i].musicActive = turnOn;
-                }
+                for (let i = start; i <= end; i++) route.points[i].musicActive = turnOn;
                 
                 let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); 
                 let currentMusic = route.points[0].musicActive;
@@ -1209,14 +1010,12 @@ document.getElementById('closeHistory').onclick = (e) => {
                 route.events = newEvents;
 
             } else if (action === '3') {
-                // 只有黃色提醒需要輸入自訂文字，這裡保留文字輸入框
                 const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車)：", "注意路段");
                 if (note) {
                     route.events = route.events || [];
                     route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
                 }
-                } else if (action === '5') {
-                // 🚀 新增：手動加入藍色定點
+            } else if (action === '5') {
                 const time = prompt("請輸入表定時間 (格式如 17:30)：", "17:00");
                 const name = prompt("請輸入站點名稱 (如：火車站前)：", "新增定點");
                 if (time && name) {
@@ -1225,33 +1024,28 @@ document.getElementById('closeHistory').onclick = (e) => {
                     route.points[editStartIndex].stop_name = name;
                 }
             }
-            // 清除暫時標記，復原狀態，重新繪製畫面
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             editStep = 0;
             document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇下一個區段的『起點 (A點)』";
-            updateRouteLayers(route.points); 
-            renderEditableRouteMarkers(route);
+            updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         };
-        // 儲存編輯結果
+
         document.getElementById('saveEditBtn').onclick = () => {
-            isEditingMode = false;
-            clearPathEditMarkers();
+            isEditingMode = false; clearPathEditMarkers();
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             
             localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-    document.getElementById('topBackBtn').classList.remove('hidden');
-    openRouteDetail(selectedRouteIdx); 
-}).catch((err) => {
-    alert("儲存失敗！可能是手機儲存空間不足，請清理後再試。");
-    console.error(err);
-});
+                document.getElementById('topBackBtn').classList.remove('hidden');
+                openRouteDetail(selectedRouteIdx); 
+            }).catch((err) => {
+                alert("儲存失敗！可能是手機儲存空間不足，請清理後再試。");
+                console.error(err);
+            });
         };
 
-        // 取消編輯 (安全還原)
         document.getElementById('cancelEditBtn').onclick = () => {
-            isEditingMode = false;
-            clearPathEditMarkers();
+            isEditingMode = false; clearPathEditMarkers();
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             document.getElementById('editRouteBar').classList.add('hidden');
             
@@ -1274,29 +1068,23 @@ document.getElementById('closeHistory').onclick = (e) => {
             document.getElementById('blackOverlay').classList.add('hidden');
             document.getElementById('mainUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
-            clearDomMarkers();
-            updateRouteLayers([]);
+            clearDomMarkers(); updateRouteLayers([]);
             map.getSource('bg-route')?.setData(emptyGeoJSON());
             try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
-    startIdleGPS();
-}
+            startIdleGPS();
+        }
 
         document.getElementById('topBackBtn').onclick = (e) => {
             if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-                stopSmoothPlayback();
-                openRouteDetail(selectedRouteIdx);
+                stopSmoothPlayback(); openRouteDetail(selectedRouteIdx);
             } else if (!document.getElementById('followStopBtn').classList.contains('hidden')) {
-                // 新增：如果在導航中，按左上角也退回詳情並觸發結束遵循
                 document.getElementById('followStopBtn').click();
             } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
                 document.getElementById('routeDetailUI').classList.add('hidden');
                 document.getElementById('topBackBtn').classList.add('hidden');
-                renderHistoryList();
-                document.getElementById('historyModal').classList.remove('hidden');
+                renderHistoryList(); document.getElementById('historyModal').classList.remove('hidden');
             } else {
-                backToMain();
-                renderHistoryList();
-                historyModal.classList.remove('hidden');
+                backToMain(); renderHistoryList(); document.getElementById('historyModal').classList.remove('hidden');
             }
         };
 
@@ -1322,15 +1110,14 @@ document.getElementById('closeHistory').onclick = (e) => {
                 type: 'FeatureCollection',
                 features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: route.points.map(p => [p.lng, p.lat]) } }]
             });
-            updateRouteLayers([]);
-            renderRouteMarkers(route);
+            updateRouteLayers([]); renderRouteMarkers(route);
 
             playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
             setCameraFollow(true);
 
             const startPt = route.points[0];
             lastKnownLngLat = [startPt.lng, startPt.lat];
-            vehicleMarker.setLngLat(lastKnownLngLat);
+            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
             map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, 100] });
 
             startSmoothPlayback();
@@ -1350,8 +1137,7 @@ document.getElementById('closeHistory').onclick = (e) => {
             lastKnownLngLat = [curLng, curLat];
 
             if (i < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
-
-            vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
             const walkedPoints = pts.slice(0, i + 1).concat([{ lng: curLng, lat: curLat, musicActive: p2.musicActive }]);
             updateRouteLayers(walkedPoints);
@@ -1378,11 +1164,9 @@ document.getElementById('closeHistory').onclick = (e) => {
             playProgress += deltaSec * 2.5 * speedMultiplier;
 
             if (playProgress >= maxIdx) {
-                playProgress = maxIdx;
-                renderInterpolatedStep(playProgress);
+                playProgress = maxIdx; renderInterpolatedStep(playProgress);
                 playbackSlider.value = Math.round(playProgress * 100);
-                stopSmoothPlayback();
-                playPauseBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i>';
+                stopSmoothPlayback(); playPauseBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i>';
                 return;
             }
 
@@ -1399,8 +1183,7 @@ document.getElementById('closeHistory').onclick = (e) => {
         }
 
         function stopSmoothPlayback() {
-            isPlaying = false;
-            if (animFrameId) cancelAnimationFrame(animFrameId);
+            isPlaying = false; if (animFrameId) cancelAnimationFrame(animFrameId);
             playPauseBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
         }
 
@@ -1408,72 +1191,42 @@ document.getElementById('closeHistory').onclick = (e) => {
         playbackSlider.oninput = (e) => { playProgress = parseInt(e.target.value, 10) / 100; renderInterpolatedStep(playProgress); };
         speedToggleBtn.onclick = () => {
             const nextIdx = (speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length;
-            speedMultiplier = speedOptions[nextIdx];
-            speedToggleBtn.innerText = `${speedMultiplier}x`;
+            speedMultiplier = speedOptions[nextIdx]; speedToggleBtn.innerText = `${speedMultiplier}x`;
         };
         document.getElementById('stopPlaybackBtn').onclick = () => { 
-    stopSmoothPlayback(); 
-    document.getElementById('playbackUI').classList.add('hidden'); // ✅ 關鍵修復：把重播面板藏起來
-    document.getElementById('topBackBtn').classList.remove('hidden'); // 確保頂部返回鍵有出來
-    openRouteDetail(selectedRouteIdx); 
-};
+            stopSmoothPlayback(); document.getElementById('playbackUI').classList.add('hidden'); 
+            document.getElementById('topBackBtn').classList.remove('hidden'); openRouteDetail(selectedRouteIdx); 
+        };
 
-        // --- 7. 🔥 Pro Max 級實戰導航引擎 (嚴格判定 + 轉彎提示 + 智慧黑屏 + 偏離警告) ---
-        let triggeredMusicIndices = new Set();
-        let triggeredTurnIndices = new Set();
-        let isBlackScreenActive = false; // 紀錄使用者是否手動啟用了黑屏
-        let isScreenAutoWoken = false;   // 紀錄目前是否被系統暫時喚醒
-        let sleepTimer = null;           // 重新進入黑屏的計時器
+        // --- 7. 🔥 Pro Max 級實戰導航引擎 ---
+        let triggeredMusicIndices = new Set(), triggeredTurnIndices = new Set();
+        let isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
 
         const blackOverlay = document.getElementById('blackOverlay');
         const offRouteWarning = document.getElementById('offRouteWarning');
         const banner = document.getElementById('musicAlertBanner');
 
-        // 黑屏按鈕手動控制
-        document.getElementById('blackScreenBtn').onclick = () => {
-            isBlackScreenActive = true;
-            isScreenAutoWoken = false;
-            blackOverlay.classList.remove('hidden');
-        };
-        // 點擊螢幕任何地方強制離開黑屏
-        blackOverlay.onclick = () => {
-            isBlackScreenActive = false;
-            isScreenAutoWoken = false;
-            if (sleepTimer) clearTimeout(sleepTimer);
-            blackOverlay.classList.add('hidden');
-        };
+        document.getElementById('blackScreenBtn').onclick = () => { isBlackScreenActive = true; isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); };
+        blackOverlay.onclick = () => { isBlackScreenActive = false; isScreenAutoWoken = false; if (sleepTimer) clearTimeout(sleepTimer); blackOverlay.classList.add('hidden'); };
 
-        // 智慧喚醒函數
         function autoWakeScreen() {
-            if (!isBlackScreenActive) return; // 如果本來就沒開黑屏，不用動作
-            if (isScreenAutoWoken) return;    // 已經被喚醒過了
-            
-            isScreenAutoWoken = true;
-            blackOverlay.classList.add('opacity-0'); // 淡出黑屏
-            setTimeout(() => { 
-                if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); 
-            }, 300);
-            
-            vibrate([100, 50, 100]); // 震動提示喚醒
+            if (!isBlackScreenActive || isScreenAutoWoken) return;
+            isScreenAutoWoken = true; blackOverlay.classList.add('opacity-0');
+            setTimeout(() => { if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); }, 300);
+            vibrate([100, 50, 100]);
         }
 
-        // 任務完成後，重新進入黑屏
         function autoSleepScreen() {
-            if (!isBlackScreenActive) return; // 使用者沒說要黑屏
+            if (!isBlackScreenActive) return;
             if (sleepTimer) clearTimeout(sleepTimer);
-            
-            // 延遲 5 秒後重新黑屏
             sleepTimer = setTimeout(() => {
                 if (isBlackScreenActive) {
-                    isScreenAutoWoken = false;
-                    blackOverlay.classList.remove('hidden');
-                    // 一小段延遲讓 CSS 動畫生效
+                    isScreenAutoWoken = false; blackOverlay.classList.remove('hidden');
                     setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10);
                 }
             }, 5000);
         }
 
-        // 顯示頂部大字報警告
         function showNavAlert(iconHtml, text, bgColorClass) {
             banner.className = `fixed bottom-32 left-4 right-4 z-50 rounded-2xl p-4 shadow-2xl text-white font-black text-center text-2xl nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center gap-3 ${bgColorClass}`;
             banner.innerHTML = `<span class="text-4xl drop-shadow-md">${iconHtml}</span> <span>${text}</span>`;
@@ -1481,16 +1234,13 @@ document.getElementById('closeHistory').onclick = (e) => {
             setTimeout(() => banner.classList.add('hidden'), 6000);
         }
 
-        // 🚀 --- 戰術倒數儀表板專用引擎 ---
         window.tacticalTimer = null;
         function updateTacticalDisplay() {
-            const nameEl = document.getElementById('nextStopName');
-            const timeEl = document.getElementById('timeRemainingDisplay');
+            const nameEl = document.getElementById('nextStopName'), timeEl = document.getElementById('timeRemainingDisplay');
             if (!nameEl || !timeEl) return;
 
             if (!window.stopsQueue || window.currentStopIndex >= window.stopsQueue.length) {
-                nameEl.innerText = "🚩 本路線所有定點清運已完成！";
-                timeEl.innerText = "--:--";
+                nameEl.innerText = "🚩 本路線所有定點清運已完成！"; timeEl.innerText = "--:--";
                 timeEl.className = "text-3xl font-black text-gray-500 mt-0.5";
                 if (window.tacticalTimer) clearInterval(window.tacticalTimer);
                 return;
@@ -1500,15 +1250,11 @@ document.getElementById('closeHistory').onclick = (e) => {
             const timeStr = nextStop.scheduled_time || "00:00";
             nameEl.innerText = `下一站 (${window.currentStopIndex + 1}/${window.stopsQueue.length})：${nextStop.stop_name || '定點收運'}`;
 
-            const now = new Date();
-            const [hours, minutes] = timeStr.split(':');
-            const targetTime = new Date();
+            const now = new Date(), [hours, minutes] = timeStr.split(':'), targetTime = new Date();
             targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
 
-            const diffSecs = Math.floor((targetTime - now) / 1000);
-            const absSecs = Math.abs(diffSecs);
-            const m = Math.floor(absSecs / 60).toString().padStart(2, '0');
-            const s = (absSecs % 60).toString().padStart(2, '0');
+            const diffSecs = Math.floor((targetTime - now) / 1000), absSecs = Math.abs(diffSecs);
+            const m = Math.floor(absSecs / 60).toString().padStart(2, '0'), s = (absSecs % 60).toString().padStart(2, '0');
 
             if (diffSecs > 0) {
                 timeEl.innerText = `+ ${m}:${s}`;
@@ -1522,41 +1268,20 @@ document.getElementById('closeHistory').onclick = (e) => {
             }
         }
 
-        // --- 🚀 遵循導航引擎 (含情境語音與修復偏離邏輯) ---
         document.getElementById('startFollowBtn').onclick = async () => {
-    stopIdleGPS();
-    const route = savedRoutes[selectedRouteIdx];
+            stopIdleGPS();
+            const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
             
-            // 🎬 劇本 1：剛按下導航的瞬間 (🚀 終極破解版：瞬間算距離，一句話連著講！)
-            const initialDist = getDistanceKm(lastKnownLngLat[0], lastKnownLngLat[1], route.points[0].lng, route.points[0].lat) * 1000;
-            let welcomeText = `啟動導航：${route.name}。`;
-            
-            // 語音狀態鎖設定
-            let hasAnnouncedStart = false;
-            let hasAnnouncedEnd = false;
-            let wasOffRoute = false; 
-            window.startGuidanceSpoken = true; // 開場已經講了，後面不需要再講前往起點
-            window.lastOffRouteTime = 0;       
+            let hasAnnouncedStart = false, hasAnnouncedEnd = false, wasOffRoute = false; 
+            window.startGuidanceSpoken = true; window.lastOffRouteTime = 0;        
 
-            // 趁著手指按鈕解鎖權限的瞬間，直接判定距離！
-            if (initialDist > 30) {
-                welcomeText += `距離起點還有 ${Math.round(initialDist)} 公尺，請慢慢開，準備前往出發點囉。`;
-                showNavAlert('🚩', `請前往起點 (${Math.round(initialDist)}m)`, 'bg-blue-600');
-            } else {
-                welcomeText += `我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。`;
-                hasAnnouncedStart = true;
-                showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
-            }
-            speakText(welcomeText); // 一次把話講完，完美避開瀏覽器的靜音機制！
+            triggeredMusicIndices.clear(); triggeredTurnIndices.clear();
+            isBlackScreenActive = false; isScreenAutoWoken = false;
 
-            triggeredMusicIndices.clear();
-            triggeredTurnIndices.clear();
-            isBlackScreenActive = false;
-            isScreenAutoWoken = false;
-
+            const pts = route.points;
             const mappedEvents = (route.events || []).map(ev => {
                 let minEvDist = Infinity, evPtIdx = 0;
                 for(let i = 0; i < route.points.length; i++) {
@@ -1566,23 +1291,18 @@ document.getElementById('closeHistory').onclick = (e) => {
                 return { ...ev, ptIdx: evPtIdx };
             });
 
-            // 戰術面板初始化
             window.stopsQueue = (route.points || []).map((p, index) => ({ ...p, ptIdx: index })).filter(p => p.is_stop === true);
             window.currentStopIndex = 0;
             if (window.tacticalTimer) clearInterval(window.tacticalTimer);
             if (window.stopsQueue.length > 0) {
                 document.getElementById('tacticalTimePanel').classList.remove('hidden');
-                updateTacticalDisplay(); 
-                window.tacticalTimer = setInterval(updateTacticalDisplay, 1000); 
+                updateTacticalDisplay(); window.tacticalTimer = setInterval(updateTacticalDisplay, 1000); 
             } else {
                 document.getElementById('tacticalTimePanel').classList.add('hidden');
             }
 
             let currentNavIdx = 0; 
-            const SEARCH_WINDOW = 35; // 稍微拉大搜尋視窗，避免開太快系統跟不上
-            
-            updateRouteLayers(route.points);
-            renderRouteMarkers(route);
+            updateRouteLayers(route.points); renderRouteMarkers(route);
             setCameraFollow(true);
 
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
@@ -1596,112 +1316,73 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
                 
                 lastKnownLngLat = [lng, lat];
-                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
                 if (isFollowingCamera) {
                     map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
                 }
 
-                let isOffRoute = true;
-                let closestPtIdx = currentNavIdx;
-                let minDist = Infinity;
+                let isOffRoute = true, closestPtIdx = currentNavIdx, minDist = Infinity;
 
-                // 🚀 修復：改用「尋找最近的軌跡點」代替「點到線段距離」，避免遠距離無限延伸誤判
                 for (let i = 0; i < pts.length; i++) {
                     const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
-                    if (d < minDist) {
-                        minDist = d;
-                        closestPtIdx = i;
-                    }
+                    if (d < minDist) { minDist = d; closestPtIdx = i; }
                 }
                 currentNavIdx = closestPtIdx;
 
-                // 戰術面板進度推進與語音播報
-if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
-    const targetStop = window.stopsQueue[window.currentStopIndex];
-    const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
-    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
-        
-        // 計算提早或延遲
-        const nowTime = new Date();
-        const [hours, minutes] = (targetStop.scheduled_time || "00:00").split(':');
-        const targetTime = new Date();
-        targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-        
-        const diffSecs = Math.floor((targetTime - nowTime) / 1000);
-        let timeVoice = "";
-        if (diffSecs > 60) timeVoice = `提早 ${Math.floor(diffSecs/60)} 分鐘`;
-        else if (diffSecs < -60) timeVoice = `延遲 ${Math.floor(Math.abs(diffSecs)/60)} 分鐘`;
-        else timeVoice = "準點";
+                const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+                if (!hasAnnouncedStart) {
+                    if (distToStart <= 35 || minDist <= 25) {
+                        hasAnnouncedStart = true;
+                        document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
+                        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+                        speakText("凱哥，任務開始，路上請注意安全。");
+                        vibrate([200, 100, 200]);
+                    } else {
+                        document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+                        return;
+                    }
+                }
 
-        speakText(`抵達 ${targetStop.stop_name}，${timeVoice}`);
+                if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
+                    const targetStop = window.stopsQueue[window.currentStopIndex];
+                    const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
+                    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
+                        const nowTime = new Date(), [hours, minutes] = (targetStop.scheduled_time || "00:00").split(':');
+                        const targetTime = new Date(); targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+                        
+                        const diffSecs = Math.floor((targetTime - nowTime) / 1000);
+                        let timeVoice = "";
+                        if (diffSecs > 60) timeVoice = `提早 ${Math.floor(diffSecs/60)} 分鐘`;
+                        else if (diffSecs < -60) timeVoice = `延遲 ${Math.floor(Math.abs(diffSecs)/60)} 分鐘`;
+                        else timeVoice = "準點";
 
-        window.currentStopIndex++; 
-        updateTacticalDisplay(); 
-    }
-}
+                        speakText(`抵達 ${targetStop.stop_name}，${timeVoice}`);
+                        window.currentStopIndex++; updateTacticalDisplay(); 
+                    }
+                }
 
-                // 🎬 劇本 2 & 3：行進中抵達路線播報 (🚀 加入動態倒數)
-if (!hasAnnouncedStart) {
-    const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
-    if (distToStart <= 35 || minDist <= 25) {
-        hasAnnouncedStart = true;
-        document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
-        showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
-        speakText("凱哥，我們已經順利抵達路線囉，今日清運任務開始，路上請注意安全。");
-        vibrate([200, 100, 200]);
-    } else {
-        // 動態顯示距離起點還有多遠，讓駕駛知道系統有在運作！
-        document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
-        return;
-    }
-}
-                // 🎬 劇本 5：抵達終點
                 if (!hasAnnouncedEnd) {
                     const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;
                     if (distToEnd <= 40 || currentNavIdx >= pts.length - 3) {
                         speakText("已抵達路線終點，本次清運任務結束，辛苦了！");
-                        hasAnnouncedEnd = true;
-                        document.getElementById('tacticalTimePanel').classList.add('hidden'); // 抵達終點收起面板
+                        hasAnnouncedEnd = true; document.getElementById('tacticalTimePanel').classList.add('hidden');
                     }
                 }
 
-                // 偏離路線與歸隊判定
                 if (minDist < 25) {
-                    isOffRoute = false;
-                    offRouteWarning.classList.add('hidden');
-                    
-                    // 🎬 劇本 4：從偏離狀態重新回到軌跡 (🚀 修改：必須是抵達起點開跑後，才有回到路線的概念)
-                    if (wasOffRoute && hasAnnouncedStart) {
-                        speakText("已重新回到原定路線。");
-                        wasOffRoute = false;
-                    }
+                    isOffRoute = false; offRouteWarning.classList.add('hidden');
+                    if (wasOffRoute) { speakText("已重新回到原定路線。"); wasOffRoute = false; }
                 } else {
-                    isOffRoute = true;
-                    wasOffRoute = true; // 標記進入迷航狀態
-                    
-                    // 🚀 關鍵修復：只有在「已經抵達起點開跑後」，偏離路線才會跳紅色警告跟語音。
-                    if (hasAnnouncedStart) {
-                        offRouteWarning.classList.remove('hidden');
-                        
-                        // 用時間限制每 15 秒最多唸一次，避免GPS連續跳動時語音瘋狂打架
-                        if (Date.now() - window.lastOffRouteTime > 15000) {
-                            speakText("已偏離路線，請注意。");
-                            vibrate([200, 100, 200]);
-                            autoWakeScreen();
-                            window.lastOffRouteTime = Date.now();
-                        }
-                    } else {
-                        // 還沒抵達起點前，隱藏紅色偏離警告，讓畫面乾淨
-                        offRouteWarning.classList.add('hidden'); 
+                    isOffRoute = true; wasOffRoute = true; offRouteWarning.classList.remove('hidden');
+                    if (Date.now() - window.lastOffRouteTime > 15000) {
+                        speakText("已偏離路線，請注意。"); vibrate([200, 100, 200]); autoWakeScreen();
+                        window.lastOffRouteTime = Date.now();
                     }
                 }
 
-                // 轉彎與音樂判定 (保持在路線上才判定)
                 if (!isOffRoute) {
-                    // 雷達距離轉彎預判 (30公尺)
-                    let lookAheadIdx = closestPtIdx;
-                    let scanDist = 0;
+                    let lookAheadIdx = closestPtIdx, scanDist = 0;
                     while (lookAheadIdx < pts.length - 1 && scanDist < 30) {
                         scanDist += (getDistanceKm(pts[lookAheadIdx].lng, pts[lookAheadIdx].lat, pts[lookAheadIdx+1].lng, pts[lookAheadIdx+1].lat) * 1000);
                         lookAheadIdx++;
@@ -1714,50 +1395,34 @@ if (!hasAnnouncedStart) {
                         
                         if (angleDiff > 40 && angleDiff < 140) {
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
-                            autoWakeScreen();
-                            showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); speakText("前方準備右轉");
-                            autoSleepScreen();
+                            autoWakeScreen(); showNavAlert('➡️', '前方準備右轉', 'bg-blue-600'); speakText("前方準備右轉"); autoSleepScreen();
                         } else if (angleDiff < -40 && angleDiff > -140) {
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
-                            autoWakeScreen();
-                            showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); speakText("前方準備左轉");
-                            autoSleepScreen();
+                            autoWakeScreen(); showNavAlert('⬅️', '前方準備左轉', 'bg-blue-600'); speakText("前方準備左轉"); autoSleepScreen();
                         }
                     }
 
-                    // 音樂判定
                     mappedEvents.forEach((ev, idx) => {
                         if (triggeredMusicIndices.has(idx)) return;
                         if (Math.abs(currentNavIdx - ev.ptIdx) <= 15) {
                             const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
                             if (distMeters <= 35) {
-                                const targetBearing = ev.bearing !== undefined ? ev.bearing : currentHeading;
-const headingDiff = Math.abs(getAngleDiff(currentHeading, targetBearing));
-if (headingDiff < 60 || ev.bearing === undefined) {
-                                    triggeredMusicIndices.add(idx); autoWakeScreen();
-                                    if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
-                                    else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }
-                                    else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600'); speakText(`前方提醒，${ev.note}`); }
-                                    autoSleepScreen();
-                                }
+                                triggeredMusicIndices.add(idx); autoWakeScreen();
+                                if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("前方準備開啟回收音樂"); }
+                                else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("前方準備關閉回收音樂"); }
+                                else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600'); speakText(`前方提醒，${ev.note}`); }
+                                autoSleepScreen();
                             }
                         }
                     });
                 }
-            }, () => {}, { enableHighAccuracy: true, maximumAge: 0 });
+            }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
         };
 
-        // --- 結束遵循導航按鈕動作 ---
         document.getElementById('followStopBtn').onclick = () => {
-            if (followWatchId) {
-                navigator.geolocation.clearWatch(followWatchId);
-                followWatchId = null;
-            }
-            
-            // 清理儀表板
+            if (followWatchId) { navigator.geolocation.clearWatch(followWatchId); followWatchId = null; }
             if (window.tacticalTimer) clearInterval(window.tacticalTimer);
             document.getElementById('tacticalTimePanel').classList.add('hidden');
-            
             document.getElementById('followStopBtn').classList.add('hidden');
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');
@@ -1765,7 +1430,8 @@ if (headingDiff < 60 || ev.bearing === undefined) {
             try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
             openRouteDetail(selectedRouteIdx);
         };
-       // --- 8. 路線分享與匯入功能 (實體文字檔 .txt 版) ---
+
+        // --- 8. 路線分享與匯入功能 ---
         document.getElementById('exportRouteBtn').onclick = async () => {
             const route = savedRoutes[selectedRouteIdx];
             const routeData = JSON.stringify(route);
@@ -1773,10 +1439,7 @@ if (headingDiff < 60 || ev.bearing === undefined) {
             const file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
             
             if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                try {
-                    await navigator.share({ title: '分享清運路線', files: [file] });
-                    return; 
-                } catch (err) { console.log('分享取消，改下載'); }
+                try { await navigator.share({ title: '分享清運路線', files: [file] }); return; } catch (err) {}
             }
             
             const url = URL.createObjectURL(blob);
@@ -1784,7 +1447,6 @@ if (headingDiff < 60 || ev.bearing === undefined) {
             a.href = url; a.download = `${route.name}.txt`;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            
             alert(`✅ 已下載檔案：${route.name}.txt\n請到手機的「下載」資料夾，以傳送檔案的方式發到 LINE 群組。`);
         };
 
@@ -1796,22 +1458,18 @@ if (headingDiff < 60 || ev.bearing === undefined) {
                 try {
                     const route = JSON.parse(event.target.result);
                     if (!route.points || !route.name) throw new Error("格式不對");
-                    
                     route.id = Date.now(); 
                     savedRoutes.unshift(route);
                     localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
                     document.getElementById('historyCount').innerText = savedRoutes.length;
                     renderHistoryList();
                     alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);
-                } catch (err) {
-                    alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。');
-                }
+                } catch (err) { alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。'); }
                 e.target.value = ''; 
             };
             reader.readAsText(file);
         };
 
-        // --- 精度設定控制 (補回並放在正確的獨立位置) ---
         document.getElementById('settingsBtn').onclick = () => document.getElementById('settingsModal').classList.remove('hidden');
         document.getElementById('closeSettings').onclick = () => document.getElementById('settingsModal').classList.add('hidden');
         window.setMode = function(sec, meters, text) {
@@ -1819,21 +1477,11 @@ if (headingDiff < 60 || ev.bearing === undefined) {
             document.getElementById('currentModeText').innerText = text;
             document.getElementById('settingsModal').classList.add('hidden');
         };
-        // --- 9. 螢幕常亮 (WakeLock) 保護機制 ---
-        // 解決手機切換到 LINE 或其他 App 再切回來時，螢幕常亮失效的問題
+
         document.addEventListener('visibilitychange', async () => {
-            // 當畫面重新顯示給使用者看的時候
             if (document.visibilityState === 'visible') {
-                // 如果目前正在「紀錄中」或「導航中」，就重新要一次保持螢幕長亮的權限
                 if (isRecording || followWatchId) {
-                    try {
-                        if ('wakeLock' in navigator) {
-                            wakeLock = await navigator.wakeLock.request('screen');
-                            console.log('重新取得螢幕常亮權限成功！');
-                        }
-                    } catch (err) {
-                        console.log('重新申請 WakeLock 失敗', err);
-                    }
+                    try { if ('wakeLock' in navigator) { wakeLock = await navigator.wakeLock.request('screen'); } } catch (err) {}
                 }
             }
         });

@@ -396,6 +396,22 @@
         });
 
         // 核心狀態變數
+        let idleWatchId = null;
+
+function startIdleGPS() {
+    if (idleWatchId) return;
+    idleWatchId = navigator.geolocation.watchPosition(pos => {
+        const lng = pos.coords.longitude, lat = pos.coords.latitude;
+        lastKnownLngLat = [lng, lat];
+        vehicleMarker.setLngLat(lastKnownLngLat);
+        const acc = Math.round(pos.coords.accuracy);
+        if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
+    }, () => {}, { enableHighAccuracy: true });
+}
+
+function stopIdleGPS() {
+    if (idleWatchId) { navigator.geolocation.clearWatch(idleWatchId); idleWatchId = null; }
+}
 let isFollowingCamera = true;
 let isHeadingUpMode = true; 
 let currentHeading = 0;
@@ -475,13 +491,10 @@ let musicActive = false;
             map.addSource('route-music', { type: 'geojson', data: emptyGeoJSON() });
             map.addLayer({ id: 'route-music-line', type: 'line', source: 'route-music', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#16a34a', 'line-width': 7 } });
 
-            navigator.geolocation?.getCurrentPosition(pos => {
-                lastKnownLngLat = [pos.coords.longitude, pos.coords.latitude];
-                vehicleMarker.setLngLat(lastKnownLngLat);
-                map.jumpTo({ center: lastKnownLngLat, zoom: 17 });
-                document.getElementById('accuracyText').innerText = `± ${Math.round(pos.coords.accuracy)} m`;
-            }, () => {}, { enableHighAccuracy: true });
-        });
+            startIdleGPS(); // 啟動待機跟隨
+navigator.geolocation?.getCurrentPosition(pos => {
+    map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+});
 
         function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
@@ -568,7 +581,6 @@ let musicActive = false;
 
         function speakText(text) {
             if (!('speechSynthesis' in window)) return;
-            window.speechSynthesis.cancel();
             const u = new SpeechSynthesisUtterance(text);
             u.lang = 'zh-TW';
             u.rate = 1.05;
@@ -631,7 +643,8 @@ let musicActive = false;
         };
 
         document.getElementById('recordBtn').onclick = async () => {
-            if (!isRecording) {
+    stopIdleGPS();
+    if (!isRecording) {
                 isRecording = true;
                 musicActive = false;
                 renderMusicButtonState();
@@ -1263,7 +1276,8 @@ document.getElementById('closeHistory').onclick = (e) => {
             updateRouteLayers([]);
             map.getSource('bg-route')?.setData(emptyGeoJSON());
             try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
-        }
+    startIdleGPS();
+}
 
         document.getElementById('topBackBtn').onclick = (e) => {
             if (!document.getElementById('playbackUI').classList.contains('hidden')) {
@@ -1508,7 +1522,8 @@ document.getElementById('closeHistory').onclick = (e) => {
 
         // --- 🚀 遵循導航引擎 (含情境語音與修復偏離邏輯) ---
         document.getElementById('startFollowBtn').onclick = async () => {
-            const route = savedRoutes[selectedRouteIdx];
+    stopIdleGPS();
+    const route = savedRoutes[selectedRouteIdx];
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('followStopBtn').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
@@ -1599,14 +1614,30 @@ document.getElementById('closeHistory').onclick = (e) => {
                 }
                 currentNavIdx = closestPtIdx;
 
-                // 戰術面板進度推進
-                if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
-                    const targetStop = window.stopsQueue[window.currentStopIndex];
-                    const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
-                    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
-                        window.currentStopIndex++; updateTacticalDisplay(); 
-                    }
-                }
+                // 戰術面板進度推進與語音播報
+if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
+    const targetStop = window.stopsQueue[window.currentStopIndex];
+    const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
+    if (distToStop <= 35 || currentNavIdx >= targetStop.ptIdx) {
+        
+        // 計算提早或延遲
+        const nowTime = new Date();
+        const [hours, minutes] = (targetStop.scheduled_time || "00:00").split(':');
+        const targetTime = new Date();
+        targetTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+        
+        const diffSecs = Math.floor((targetTime - nowTime) / 1000);
+        let timeVoice = "";
+        if (diffSecs > 60) timeVoice = `提早 ${Math.floor(diffSecs/60)} 分鐘`;
+        else if (diffSecs < -60) timeVoice = `延遲 ${Math.floor(Math.abs(diffSecs)/60)} 分鐘`;
+        else timeVoice = "準點";
+
+        speakText(`抵達 ${targetStop.stop_name}，${timeVoice}`);
+
+        window.currentStopIndex++; 
+        updateTacticalDisplay(); 
+    }
+}
 
                 // 🎬 劇本 2 & 3：行進中抵達路線播報 (🚀 極簡版)
                 // 因為按鈕已經講過「前往起點」了，這裡只負責盯著你是不是開到路線上了

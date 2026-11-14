@@ -993,29 +993,57 @@
                 const bbox = [ [e.point.x - 20, e.point.y - 20], [e.point.x + 20, e.point.y + 20] ];
                 const features = map.queryRenderedFeatures(bbox, { layers: ['bg-route-line', 'route-silent-line', 'route-music-line'] });
                 
-                if (features.length === 0) { alert("請確實點擊在『軌跡線條』上才能新增編輯點喔！"); return; }
+                if (features.length === 0) { alert("請確實點擊在『軌跡線條』上才能進行編輯喔！"); return; }
 
-                let bestScore = Infinity, insertIndex = -1;
-                
-                for (let i = 0; i < route.points.length - 1; i++) {
-                    const d1 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat);
-                    const d2 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i+1].lng, route.points[i+1].lat);
-                    const segL = getDistanceKm(route.points[i].lng, route.points[i].lat, route.points[i+1].lng, route.points[i+1].lat);
-                    const score = (d1 + d2) - segL;
-                    if (score < bestScore) { bestScore = score; insertIndex = i + 1; }
+                // 🚀 1. 先尋找點擊位置附近有沒有「現有的轉角節點」
+                let minDistToNode = Infinity;
+                let closestNodeIdx = -1;
+                for (let i = 0; i < route.points.length; i++) {
+                    const d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat) * 1000;
+                    if (d < minDistToNode) {
+                        minDistToNode = d;
+                        closestNodeIdx = i;
+                    }
                 }
-                
-                const newPoint = { lng: e.lngLat.lng, lat: e.lngLat.lat, musicActive: route.points[insertIndex-1].musicActive };
-                route.points.splice(insertIndex, 0, newPoint);
+
+                let targetPoint = null;
+                let isExistingNode = false;
+
+                // 🚀 2. 智慧判定：如果點擊位置距離某個現有轉角很近 (20公尺內)，就直接抓取那個舊轉角！
+                if (minDistToNode <= 20) {
+                    targetPoint = route.points[closestNodeIdx];
+                    isExistingNode = true;
+                } else {
+                    // 🚀 3. 如果附近沒有轉角 (點在長直線中間)，就執行原本的插入新點邏輯
+                    let bestScore = Infinity, insertIndex = -1;
+                    for (let i = 0; i < route.points.length - 1; i++) {
+                        const d1 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat);
+                        const d2 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i+1].lng, route.points[i+1].lat);
+                        const segL = getDistanceKm(route.points[i].lng, route.points[i].lat, route.points[i+1].lng, route.points[i+1].lat);
+                        const score = (d1 + d2) - segL;
+                        if (score < bestScore) { bestScore = score; insertIndex = i + 1; }
+                    }
+                    
+                    targetPoint = { lng: e.lngLat.lng, lat: e.lngLat.lat, musicActive: route.points[insertIndex-1].musicActive };
+                    route.points.splice(insertIndex, 0, targetPoint);
+                }
+
                 updateRouteLayers(route.points);
                 
+                // 創造編輯圓點 (舊轉角用橘色，新插入的點用綠色，方便凱哥辨識！)
                 const el = document.createElement('div');
-                el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
-                const m = new maplibregl.Marker({ element: el, draggable: true }).setLngLat([newPoint.lng, newPoint.lat]).addTo(map);
+                el.className = isExistingNode 
+                    ? 'w-5 h-5 bg-white border-[5px] border-amber-500 rounded-full shadow-md cursor-grab active:cursor-grabbing' 
+                    : 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
+                
+                const m = new maplibregl.Marker({ element: el, draggable: true })
+                    .setLngLat([targetPoint.lng, targetPoint.lat])
+                    .addTo(map);
                     
                 m.on('drag', () => {
                     const lngLat = m.getLngLat();
-                    newPoint.lng = lngLat.lng; newPoint.lat = lngLat.lat;
+                    targetPoint.lng = lngLat.lng; 
+                    targetPoint.lat = lngLat.lat;
                     updateRouteLayers(route.points); 
                 });
                 

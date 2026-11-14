@@ -1382,6 +1382,16 @@
             updateRouteLayers(route.points); renderRouteMarkers(route);
             setCameraFollow(true);
 
+            // 🚀 按下導航瞬間，強制將鏡頭拉近到「實戰特寫視角」並傾斜
+            map.flyTo({
+                center: lastKnownLngLat,
+                zoom: 18.5, // 💡 導航專用的超近視角 (數字越大越近，18.5 是最佳實戰比例)
+                pitch: 50,  // 💡 視角稍微傾斜 50 度，看起來更像專業車載 3D 導航
+                bearing: isHeadingUpMode ? currentHeading : 0,
+                offset: [0, 100],
+                duration: 1500 // 飛行過場動畫 1.5 秒
+            });
+
             try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
 
             followWatchId = navigator.geolocation.watchPosition(pos => {

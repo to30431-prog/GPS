@@ -1581,6 +1581,55 @@
                 }
             }
         });
+        // ==========================================
+        // 🚀 【終極防誤關 App】攔截手機實體返回鍵
+        // ==========================================
+        (function setupAndroidBackButton() {
+            // 1. 監聽實體返回鍵動作
+            window.addEventListener('popstate', (e) => {
+                const historyModal = document.getElementById('historyModal');
+                const routeDetailUI = document.getElementById('routeDetailUI');
+                const settingsModal = document.getElementById('settingsModal');
+                const editStopModal = document.getElementById('editStopModal');
+
+                // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
+                if (editStopModal && !editStopModal.classList.contains('hidden')) {
+                    document.getElementById('btnCancelStopEdit').click();
+                }
+                else if (settingsModal && !settingsModal.classList.contains('hidden')) {
+                    document.getElementById('closeSettings').click();
+                } 
+                else if (routeDetailUI && !routeDetailUI.classList.contains('hidden')) {
+                    // 如果在路線詳情頁，就觸發左上角返回鍵
+                    document.getElementById('topBackBtn').click();
+                }
+                else if (historyModal && !historyModal.classList.contains('hidden')) {
+                    // 如果在清單頁，就觸發首頁圖示的關閉鍵
+                    document.getElementById('closeHistory').click();
+                } 
+            });
+
+            // 2. 製造假歷史紀錄的函數 (讓手機能有東西可以"返回")
+            function pushFakeHistory() {
+                window.history.pushState({ pwa: true }, '');
+            }
+
+            // 3. 用「外掛監聽」的方式，綁定到現有的按鈕上 (不用動你原本的代碼)
+            const hBtn = document.getElementById('historyBtn');
+            if(hBtn) hBtn.addEventListener('click', pushFakeHistory);
+            
+            const sBtn = document.getElementById('settingsBtn');
+            if(sBtn) sBtn.addEventListener('click', pushFakeHistory);
+
+            // 4. 攔截開啟路線詳情的函數
+            if (typeof window.openRouteDetail === 'function') {
+                const originalOpenRouteDetail = window.openRouteDetail;
+                window.openRouteDetail = function(idx) {
+                    pushFakeHistory(); // 先推入歷史紀錄騙過手機
+                    originalOpenRouteDetail(idx); // 再執行原本的開畫面動作
+                };
+            }
+        })();
     </script>
 </body>
 </html>

@@ -58,11 +58,11 @@
             width: 100%; height: 8px; cursor: pointer; background: #e2e8f0; border-radius: 999px;
         }
 
-        /* 導航方向指示大圖標動畫 */
+        /* 導航方向指示大圖標動畫 (加入 translateX 保持絕對置中) */
         @keyframes popIn {
-            0% { transform: scale(0.5); opacity: 0; }
-            80% { transform: scale(1.1); opacity: 1; }
-            100% { transform: scale(1); opacity: 1; }
+            0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
+            80% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+            100% { transform: translateX(-50%) scale(1); opacity: 1; }
         }
         .nav-alert-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
     </style>

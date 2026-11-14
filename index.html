@@ -1293,16 +1293,13 @@
         }
 
         function showNavAlert(iconHtml, text, bgColorClass) {
-            // 🚀 改到畫面上方 (top-24)，並水平置中
-            banner.className = `fixed top-24 left-1/2 -translate-x-1/2 z-[60] rounded-3xl shadow-2xl text-white font-black text-center nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center ${bgColorClass}`;
-            
             if (text === '') {
-                // 如果沒有文字 (轉彎專用)，就顯示超大箭頭
-                banner.className += " p-6 min-w-[140px]";
-                banner.innerHTML = `<span class="text-[80px] drop-shadow-lg leading-none">${iconHtml}</span>`;
+                // 🚀 無文字模式 (轉彎專用)：變成 36x36 的完美圓角正方形大圖示
+                banner.className = `fixed top-24 left-1/2 -translate-x-1/2 z-[60] rounded-[2rem] shadow-2xl text-white font-black nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center w-36 h-36 ${bgColorClass}`;
+                banner.innerHTML = `<span class="text-[90px] drop-shadow-lg leading-none">${iconHtml}</span>`;
             } else {
-                // 其他提醒 (音樂、注意路況) 維持原本的圖文並茂
-                banner.className += " p-4 w-11/12 max-w-sm gap-3 text-2xl";
+                // 有文字模式 (橫幅)
+                banner.className = `fixed top-24 left-1/2 -translate-x-1/2 z-[60] rounded-3xl shadow-2xl text-white font-black text-center nav-alert-pop border-4 border-white pointer-events-auto flex flex-col items-center justify-center p-4 w-11/12 max-w-sm gap-2 text-2xl ${bgColorClass}`;
                 banner.innerHTML = `<span class="text-4xl drop-shadow-md">${iconHtml}</span> <span>${text}</span>`;
             }
             
@@ -1481,23 +1478,18 @@
                         lookAheadIdx++;
                     }
 
-                    if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
-                        const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
-                        const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
-                        const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
-                        
-                        if (angleDiff > 40 && angleDiff < 140) {
+                    if (angleDiff > 40 && angleDiff < 140) {
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen(); 
-                            // 🚀 文字留空 ('')，改用專業右轉彎箭頭
-                            showNavAlert('<i class="fa-solid fa-arrow-turn-right"></i>', '', 'bg-blue-600'); 
+                            // 🚀 換成 100% 絕對支援的基本大箭頭 (向右)
+                            showNavAlert('<i class="fa-solid fa-arrow-right"></i>', '', 'bg-blue-600'); 
                             speakText("前方準備右轉"); 
                             autoSleepScreen();
                         } else if (angleDiff < -40 && angleDiff > -140) {
                             for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                             autoWakeScreen(); 
-                            // 🚀 文字留空 ('')，改用專業左轉彎箭頭
-                            showNavAlert('<i class="fa-solid fa-arrow-turn-left"></i>', '', 'bg-blue-600'); 
+                            // 🚀 換成 100% 絕對支援的基本大箭頭 (向左)
+                            showNavAlert('<i class="fa-solid fa-arrow-left"></i>', '', 'bg-blue-600'); 
                             speakText("前方準備左轉"); 
                             autoSleepScreen();
                         }

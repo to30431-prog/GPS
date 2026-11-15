@@ -260,7 +260,7 @@
         </div>
             <div class="flex items-center gap-4 text-xs font-bold mb-3 px-1">
                 <span class="flex items-center gap-1.5 text-green-700"><span class="w-3 h-1.5 bg-green-600 rounded-full inline-block"></span> 綠線：音樂收運</span>
-                <span class="flex items-center gap-1.5 text-gray-500"><span class="w-3 h-1.5 bg-gray-400 rounded-full inline-block"></span> 灰虛線：音樂關閉</span>
+                <span class="flex items-center gap-1.5 text-blue-600"><span class="w-3 h-1.5 bg-blue-500 rounded-full inline-block"></span> 藍線：音樂關閉</span>
             </div>
             <div class="grid grid-cols-3 gap-2 mb-4">
                 <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
@@ -831,6 +831,7 @@
         function speakText(text) {
             // 如果開關被關掉，或是手機不支援語音，就直接中斷不講話！
             if (!isVoiceEnabled || !('speechSynthesis' in window)) return;
+            try { window.speechSynthesis.cancel(); } catch (e) {}
             const u = new SpeechSynthesisUtterance(text);
             u.lang = 'zh-TW'; u.rate = 1.05;
             window.speechSynthesis.speak(u);
@@ -1838,6 +1839,7 @@
         // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
         let replayMappedAlerts = [], replayTriggeredAlertSet = new Set();
+        let replayMappedMusicEvents = [], replayTriggeredMusicSet = new Set();
         const speedOptions = [1, 2, 4, 6];
         let speedMultiplier = 1;
 
@@ -1866,6 +1868,38 @@
                     return { ...ev, ptIdx: evPtIdx };
                 });
             replayTriggeredAlertSet.clear();
+
+            const rawMusicEvents = (route.events || [])
+                .filter(ev => ev.type === 'on' || ev.type === 'off')
+                .map(ev => {
+                    let minEvDist = Infinity, evPtIdx = typeof ev.ptIdx === 'number' ? ev.ptIdx : 0;
+                    if (typeof ev.ptIdx !== 'number') {
+                        for (let i = 0; i < route.points.length; i++) {
+                            const d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
+                            if (d < minEvDist) { minEvDist = d; evPtIdx = i; }
+                        }
+                    }
+                    return { ...ev, ptIdx: evPtIdx };
+                });
+
+            for (let i = 1; i < route.points.length; i++) {
+                const currActive = Boolean(route.points[i].musicActive);
+                const prevActive = Boolean(route.points[i - 1].musicActive);
+                if (currActive !== prevActive) {
+                    const evtType = currActive ? 'on' : 'off';
+                    const alreadyExists = rawMusicEvents.some(e => e.type === evtType && Math.abs(e.ptIdx - i) <= 2);
+                    if (!alreadyExists) {
+                        rawMusicEvents.push({
+                            type: evtType,
+                            lng: route.points[i].lng,
+                            lat: route.points[i].lat,
+                            ptIdx: i
+                        });
+                    }
+                }
+            }
+            replayMappedMusicEvents = rawMusicEvents.sort((a, b) => a.ptIdx - b.ptIdx);
+            replayTriggeredMusicSet.clear();
 
             map.getSource('bg-route')?.setData({
                 type: 'FeatureCollection',
@@ -1914,10 +1948,28 @@
                 badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)";
             }
 
+            const triggerWindow = Math.max(2.5, speedMultiplier * 0.8);
+
+            if (replayMappedMusicEvents.length > 0) {
+                replayMappedMusicEvents.forEach((ev, idx) => {
+                    if (replayTriggeredMusicSet.has(idx)) return;
+                    if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= triggerWindow) {
+                        replayTriggeredMusicSet.add(idx);
+                        if (ev.type === 'on') {
+                            showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
+                            speakText('前方準備開啟回收音樂');
+                        } else if (ev.type === 'off') {
+                            showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
+                            speakText('前方準備關閉回收音樂');
+                        }
+                    }
+                });
+            }
+
             if (replayMappedAlerts.length > 0) {
                 replayMappedAlerts.forEach((ev, idx) => {
                     if (replayTriggeredAlertSet.has(idx)) return;
-                    if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= Math.max(2.5, speedMultiplier * 0.8)) {
+                    if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= triggerWindow) {
                         replayTriggeredAlertSet.add(idx);
                         showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null);
                         speakText(`前方提醒，${ev.note || '注意路況'}`);
@@ -1955,6 +2007,7 @@
             if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) {
                 playProgress = 0;
                 replayTriggeredAlertSet.clear();
+                replayTriggeredMusicSet.clear();
             }
             isPlaying = true; lastFrameTime = 0;
             playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
@@ -1969,8 +2022,14 @@
         playPauseBtn.onclick = () => isPlaying ? stopSmoothPlayback() : startSmoothPlayback();
         playbackSlider.oninput = (e) => {
             playProgress = parseInt(e.target.value, 10) / 100;
+            const triggerWindow = Math.max(2.5, speedMultiplier * 0.8);
             replayMappedAlerts.forEach((ev, idx) => {
                 if (playProgress < ev.ptIdx) replayTriggeredAlertSet.delete(idx);
+                else if (playProgress - ev.ptIdx > triggerWindow) replayTriggeredAlertSet.add(idx);
+            });
+            replayMappedMusicEvents.forEach((ev, idx) => {
+                if (playProgress < ev.ptIdx) replayTriggeredMusicSet.delete(idx);
+                else if (playProgress - ev.ptIdx > triggerWindow) replayTriggeredMusicSet.add(idx);
             });
             renderInterpolatedStep(playProgress);
         };
@@ -1979,7 +2038,9 @@
             speedMultiplier = speedOptions[nextIdx]; speedToggleBtn.innerText = `${speedMultiplier}x`;
         };
         document.getElementById('stopPlaybackBtn').onclick = () => { 
-            stopSmoothPlayback(); document.getElementById('playbackUI').classList.add('hidden'); 
+            stopSmoothPlayback();
+            if ('speechSynthesis' in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
+            document.getElementById('playbackUI').classList.add('hidden'); 
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('topBackBtn').classList.remove('hidden'); openRouteDetail(selectedRouteIdx); 
         };
@@ -3367,8 +3428,95 @@
             } catch (e) {}
         }
 
-        window.addEventListener('pagehide', removeMyFleetLocationOnUnload);
+        // 僅於實際關閉分頁 (beforeunload) 時嘗試清除，移除 pagehide / visibilitychange 刪除動作，
+        // 避免司機切換至 LINE 或講電話時在地圖上瞬間消失（異常斷線亦由雲端 3 分鐘逾時機制自動清除）
         window.addEventListener('beforeunload', removeMyFleetLocationOnUnload);
+
+        // ==========================================
+        // 🔇 輕量級「背景無聲保活機制」(AudioContext + 靜音音軌循環)
+        // 降低手機切換至背景 (LINE / 通話) 或鎖屏時凍結 GPS 與車隊雷達上傳的機率
+        // ==========================================
+        let bgSilentAudioCtx = null;
+        let bgSilentAudioEl = null;
+        let bgSilentKeepAliveStarted = false;
+
+        function createSilentWavDataUri() {
+            // 產生 1 秒、8000Hz、8-bit Mono 的極輕量無聲 WAV
+            const sampleRate = 8000;
+            const numSamples = sampleRate;
+            const buffer = new ArrayBuffer(44 + numSamples);
+            const view = new DataView(buffer);
+            const writeStr = (offset, str) => {
+                for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+            };
+            writeStr(0, 'RIFF');
+            view.setUint32(4, 36 + numSamples, true);
+            writeStr(8, 'WAVE');
+            writeStr(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true); // PCM
+            view.setUint16(22, 1, true); // Mono
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate, true);
+            view.setUint16(32, 1, true);
+            view.setUint16(34, 8, true); // 8-bit
+            writeStr(36, 'data');
+            view.setUint32(40, numSamples, true);
+            for (let i = 0; i < numSamples; i++) {
+                view.setUint8(44 + i, 128); // 8-bit PCM 128 為完全靜音
+            }
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return 'data:audio/wav;base64,' + btoa(binary);
+        }
+
+        function ensureBackgroundSilentKeepAlive() {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (AudioCtx) {
+                    if (!bgSilentAudioCtx) {
+                        bgSilentAudioCtx = new AudioCtx();
+                        const osc = bgSilentAudioCtx.createOscillator();
+                        const gain = bgSilentAudioCtx.createGain();
+                        // 極微小增益 (0.00001) 完全無聲，同時防止瀏覽器判定為空音軌而休眠
+                        gain.gain.value = 0.00001;
+                        osc.connect(gain);
+                        gain.connect(bgSilentAudioCtx.destination);
+                        osc.start();
+                    }
+                    if (bgSilentAudioCtx.state === 'suspended') {
+                        bgSilentAudioCtx.resume().catch(() => {});
+                    }
+                }
+            } catch (e) {}
+
+            try {
+                if (!bgSilentAudioEl) {
+                    bgSilentAudioEl = new Audio(createSilentWavDataUri());
+                    bgSilentAudioEl.loop = true;
+                    bgSilentAudioEl.volume = 0.01;
+                    bgSilentAudioEl.setAttribute('playsinline', '');
+                    bgSilentAudioEl.setAttribute('webkit-playsinline', '');
+                }
+                if (bgSilentAudioEl.paused) {
+                    bgSilentAudioEl.play().catch(() => {});
+                }
+            } catch (e) {}
+
+            bgSilentKeepAliveStarted = true;
+        }
+
+        ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evtName => {
+            window.addEventListener(evtName, function onFirstUserInteract() {
+                ensureBackgroundSilentKeepAlive();
+                if (bgSilentAudioCtx && bgSilentAudioCtx.state === 'running') {
+                    window.removeEventListener(evtName, onFirstUserInteract);
+                }
+            }, { passive: true });
+        });
 
         function startFleetRadarSystem() {
             if (fleetRadarStarted || !fleetUserName) return;
@@ -3412,11 +3560,18 @@
         }
 
         document.addEventListener('visibilitychange', async () => {
+            if (bgSilentKeepAliveStarted) {
+                ensureBackgroundSilentKeepAlive();
+            }
             if (document.visibilityState === 'visible') {
                 ensurePureBlackSystemBars();
                 if (isBlackScreenActive || isRecording || followWatchId) {
                     await requestScreenWakeLock();
                 }
+                if (fleetUserName && currentFleetLat !== null && currentFleetLng !== null) {
+                    uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+                }
+                fetchAndRenderFleetRadar();
             }
         });
         // ==========================================

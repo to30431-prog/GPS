@@ -977,17 +977,41 @@
                 if (minDist * 1000 > 50) { alert("請點擊在路線軌跡附近！"); return; }
 
                 if (editStep === 0) {
-                    editStartIndex = closestIdx; editStep = 1;
+                    editStartIndex = closestIdx; 
+                    // 🚀 流程翻轉：點擊 A 點後，直接跳出大選單！不用先選 B 點！
                     const el = document.createElement('div');
-                    el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 區段起點</div>`;
+                    el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 選擇位置中...</div>`;
                     tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
-                    document.getElementById('editPromptText').innerText = "🛠️ 已選擇起點！請點擊另一處選擇『終點 (B點)』";
+                    
+                    window.currentEditData = { route, editStartIndex };
+                    document.getElementById('customActionModal').classList.remove('hidden');
                 } else if (editStep === 1) {
+                    // 🚀 這裡是專門留給「音樂開關」選 B 點用的
                     let editEndIndex = closestIdx;
                     let start = Math.min(editStartIndex, editEndIndex);
                     let end = Math.max(editStartIndex, editEndIndex);
-                    window.currentEditData = { route, start, end, editStartIndex };
-                    document.getElementById('customActionModal').classList.remove('hidden');
+                    
+                    const action = window.currentEditData.action;
+                    const turnOn = (action === '1');
+                    for (let i = start; i <= end; i++) route.points[i].musicActive = turnOn;
+                    
+                    let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); 
+                    let currentMusic = route.points[0].musicActive;
+                    if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
+                    
+                    for (let i = 1; i < route.points.length; i++) {
+                        if (route.points[i].musicActive !== currentMusic) {
+                            currentMusic = route.points[i].musicActive;
+                            let evtType = currentMusic ? 'on' : 'off';
+                            newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
+                        }
+                    }
+                    route.events = newEvents;
+
+                    if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+                    editStep = 0;
+                    document.getElementById('editPromptText').innerText = "🛠️ 區段設定完成！請點擊軌跡選擇下一個『目標點』";
+                    updateRouteLayers(route.points); renderEditableRouteMarkers(route);
                 }
             } else if (editSubMode === 'path') {
                 const bbox = [ [e.point.x - 20, e.point.y - 20], [e.point.x + 20, e.point.y + 20] ];
@@ -1055,32 +1079,25 @@
             document.getElementById('customActionModal').classList.add('hidden');
             if (!window.currentEditData) return;
 
-            const { route, start, end, editStartIndex } = window.currentEditData;
+            const { route, editStartIndex } = window.currentEditData;
 
             if (action === '1' || action === '2') {
-                const turnOn = (action === '1');
-                for (let i = start; i <= end; i++) route.points[i].musicActive = turnOn;
-                
-                let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); 
-                let currentMusic = route.points[0].musicActive;
-                if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
-                
-                for (let i = 1; i < route.points.length; i++) {
-                    if (route.points[i].musicActive !== currentMusic) {
-                        currentMusic = route.points[i].musicActive;
-                        let evtType = currentMusic ? 'on' : 'off';
-                        newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
-                    }
-                }
-                route.events = newEvents;
-
-            } else if (action === '3') {
+                // 🚀 動作 1&2 (音樂開關)：需要區段，所以進入 step 1 等待使用者點選 B 點
+                window.currentEditData.action = action;
+                editStep = 1; 
+                document.getElementById('editPromptText').innerText = "🎵 已選擇音樂動作！請點選軌跡另一處作為『區段終點 (B點)』";
+                return; // 直接中斷離開，等待使用者點擊地圖 B 點！
+            } 
+            else if (action === '3') {
+                // 🚀 動作 3 (黃色提醒)：單點作業，直接秒殺處理！
                 const note = prompt("請輸入自訂提醒內容 (如：窄巷倒車)：", "注意路段");
                 if (note) {
                     route.events = route.events || [];
                     route.events.push({ type: 'alert', note, lng: route.points[editStartIndex].lng, lat: route.points[editStartIndex].lat, ptIdx: editStartIndex, bearing: route.points[editStartIndex].bearing || 0 });
                 }
-            } else if (action === '5') {
+            } 
+            else if (action === '5') {
+                // 🚀 動作 5 (時刻站牌)：單點作業，直接秒殺處理！
                 const time = prompt("請輸入表定時間 (格式如 17:30)：", "17:00");
                 const name = prompt("請輸入站點名稱 (如：火車站前)：", "新增定點");
                 if (time && name) {
@@ -1089,9 +1106,11 @@
                     route.points[editStartIndex].stop_name = name;
                 }
             }
+            
+            // 🌟 單點作業處理完畢，或是按了取消，一律收尾重置！
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             editStep = 0;
-            document.getElementById('editPromptText').innerText = "🛠️ 請點擊地圖軌跡，選擇下一個區段的『起點 (A點)』";
+            document.getElementById('editPromptText').innerText = "🛠️ 標記完成！請點擊地圖軌跡選擇下一個『目標點』";
             updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         };
 

@@ -450,8 +450,8 @@
             </div>
             <div class="mt-4 pt-3.5 border-t border-gray-100 flex items-center justify-between">
                 <div class="text-xs font-extrabold text-gray-600 flex items-center gap-1.5">
-                    <i class="fa-solid fa-truck-fast text-emerald-600"></i>
-                    <span>車隊雷達顯示名稱：</span>
+                    <i class="fa-solid fa-user-astronaut text-emerald-600"></i>
+                    <span>個人導航檔案名稱：</span>
                     <span id="settingsFleetNameText" class="text-gray-900 font-black">未設定</span>
                 </div>
                 <button id="settingsEditFleetNameBtn" type="button" class="bg-blue-50 hover:bg-blue-100 text-blue-600 font-extrabold text-xs px-3 py-1.5 rounded-xl active:scale-95 transition-all">
@@ -461,25 +461,38 @@
         </div>
     </div>
 
-    <!-- 🚛 車隊支援雷達：首次開啟/修改使用者名稱彈窗 -->
+    <!-- 👋 建立個人導航檔案彈窗 -->
     <div id="fleetUserNameModal" class="hidden fixed inset-0 bg-black/70 z-[100002] flex items-center justify-center p-4 pointer-events-auto">
         <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4 border border-gray-100">
             <div class="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-2xl mx-auto shadow-sm">
-                <i class="fa-solid fa-truck-fast"></i>
+                <i class="fa-solid fa-id-card"></i>
             </div>
             <div class="text-center">
-                <h3 class="text-xl font-black text-gray-900">車隊支援定位雷達</h3>
-                <p class="text-xs font-bold text-gray-500 mt-1">請輸入您的名稱，讓線上隊員在地圖上看見彼此位置（僅需輸入名稱，不需車次代號）</p>
+                <h3 class="text-xl font-black text-gray-900">👋 建立個人導航檔案</h3>
             </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs font-extrabold text-gray-600 ml-1">您的名稱（例如：凱哥、阿翔）</label>
-                <input type="text" id="fleetUserNameInput" maxlength="16" class="bg-gray-50 border-2 border-gray-200 focus:border-emerald-500 text-gray-900 text-base font-black rounded-2xl p-3.5 w-full outline-none transition-colors" placeholder="例如：凱哥、阿翔">
+            <div class="flex flex-col gap-1.5">
+                <input type="text" id="fleetUserNameInput" maxlength="16" class="bg-gray-50 border-2 border-gray-200 focus:border-emerald-500 text-gray-900 text-base font-black rounded-2xl p-3.5 w-full outline-none transition-colors text-center" placeholder="請輸入您的名稱（例如：凱哥、阿翔）">
             </div>
             <button type="button" id="btnSaveFleetUserName" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-base">
-                <i class="fa-solid fa-check"></i> 確認並啟動雷達
+                <i class="fa-solid fa-check"></i> 確認
             </button>
             <button type="button" id="btnCancelFleetUserName" class="hidden text-gray-400 font-extrabold py-1.5 active:scale-95 text-xs">
                 取消
+            </button>
+        </div>
+    </div>
+
+    <!-- 🎉 歡迎使用智能循跡導航系統提示視窗 -->
+    <div id="welcomeProfileModal" class="hidden fixed inset-0 bg-black/70 z-[100003] flex items-center justify-center p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col items-center gap-4 border border-emerald-100 text-center">
+            <div class="w-16 h-16 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center text-3xl shadow-sm">
+                🎉
+            </div>
+            <h3 id="welcomeProfileTitle" class="text-lg font-black text-gray-900 leading-relaxed">
+                🎉 歡迎 使用智能循跡導航系統！
+            </h3>
+            <button type="button" id="btnCloseWelcomeModal" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 text-base transition-all">
+                開始使用
             </button>
         </div>
     </div>
@@ -3158,6 +3171,26 @@
         const fleetUserBadgeText = document.getElementById('fleetUserBadgeText');
         const settingsFleetNameText = document.getElementById('settingsFleetNameText');
         const settingsEditFleetNameBtn = document.getElementById('settingsEditFleetNameBtn');
+        const welcomeProfileModal = document.getElementById('welcomeProfileModal');
+        const welcomeProfileTitle = document.getElementById('welcomeProfileTitle');
+        const btnCloseWelcomeModal = document.getElementById('btnCloseWelcomeModal');
+
+        function showWelcomeProfileModal(name) {
+            if (!welcomeProfileModal || !welcomeProfileTitle) return;
+            welcomeProfileTitle.textContent = `🎉 歡迎 ${name} 使用智能循跡導航系統！`;
+            welcomeProfileModal.classList.remove('hidden');
+        }
+
+        if (btnCloseWelcomeModal) {
+            btnCloseWelcomeModal.onclick = () => {
+                if (welcomeProfileModal) welcomeProfileModal.classList.add('hidden');
+            };
+        }
+        if (welcomeProfileModal) {
+            welcomeProfileModal.onclick = (e) => {
+                if (e.target === welcomeProfileModal) welcomeProfileModal.classList.add('hidden');
+            };
+        }
 
         function syncFleetUserNameUI() {
             const display = fleetUserName || '設定名稱';
@@ -3192,8 +3225,11 @@
             syncFleetUserNameUI();
             fleetUserNameModal.classList.add('hidden');
 
+            // 立即跳出醒目美觀的歡迎提示框
+            showWelcomeProfileModal(fleetUserName);
+
+            // 在背景正常啟動原本的連線功能
             startFleetRadarSystem();
-            // 若已有座標，修改名稱後立即同步更新雲端名稱
             if (currentFleetLat !== null && currentFleetLng !== null) {
                 uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
             }

@@ -431,16 +431,19 @@
 
     <!-- ☁️ 車隊雲端路線庫彈窗 -->
     <div id="cloudRoutesModal" class="hidden fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 pointer-events-auto">
-        <div class="bg-gray-50 w-full max-w-md max-h-[85vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
-            <div class="bg-white px-5 py-4 flex items-center justify-between border-b border-gray-100">
-                <div class="flex items-center gap-2">
-                    <span class="text-xl">☁️</span>
-                    <div>
-                        <h3 class="text-base font-black text-gray-800 leading-tight">車隊雲端路線庫</h3>
-                        <p id="cloudStatusSub" class="text-[11px] font-bold text-gray-400">與隊員共享最新清運路線</p>
+        <div class="bg-gray-50 w-full max-w-md max-h-[88vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
+            <div class="bg-white px-4 py-3.5 flex items-center justify-between border-b border-gray-100 gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-xl flex-shrink-0">☁️</span>
+                    <div class="min-w-0">
+                        <h3 class="text-base font-black text-gray-800 leading-tight truncate">車隊雲端路線庫</h3>
+                        <p id="cloudStatusSub" class="text-[11px] font-bold text-gray-400 truncate">與隊員共享最新清運路線</p>
                     </div>
                 </div>
-                <div class="flex items-center gap-1.5">
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <button id="adminToggleBtn" type="button" class="px-2.5 h-9 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="管理員模式">
+                        🔑 管理員
+                    </button>
                     <button id="refreshCloudBtn" type="button" class="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 transition-transform" title="重新整理">
                         <i id="refreshCloudIcon" class="fa-solid fa-rotate-right text-sm"></i>
                     </button>
@@ -448,6 +451,16 @@
                         <i class="fa-solid fa-xmark text-base"></i>
                     </button>
                 </div>
+            </div>
+            <!-- 🔓 管理員專屬雙頁籤切換列 -->
+            <div id="cloudAdminTabBar" class="hidden bg-white px-4 py-2 border-b border-gray-100 flex gap-2">
+                <button id="tabSharedRoutesBtn" type="button" class="flex-1 py-2 rounded-xl text-xs font-extrabold bg-blue-600 text-white shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1">
+                    ☁️ 正式路線庫
+                </button>
+                <button id="tabPendingRoutesBtn" type="button" class="flex-1 py-2 rounded-xl text-xs font-extrabold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                    <span>⏳ 待審核投稿區</span>
+                    <span id="pendingCountPill" class="bg-amber-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">0</span>
+                </button>
             </div>
             <div class="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
                 <span id="cloudCountBadge" class="text-xs font-extrabold text-gray-500 px-1">讀取中...</span>
@@ -459,7 +472,34 @@
         </div>
     </div>
 
+    <!-- 🔄 雲端路線重複/版本覆蓋詢問彈窗 -->
+    <div id="uploadConflictModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3 border border-gray-100">
+            <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl mx-auto">
+                <i class="fa-solid fa-code-compare"></i>
+            </div>
+            <h3 class="text-lg font-black text-gray-900 text-center">偵測到雲端已有同名或同 ID 路線</h3>
+            <p id="uploadConflictDesc" class="text-xs font-bold text-gray-500 text-center leading-relaxed">
+                雲端已存在相同路線，請選擇您要執行的上傳方式：
+            </p>
+            <button id="btnConflictOverwrite" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm">
+                <i class="fa-solid fa-arrows-rotate"></i> 覆蓋更新原路線
+            </button>
+            <button id="btnConflictSaveNew" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm">
+                <i class="fa-solid fa-file-circle-plus"></i> 另存為新路線
+            </button>
+            <button id="btnConflictCancel" type="button" class="bg-gray-100 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 text-xs mt-1">
+                取消上傳
+            </button>
+        </div>
+    </div>
+
     <script>
+        // ==========================================
+        // 🔑 雲端路線庫管理員密碼設定（可於此處輕鬆修改）
+        // ==========================================
+        const ADMIN_PASSWORD = '5201314';
+
         // 核心狀態變數
         let idleWatchId = null;
 
@@ -493,7 +533,24 @@
         let selectedRouteIdx = -1;
         let domMarkers = []; 
 
-        // 🚀 自動搬家與讀取大容量資料庫
+        function generateRouteId() {
+            return 'rt_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
+        }
+
+        function ensureRoutesHaveRouteId(routes) {
+            if (!Array.isArray(routes)) return false;
+            let mutated = false;
+            routes.forEach((r, idx) => {
+                if (r && !r.routeId) {
+                    const seed = r.originId || r.id || (Date.now() + idx);
+                    r.routeId = 'rt_' + String(seed) + '_' + Math.random().toString(36).substring(2, 6);
+                    mutated = true;
+                }
+            });
+            return mutated;
+        }
+
+        // 🚀 自動搬家與讀取大容量資料庫（自動補發唯一 routeId）
         localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
             const oldStorage = localStorage.getItem('yinggeCleanRoutes_v2');
             if (value && value.length > 0) {
@@ -504,6 +561,9 @@
                     localStorage.removeItem('yinggeCleanRoutes_v2');
                     console.log("✅ 舊路線已成功搬移至大容量資料庫！");
                 });
+            }
+            if (ensureRoutesHaveRouteId(savedRoutes)) {
+                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
             }
             document.getElementById('historyCount').innerText = savedRoutes.length;
         }).catch((err) => console.log("讀取路線失敗:", err));
@@ -799,8 +859,9 @@
                         localStorage.setItem('yinggeRouteLastAuthor', author);
 
                         const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
+                        const nowId = Date.now();
                         savedRoutes.unshift({
-                            id: Date.now(), name, author,
+                            id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
                             date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                             distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
                             points: routePoints, events: musicEvents
@@ -2046,6 +2107,7 @@
                     const route = JSON.parse(event.target.result);
                     if (!route.points || !route.name) throw new Error("格式不對");
                     route.originId = route.originId || route.id || Date.now();
+                    route.routeId = route.routeId || generateRouteId();
                     route.id = Date.now(); 
                     savedRoutes.unshift(route);
                     localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
@@ -2058,31 +2120,52 @@
             reader.readAsText(file);
         };
 
-        // --- 8.5 ☁️ 車隊雲端路線共享 (Firebase Realtime Database) ---
-        const FIREBASE_ROUTES_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/shared_routes.json';
+        // --- 8.5 ☁️ 車隊雲端路線共享 (雙節點：正式庫 shared_routes ＆ 待審核區 pending_routes ＋ 管理員審核) ---
+        const FIREBASE_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app';
+        const FIREBASE_ROUTES_URL = `${FIREBASE_BASE_URL}/shared_routes.json`;
+        const FIREBASE_PENDING_URL = `${FIREBASE_BASE_URL}/pending_routes.json`;
+
         const cloudRoutesModal = document.getElementById('cloudRoutesModal');
         const cloudRoutesList = document.getElementById('cloudRoutesList');
         const cloudCountBadge = document.getElementById('cloudCountBadge');
         const importAllCloudBtn = document.getElementById('importAllCloudBtn');
         const refreshCloudIcon = document.getElementById('refreshCloudIcon');
+        const adminToggleBtn = document.getElementById('adminToggleBtn');
+        const cloudAdminTabBar = document.getElementById('cloudAdminTabBar');
+        const tabSharedRoutesBtn = document.getElementById('tabSharedRoutesBtn');
+        const tabPendingRoutesBtn = document.getElementById('tabPendingRoutesBtn');
+        const pendingCountPill = document.getElementById('pendingCountPill');
+        const uploadConflictModal = document.getElementById('uploadConflictModal');
+
         let cachedCloudRoutes = [];
+        let cachedPendingRoutes = [];
+        let isAdminUnlocked = false;
+        let currentCloudTab = 'shared'; // 'shared' | 'pending'
 
         function getRouteTimestampKey(r) {
-            return String(r.originId || r.id || r.uploadedAt || r.date || '').trim();
+            return String(r.routeId || r.originId || r.id || r.uploadedAt || r.date || '').trim();
         }
 
         function isRouteAlreadyInLocal(cloudRoute) {
+            const cRouteId = (cloudRoute.routeId || '').trim();
             const cName = (cloudRoute.name || '').trim().toLowerCase();
             const cId = cloudRoute.originId || cloudRoute.id;
             const cDate = (cloudRoute.date || '').trim();
             const cUpload = (cloudRoute.uploadedAt || '').trim();
 
             return savedRoutes.some(local => {
+                const lRouteId = (local.routeId || '').trim();
                 const lName = (local.name || '').trim().toLowerCase();
-                if (lName !== cName) return false;
-                const lId = local.originId || local.id;
-                const lDate = (local.date || '').trim();
                 const lUpload = (local.uploadedAt || '').trim();
+                const lDate = (local.date || '').trim();
+                const lId = local.originId || local.id;
+
+                if (cRouteId && lRouteId && cRouteId === lRouteId) {
+                    // 若雲端版本有更新時間戳記且與本機不同，允許匯入覆蓋更新
+                    if (cUpload && lUpload && cUpload !== lUpload) return false;
+                    return true;
+                }
+                if (lName !== cName) return false;
                 if (cId && lId && String(cId) === String(lId)) return true;
                 if (cId && local.id && String(cId) === String(local.id)) return true;
                 if (cloudRoute.id && lId && String(cloudRoute.id) === String(lId)) return true;
@@ -2092,6 +2175,71 @@
             });
         }
 
+        function askUploadConflictChoice(existingRoute, localRoute) {
+            return new Promise((resolve) => {
+                const descEl = document.getElementById('uploadConflictDesc');
+                const matchReason = (existingRoute.routeId && existingRoute.routeId === localRoute.routeId)
+                    ? `相同路線 ID (${localRoute.routeId})`
+                    : `相同路線名稱【${existingRoute.name}】`;
+                descEl.innerText = `雲端已存在${matchReason}（原創作者：${existingRoute.author || '隊員'}）。請選擇您要「覆蓋更新原路線」還是「另存為新路線」：`;
+                uploadConflictModal.classList.remove('hidden');
+
+                const cleanup = (choice) => {
+                    uploadConflictModal.classList.add('hidden');
+                    resolve(choice);
+                };
+
+                document.getElementById('btnConflictOverwrite').onclick = () => cleanup('overwrite');
+                document.getElementById('btnConflictSaveNew').onclick = () => cleanup('new');
+                document.getElementById('btnConflictCancel').onclick = () => cleanup(null);
+            });
+        }
+
+        async function fetchRawFirebaseList(url) {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (!data || typeof data !== 'object') return [];
+            return Object.entries(data)
+                .map(([firebaseKey, val]) => ({ ...val, firebaseKey }))
+                .filter(item => item && item.name && Array.isArray(item.points) && item.points.length >= 2);
+        }
+
+        async function publishRouteToSharedDB(payload, overwriteMode) {
+            const sharedList = await fetchRawFirebaseList(FIREBASE_ROUTES_URL);
+            const targetMatches = sharedList.filter(item =>
+                (payload.routeId && item.routeId && item.routeId === payload.routeId) ||
+                ((item.name || '').trim().toLowerCase() === (payload.name || '').trim().toLowerCase())
+            );
+
+            const cleanPayload = { ...payload };
+            delete cleanPayload.firebaseKey;
+            delete cleanPayload.uploadAction;
+            delete cleanPayload.targetFirebaseKey;
+
+            if (overwriteMode && targetMatches.length > 0) {
+                const primaryKey = targetMatches[0].firebaseKey;
+                const putRes = await fetch(`${FIREBASE_BASE_URL}/shared_routes/${primaryKey}.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cleanPayload)
+                });
+                if (!putRes.ok) throw new Error(`PUT HTTP ${putRes.status}`);
+
+                // 清理其餘重複的舊節點
+                for (let i = 1; i < targetMatches.length; i++) {
+                    await fetch(`${FIREBASE_BASE_URL}/shared_routes/${targetMatches[i].firebaseKey}.json`, { method: 'DELETE' });
+                }
+            } else {
+                const postRes = await fetch(FIREBASE_ROUTES_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cleanPayload)
+                });
+                if (!postRes.ok) throw new Error(`POST HTTP ${postRes.status}`);
+            }
+        }
+
         async function uploadRouteToCloud(routeIdx, btnEl) {
             const r = savedRoutes[routeIdx];
             if (!r) return;
@@ -2099,6 +2247,12 @@
             if (!navigator.onLine) {
                 alert('⚠️ 目前無網路連線，請確認網路狀態後再上傳至雲端！');
                 return;
+            }
+
+            // 確保具備唯一 routeId 並寫回本機
+            if (!r.routeId) {
+                r.routeId = generateRouteId();
+                await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
             }
 
             if (!confirm(`確定要將路線【${r.name}】上傳至車隊雲端路線庫嗎？`)) return;
@@ -2117,34 +2271,96 @@
             const originalBtnHtml = btnEl ? btnEl.innerHTML : '⬆️ 上傳至雲端';
             if (btnEl) {
                 btnEl.disabled = true;
-                btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上傳中...';
+                btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 檢查中...';
                 btnEl.classList.add('opacity-70');
             }
 
-            const nowIso = new Date().toISOString();
-            const uploadedAtText = new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const payload = {
-                id: r.id || Date.now(),
-                originId: r.originId || r.id || Date.now(),
-                name: r.name,
-                author: finalAuthor,
-                date: r.date || uploadedAtText,
-                uploadedAt: nowIso,
-                uploadedAtText: uploadedAtText,
-                distance: r.distance || '0.00',
-                timeStr: r.timeStr || '0m 0s',
-                points: r.points || [],
-                events: r.events || []
-            };
-
             try {
-                const res = await fetch(FIREBASE_ROUTES_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                alert(`✅ 上傳成功！\n路線【${r.name}】（分享者：${finalAuthor}）已同步至車隊雲端路線庫。`);
+                // 1. 先檢查雲端正式庫是否已有相同 routeId 或相同名稱的路線
+                const existingShared = await fetchRawFirebaseList(FIREBASE_ROUTES_URL);
+                const conflictRoute = existingShared.find(item =>
+                    (item.routeId && item.routeId === r.routeId) ||
+                    ((item.name || '').trim().toLowerCase() === (r.name || '').trim().toLowerCase())
+                );
+
+                let uploadAction = 'new';
+                let finalRouteId = r.routeId;
+                let finalRouteName = r.name;
+
+                if (conflictRoute) {
+                    const choice = await askUploadConflictChoice(conflictRoute, r);
+                    if (!choice) return; // 使用者取消上傳
+                    uploadAction = choice;
+                    if (choice === 'overwrite') {
+                        finalRouteId = conflictRoute.routeId || r.routeId;
+                        r.routeId = finalRouteId;
+                        await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+                    } else if (choice === 'new') {
+                        finalRouteId = generateRouteId();
+                        r.routeId = finalRouteId;
+                        const newNameInput = prompt('您選擇「另存為新路線」，請確認或修改路線名稱：', r.name);
+                        if (newNameInput === null) return;
+                        if (newNameInput.trim()) {
+                            finalRouteName = newNameInput.trim();
+                            r.name = finalRouteName;
+                        }
+                        await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+                        renderHistoryList();
+                    }
+                }
+
+                // 2. 判斷是否具有管理員權限（已解鎖管理員，或於提示框輸入管理員密碼）
+                let publishDirectlyAsAdmin = isAdminUnlocked;
+                if (!publishDirectlyAsAdmin) {
+                    const pwdInput = prompt('【一般隊員請直接按「確定」】送交至待審核區；\n🔑 若您是管理員，請輸入管理員密碼直接上架正式庫：', '');
+                    if (pwdInput === null) return; // 按取消則中止上傳
+                    if (pwdInput.trim() === ADMIN_PASSWORD) {
+                        publishDirectlyAsAdmin = true;
+                        setAdminModeUI(true);
+                    } else if (pwdInput.trim() !== '') {
+                        alert('⚠️ 管理員密碼不正確，將以一般隊員身分提交至「待審核區」。');
+                    }
+                }
+
+                if (btnEl) {
+                    btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上傳中...';
+                }
+
+                const nowIso = new Date().toISOString();
+                const uploadedAtText = new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const payload = {
+                    routeId: finalRouteId,
+                    id: r.id || Date.now(),
+                    originId: r.originId || r.id || Date.now(),
+                    name: finalRouteName,
+                    author: finalAuthor,
+                    date: r.date || uploadedAtText,
+                    uploadedAt: nowIso,
+                    uploadedAtText: uploadedAtText,
+                    distance: r.distance || '0.00',
+                    timeStr: r.timeStr || '0m 0s',
+                    uploadAction: uploadAction,
+                    targetFirebaseKey: conflictRoute ? conflictRoute.firebaseKey : null,
+                    points: r.points || [],
+                    events: r.events || []
+                };
+
+                r.uploadedAt = nowIso;
+                r.uploadedAtText = uploadedAtText;
+                await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+
+                if (publishDirectlyAsAdmin) {
+                    await publishRouteToSharedDB(payload, uploadAction === 'overwrite');
+                    alert(`✅ 管理員直通上架成功！\n路線【${finalRouteName}】已${uploadAction === 'overwrite' ? '覆蓋更新至' : '新增至'}正式雲端路線庫。`);
+                } else {
+                    const res = await fetch(FIREBASE_PENDING_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    alert(`✅ 已提交至待審核區，待管理員確認後上架！\n\n路線名稱：${finalRouteName}\n分享隊員：${finalAuthor}\n提交模式：${uploadAction === 'overwrite' ? '🔄 覆蓋更新原路線' : '🆕 新增路線'}`);
+                }
             } catch (err) {
                 console.error('上傳雲端失敗:', err);
                 alert('❌ 上傳失敗！請檢查網路連線或雲端資料庫權限設定後再試。');
@@ -2156,6 +2372,62 @@
                 }
             }
         }
+
+        function setAdminModeUI(unlocked) {
+            isAdminUnlocked = unlocked;
+            if (isAdminUnlocked) {
+                adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-amber-500 text-white border border-amber-600 text-xs font-extrabold flex items-center gap-1 shadow-sm active:scale-95 transition-all whitespace-nowrap";
+                adminToggleBtn.innerHTML = '🔓 管理員';
+                cloudAdminTabBar.classList.remove('hidden');
+            } else {
+                adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap";
+                adminToggleBtn.innerHTML = '🔑 管理員';
+                cloudAdminTabBar.classList.add('hidden');
+                currentCloudTab = 'shared';
+                updateCloudTabButtons();
+            }
+        }
+
+        function updateCloudTabButtons() {
+            if (currentCloudTab === 'shared') {
+                tabSharedRoutesBtn.className = "flex-1 py-2 rounded-xl text-xs font-extrabold bg-blue-600 text-white shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1";
+                tabPendingRoutesBtn.className = "flex-1 py-2 rounded-xl text-xs font-extrabold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all active:scale-95 flex items-center justify-center gap-1.5";
+            } else {
+                tabSharedRoutesBtn.className = "flex-1 py-2 rounded-xl text-xs font-extrabold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all active:scale-95 flex items-center justify-center gap-1";
+                tabPendingRoutesBtn.className = "flex-1 py-2 rounded-xl text-xs font-extrabold bg-amber-500 text-white shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5";
+            }
+        }
+
+        adminToggleBtn.onclick = () => {
+            if (!isAdminUnlocked) {
+                const pwd = prompt('🔑 請輸入管理員密碼：');
+                if (pwd === null) return;
+                if (pwd.trim() === ADMIN_PASSWORD) {
+                    setAdminModeUI(true);
+                    fetchCloudRoutes();
+                    alert('✅ 管理員模式已解鎖！\n您現在可切換檢視「待審核投稿區」核准/退回路線，或直接刪除正式庫路線。');
+                } else {
+                    alert('❌ 管理員密碼錯誤！');
+                }
+            } else {
+                if (confirm('確定要退出管理員模式嗎？')) {
+                    setAdminModeUI(false);
+                    renderCloudRoutesList();
+                }
+            }
+        };
+
+        tabSharedRoutesBtn.onclick = () => {
+            currentCloudTab = 'shared';
+            updateCloudTabButtons();
+            renderCloudRoutesList();
+        };
+
+        tabPendingRoutesBtn.onclick = () => {
+            currentCloudTab = 'pending';
+            updateCloudTabButtons();
+            renderCloudRoutesList();
+        };
 
         async function fetchCloudRoutes() {
             if (!navigator.onLine) {
@@ -2181,32 +2453,27 @@
                 </div>`;
 
             try {
-                const res = await fetch(FIREBASE_ROUTES_URL, { cache: 'no-store' });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
+                const [rawShared, rawPending] = await Promise.all([
+                    fetchRawFirebaseList(FIREBASE_ROUTES_URL),
+                    fetchRawFirebaseList(FIREBASE_PENDING_URL).catch(() => [])
+                ]);
 
-                if (!data || typeof data !== 'object') {
-                    cachedCloudRoutes = [];
-                } else {
-                    const rawList = Object.entries(data)
-                        .map(([firebaseKey, val]) => ({ ...val, firebaseKey }))
-                        .filter(item => item && item.name && Array.isArray(item.points) && item.points.length >= 2);
+                // 排序正式庫（由新到舊）
+                rawShared.sort((a, b) => {
+                    const tA = new Date(a.uploadedAt || 0).getTime() || Number(a.id) || 0;
+                    const tB = new Date(b.uploadedAt || 0).getTime() || Number(b.id) || 0;
+                    return tB - tA;
+                });
+                cachedCloudRoutes = rawShared;
 
-                    // 依上傳時間或 ID 由新到舊排序，並過濾雲端本身完全重複的項目
-                    rawList.sort((a, b) => {
-                        const tA = new Date(a.uploadedAt || 0).getTime() || Number(a.id) || 0;
-                        const tB = new Date(b.uploadedAt || 0).getTime() || Number(b.id) || 0;
-                        return tB - tA;
-                    });
-
-                    const seenKeys = new Set();
-                    cachedCloudRoutes = rawList.filter(item => {
-                        const dedupKey = `${(item.name || '').trim().toLowerCase()}__${getRouteTimestampKey(item)}`;
-                        if (seenKeys.has(dedupKey)) return false;
-                        seenKeys.add(dedupKey);
-                        return true;
-                    });
-                }
+                // 排序待審核區（由新到舊）
+                rawPending.sort((a, b) => {
+                    const tA = new Date(a.uploadedAt || 0).getTime() || Number(a.id) || 0;
+                    const tB = new Date(b.uploadedAt || 0).getTime() || Number(b.id) || 0;
+                    return tB - tA;
+                });
+                cachedPendingRoutes = rawPending;
+                if (pendingCountPill) pendingCountPill.innerText = cachedPendingRoutes.length;
 
                 renderCloudRoutesList();
             } catch (err) {
@@ -2225,9 +2492,155 @@
             }
         }
 
+        async function approvePendingRoute(pendingIdx, btnEl) {
+            const pr = cachedPendingRoutes[pendingIdx];
+            if (!pr || !isAdminUnlocked) return;
+
+            const isOverwrite = pr.uploadAction === 'overwrite';
+            const modeText = isOverwrite ? '【覆蓋更新】正式庫舊版路線' : '【新增上架】至正式路線庫';
+            if (!confirm(`確定要核准【${pr.author || '隊員'}】投稿的路線「${pr.name}」並${modeText}嗎？`)) return;
+
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 核准中';
+            }
+
+            try {
+                await publishRouteToSharedDB(pr, isOverwrite);
+                const delRes = await fetch(`${FIREBASE_BASE_URL}/pending_routes/${pr.firebaseKey}.json`, { method: 'DELETE' });
+                if (!delRes.ok) throw new Error(`DELETE pending HTTP ${delRes.status}`);
+
+                alert(`✅ 已核准上架路線【${pr.name}】！`);
+                await fetchCloudRoutes();
+            } catch (err) {
+                console.error('核准失敗:', err);
+                alert('❌ 核准上架失敗，請檢查網路連線後再試！');
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.innerHTML = '✅ 核准上架';
+                }
+            }
+        }
+
+        async function rejectPendingRoute(pendingIdx, btnEl) {
+            const pr = cachedPendingRoutes[pendingIdx];
+            if (!pr || !isAdminUnlocked) return;
+
+            if (!confirm(`確定要刪除/退回待審核路線【${pr.name}】（投稿者：${pr.author || '隊員'}）嗎？`)) return;
+
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            }
+
+            try {
+                const res = await fetch(`${FIREBASE_BASE_URL}/pending_routes/${pr.firebaseKey}.json`, { method: 'DELETE' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                alert(`🗑️ 已刪除/退回待審核路線【${pr.name}】。`);
+                await fetchCloudRoutes();
+            } catch (err) {
+                console.error('刪除待審核路線失敗:', err);
+                alert('❌ 刪除失敗，請檢查網路連線後再試！');
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.innerHTML = '🗑️ 刪除/退回';
+                }
+            }
+        }
+
+        async function deleteSharedCloudRoute(sharedIdx, btnEl) {
+            const cr = cachedCloudRoutes[sharedIdx];
+            if (!cr || !isAdminUnlocked) return;
+
+            if (!confirm(`⚠️ 管理員確認：\n確定要從「正式雲端路線庫」永久刪除【${cr.name}】嗎？`)) return;
+
+            if (btnEl) {
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            }
+
+            try {
+                const res = await fetch(`${FIREBASE_BASE_URL}/shared_routes/${cr.firebaseKey}.json`, { method: 'DELETE' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                alert(`🗑️ 已從正式雲端路線庫刪除【${cr.name}】。`);
+                await fetchCloudRoutes();
+            } catch (err) {
+                console.error('刪除雲端路線失敗:', err);
+                alert('❌ 刪除失敗，請檢查網路連線後再試！');
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.innerHTML = '🗑️ 刪除';
+                }
+            }
+        }
+
         function renderCloudRoutesList() {
             cloudRoutesList.innerHTML = '';
+            if (pendingCountPill) pendingCountPill.innerText = cachedPendingRoutes.length;
 
+            // --- 管理員「待審核投稿區」視圖 ---
+            if (isAdminUnlocked && currentCloudTab === 'pending') {
+                importAllCloudBtn.classList.add('hidden');
+                if (cachedPendingRoutes.length === 0) {
+                    cloudCountBadge.innerText = '目前共 0 條待審核路線';
+                    cloudRoutesList.innerHTML = `
+                        <div class="text-center text-gray-400 py-14">
+                            <i class="fa-solid fa-clipboard-check text-3xl mb-2 opacity-40"></i>
+                            <p class="text-sm font-bold">目前沒有待審核的投稿路線</p>
+                        </div>`;
+                    return;
+                }
+
+                cloudCountBadge.innerText = `⏳ 待審核投稿共 ${cachedPendingRoutes.length} 條`;
+                cachedPendingRoutes.forEach((pr, idx) => {
+                    const stopsCount = (pr.points || []).filter(p => p.is_stop).length;
+                    const eventsCount = (pr.events || []).length;
+                    const timeDisplay = pr.uploadedAtText || pr.date || '未知時間';
+                    const isOverwrite = pr.uploadAction === 'overwrite';
+                    const actionBadge = isOverwrite
+                        ? `<span class="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🔄 覆蓋更新原路線</span>`
+                        : `<span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🆕 新增路線</span>`;
+
+                    const card = document.createElement('div');
+                    card.className = "bg-white p-3.5 rounded-2xl shadow-sm border-2 border-amber-200 flex flex-col gap-2.5";
+                    card.innerHTML = `
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="font-black text-gray-900 text-sm truncate">${pr.name}</span>
+                                    <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
+                                        <i class="fa-solid fa-user-ninja mr-0.5"></i>${pr.author || '熱心隊員'}
+                                    </span>
+                                    ${actionBadge}
+                                </div>
+                                <div class="text-[11px] text-gray-400 mt-1">投稿時間：${timeDisplay}</div>
+                                <div class="flex items-center gap-3 text-[11px] font-bold mt-1">
+                                    <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${pr.distance || '0.00'} km</span>
+                                    <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${eventsCount} 處標記</span>
+                                    ${stopsCount > 0 ? `<span class="text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 pt-1 border-t border-gray-100">
+                            <button type="button" class="approve-pending-btn flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all">
+                                ✅ 核准上架
+                            </button>
+                            <button type="button" class="reject-pending-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all">
+                                🗑️ 刪除/退回
+                            </button>
+                        </div>
+                    `;
+
+                    const approveBtn = card.querySelector('.approve-pending-btn');
+                    const rejectBtn = card.querySelector('.reject-pending-btn');
+                    approveBtn.onclick = () => approvePendingRoute(idx, approveBtn);
+                    rejectBtn.onclick = () => rejectPendingRoute(idx, rejectBtn);
+                    cloudRoutesList.appendChild(card);
+                });
+                return;
+            }
+
+            // --- 「正式路線庫」視圖 ---
             if (cachedCloudRoutes.length === 0) {
                 cloudCountBadge.innerText = '目前共 0 條雲端路線';
                 importAllCloudBtn.classList.add('hidden');
@@ -2250,7 +2663,7 @@
                 const timeDisplay = cr.uploadedAtText || cr.date || '未知時間';
 
                 const card = document.createElement('div');
-                card.className = "bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-2.5";
+                card.className = "bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-2";
                 card.innerHTML = `
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-1.5 flex-wrap">
@@ -2266,22 +2679,33 @@
                             ${stopsCount > 0 ? `<span class="text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
                         </div>
                     </div>
-                    <button type="button" class="single-cloud-import-btn flex-shrink-0 px-3 py-2 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
-                        alreadyLocal
-                            ? 'bg-gray-100 text-gray-400 border border-gray-200'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
-                    }">
-                        ${alreadyLocal ? '✅ 已匯入' : '⬇️ 選擇匯入'}
-                    </button>
+                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                        <button type="button" class="single-cloud-import-btn px-3 py-2 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                            alreadyLocal
+                                ? 'bg-gray-100 text-gray-400 border border-gray-200'
+                                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                        }">
+                            ${alreadyLocal ? '✅ 已匯入' : '⬇️ 選擇匯入'}
+                        </button>
+                        ${isAdminUnlocked ? `
+                        <button type="button" class="admin-delete-shared-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2.5 py-2 rounded-xl text-xs font-extrabold active:scale-95 transition-all" title="管理員刪除此雲端路線">
+                            🗑️ 刪除
+                        </button>` : ''}
+                    </div>
                 `;
 
                 card.querySelector('.single-cloud-import-btn').onclick = () => importSingleCloudRoute(idx);
+                const delBtn = card.querySelector('.admin-delete-shared-btn');
+                if (delBtn) {
+                    delBtn.onclick = () => deleteSharedCloudRoute(idx, delBtn);
+                }
                 cloudRoutesList.appendChild(card);
             });
         }
 
         function cloneCloudRouteForLocal(cr) {
             return {
+                routeId: cr.routeId || generateRouteId(),
                 id: cr.id || Date.now() + Math.floor(Math.random() * 1000),
                 originId: cr.originId || cr.id || Date.now(),
                 name: cr.name,
@@ -2296,18 +2720,30 @@
             };
         }
 
+        function upsertLocalRouteFromCloud(cr) {
+            const newRoute = cloneCloudRouteForLocal(cr);
+            const existingIdx = savedRoutes.findIndex(local =>
+                (local.routeId && newRoute.routeId && local.routeId === newRoute.routeId)
+            );
+            if (existingIdx !== -1) {
+                savedRoutes[existingIdx] = newRoute;
+            } else {
+                savedRoutes.unshift(newRoute);
+            }
+            return newRoute;
+        }
+
         function importSingleCloudRoute(cloudIdx) {
             const cr = cachedCloudRoutes[cloudIdx];
             if (!cr) return;
 
             if (isRouteAlreadyInLocal(cr)) {
-                alert(`ℹ️ 路線【${cr.name}】已存在於本機路線庫中，無須重複匯入！`);
+                alert(`ℹ️ 路線【${cr.name}】已是最新版本並存在於本機路線庫中，無須重複匯入！`);
                 renderCloudRoutesList();
                 return;
             }
 
-            const newRoute = cloneCloudRouteForLocal(cr);
-            savedRoutes.unshift(newRoute);
+            const newRoute = upsertLocalRouteFromCloud(cr);
             localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
                 document.getElementById('historyCount').innerText = savedRoutes.length;
                 renderHistoryList();
@@ -2322,12 +2758,12 @@
             let addedCount = 0;
             let skippedCount = 0;
 
-            // 由舊到新依序 unshift，確保最新路線維持在最上方
+            // 由舊到新依序處理，確保最新路線維持在最上方
             [...cachedCloudRoutes].reverse().forEach(cr => {
                 if (isRouteAlreadyInLocal(cr)) {
                     skippedCount++;
                 } else {
-                    savedRoutes.unshift(cloneCloudRouteForLocal(cr));
+                    upsertLocalRouteFromCloud(cr);
                     addedCount++;
                 }
             });
@@ -2342,7 +2778,7 @@
                 document.getElementById('historyCount').innerText = savedRoutes.length;
                 renderHistoryList();
                 renderCloudRoutesList();
-                alert(`✅ 一鍵匯入完成！\n成功新增 ${addedCount} 條路線${skippedCount > 0 ? `（已自動略過 ${skippedCount} 條重複路線）` : ''}。`);
+                alert(`✅ 一鍵匯入完成！\n成功新增/更新 ${addedCount} 條路線${skippedCount > 0 ? `（已自動略過 ${skippedCount} 條重複路線）` : ''}。`);
             });
         };
 
@@ -2382,10 +2818,14 @@
                 const editAlertModal = document.getElementById('editAlertModal');
                 const viewAlertModal = document.getElementById('viewAlertModal');
                 const photoLightboxModal = document.getElementById('photoLightboxModal');
+                const uploadConflictModal = document.getElementById('uploadConflictModal');
 
                 // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
                 if (photoLightboxModal && !photoLightboxModal.classList.contains('hidden')) {
                     document.getElementById('closePhotoLightboxBtn').click();
+                }
+                else if (uploadConflictModal && !uploadConflictModal.classList.contains('hidden')) {
+                    document.getElementById('btnConflictCancel').click();
                 }
                 else if (viewAlertModal && !viewAlertModal.classList.contains('hidden')) {
                     document.getElementById('btnCloseViewAlert').click();

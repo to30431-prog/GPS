@@ -346,6 +346,15 @@
         <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
     </label>
 </div>
+        <div class="px-4 pt-3 pb-1">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+                <i class="fa-solid fa-magnifying-glass text-gray-400 text-sm"></i>
+                <input type="text" id="routeSearchInput" placeholder="搜尋路線名稱或創作者..." class="flex-1 bg-transparent text-sm font-bold text-gray-800 placeholder-gray-400 outline-none min-w-0">
+                <button id="clearSearchBtn" type="button" class="hidden text-gray-300 hover:text-gray-500 active:scale-90 transition-all w-6 h-6 flex items-center justify-center rounded-full" title="清除搜尋">
+                    <i class="fa-solid fa-circle-xmark text-base"></i>
+                </button>
+            </div>
+        </div>
         <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-3 pb-24"></div>
     </div>
 
@@ -708,9 +717,32 @@
 
         // --- 5. 歷史清單與路線預覽 ---
         const historyModal = document.getElementById('historyModal');
+        const routeSearchInput = document.getElementById('routeSearchInput');
+        const clearSearchBtn = document.getElementById('clearSearchBtn');
+
+        if (routeSearchInput) {
+            routeSearchInput.oninput = () => renderHistoryList();
+        }
+        if (clearSearchBtn) {
+            clearSearchBtn.onclick = () => {
+                if (routeSearchInput) {
+                    routeSearchInput.value = '';
+                    routeSearchInput.focus();
+                }
+                renderHistoryList();
+            };
+        }
+
         function renderHistoryList() {
             const list = document.getElementById('historyList');
             list.innerHTML = '';
+
+            const rawSearch = routeSearchInput ? routeSearchInput.value : '';
+            if (clearSearchBtn) {
+                if (rawSearch.length > 0) clearSearchBtn.classList.remove('hidden');
+                else clearSearchBtn.classList.add('hidden');
+            }
+            const keyword = rawSearch.trim().toLowerCase();
             
             if (savedRoutes.length === 0) {
                 list.innerHTML = '<div class="text-center text-gray-400 mt-16"><p>尚無儲存的清運路線</p></div>';
@@ -718,7 +750,22 @@
                 return;
             }
 
-            savedRoutes.forEach((r, idx) => {
+            const filteredRoutes = savedRoutes
+                .map((r, originalIdx) => ({ route: r, originalIdx }))
+                .filter(({ route }) => {
+                    if (!keyword) return true;
+                    const nameMatch = (route.name || '').toLowerCase().includes(keyword);
+                    const authorMatch = (route.author || '').toLowerCase().includes(keyword);
+                    return nameMatch || authorMatch;
+                });
+
+            if (filteredRoutes.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-400 mt-16"><i class="fa-solid fa-magnifying-glass text-2xl mb-2 opacity-40"></i><p class="text-sm font-bold">找不到符合的路線或創作者</p></div>';
+                if (window.sortableInstance) { window.sortableInstance.destroy(); window.sortableInstance = null; }
+                return;
+            }
+
+            filteredRoutes.forEach(({ route: r, originalIdx }) => {
                 const card = document.createElement('div');
                 card.className = "bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
                 const authorTag = r.author ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold ml-1.5 whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>` : '';
@@ -738,12 +785,12 @@
                     <button class="edit-name-btn text-gray-300 hover:text-amber-500 w-10 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱"><i class="fa-solid fa-pen"></i></button>
                 `;
 
-                card.querySelector('.flex-1').onclick = () => openRouteDetail(idx);
+                card.querySelector('.flex-1').onclick = () => openRouteDetail(originalIdx);
                 card.querySelector('.edit-name-btn').onclick = (e) => {
                     e.stopPropagation();
                     const newName = prompt('請輸入新的路線名稱：', r.name);
                     if (newName && newName.trim() !== '') {
-                        savedRoutes[idx].name = newName.trim();
+                        savedRoutes[originalIdx].name = newName.trim();
                         localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
                     }
                 };
@@ -754,8 +801,12 @@
             window.sortableInstance = new Sortable(list, {
                 handle: '.drag-handle', animation: 200, ghostClass: 'opacity-50',
                 onEnd: function (evt) {
-                    const movedItem = savedRoutes.splice(evt.oldIndex, 1)[0];
-                    savedRoutes.splice(evt.newIndex, 0, movedItem);
+                    if (evt.oldIndex === evt.newIndex) return;
+                    const fromIdx = filteredRoutes[evt.oldIndex]?.originalIdx;
+                    const toIdx = filteredRoutes[evt.newIndex]?.originalIdx;
+                    if (fromIdx === undefined || toIdx === undefined) return;
+                    const movedItem = savedRoutes.splice(fromIdx, 1)[0];
+                    savedRoutes.splice(toIdx, 0, movedItem);
                     localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
                 }
             });

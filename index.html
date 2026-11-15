@@ -2,8 +2,10 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -13,8 +15,33 @@
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden;  user-select: none; -webkit-user-select: none; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background-color: #000000 !important;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
         #map { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+        #blackOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100vw;
+            height: 100dvh;
+            background-color: #000000 !important;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            z-index: 999999;
+        }
         .ui-layer { z-index: 10; pointer-events: none; }
         .pointer-events-auto { pointer-events: auto; }
         
@@ -67,7 +94,7 @@
         .nav-alert-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
     </style>
 
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="manifest.json">
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(regs => {
@@ -77,7 +104,7 @@
 </script>
 
 </head>
-<body class="bg-gray-900 relative">
+<body class="bg-black relative" style="background-color: #000000;">
 
     <div id="map"></div>
 
@@ -95,12 +122,13 @@
         <i class="fa-solid fa-xmark text-2xl"></i>
     </button>
     
-    <!-- OLED 黑屏省電模式 -->
-    <div id="blackOverlay" class="hidden fixed inset-0 bg-black z-[9999] flex flex-col items-center justify-center text-gray-500 cursor-pointer pointer-events-auto transition-opacity duration-300">
-        <i class="fa-solid fa-moon text-5xl mb-6 text-gray-700"></i>
-        <p class="text-xl font-bold text-gray-400 tracking-wider">智慧省電模式</p>
-        <p class="text-sm mt-4 text-gray-600">接近路口或音樂點將自動喚醒</p>
-        <p class="text-xs mt-6 opacity-40 border border-gray-800 px-5 py-2 rounded-full">點擊螢幕任意處強制喚醒</p>
+    <!-- OLED 純黑省電模式 (#000000 滿版覆蓋) -->
+    <div id="blackOverlay" style="background-color: #000000;" class="hidden fixed inset-0 bg-[#000000] z-[999999] flex flex-col items-center justify-center text-gray-500 cursor-pointer pointer-events-auto transition-opacity duration-300">
+        <i class="fa-solid fa-moon text-5xl mb-5 text-gray-800"></i>
+        <p class="text-xl font-black text-gray-500 tracking-wider">🌙 極致省電模式</p>
+        <p class="text-xs font-bold mt-3 text-emerald-800/80 flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-700 animate-pulse"></span>GPS 與車隊定位雷達背景持續運作中</p>
+        <p class="text-xs mt-2 text-gray-700">導航時接近路口或音樂點將自動喚醒</p>
+        <p class="text-xs mt-6 text-gray-600 border border-gray-900 px-5 py-2 rounded-full">點擊螢幕任意處退出省電模式</p>
     </div>
 
     <!-- 偏離路線警告層 -->
@@ -143,8 +171,9 @@
                 <i id="voiceIcon" class="fa-solid fa-volume-high text-base"></i>
                 <span id="voiceLabel" class="text-[9px] font-bold leading-none mt-0.5">語音開</span>
             </button>
-            <button id="blackScreenBtn" class="bg-gray-800 text-white w-11 h-11 rounded-2xl shadow-lg border border-gray-600 flex items-center justify-center active:scale-95">
-                <i class="fa-solid fa-moon text-base"></i>
+            <button id="blackScreenBtn" class="bg-black text-amber-400 w-11 h-11 rounded-2xl shadow-lg border border-gray-700 flex flex-col items-center justify-center active:scale-95" title="進入純黑極致省電模式">
+                <i class="fa-solid fa-moon text-sm"></i>
+                <span class="text-[9px] font-bold leading-none mt-0.5 text-gray-200">極致省電</span>
             </button>
             <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95 !hidden">
                 <i class="fa-solid fa-xmark"></i> 結束遵循
@@ -191,6 +220,11 @@
 
             <button id="recordBtn" class="w-full bg-green-700 text-white font-extrabold py-3.5 rounded-2xl text-base flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all">
                 <i class="fa-solid fa-play"></i> <span id="recordBtnText">開始紀錄路線</span>
+            </button>
+
+            <button id="mainPowerSaveBtn" type="button" class="w-full mt-2.5 bg-black hover:bg-gray-900 text-amber-400 font-extrabold py-3 rounded-2xl text-sm flex items-center justify-center gap-2 shadow-md border border-gray-800 active:scale-[0.98] transition-all">
+                <span>🌙 極致省電</span>
+                <span class="text-xs font-bold text-gray-400">（純黑關屏 · 持續分享位置）</span>
             </button>
 
             <div class="flex justify-between text-center mt-3.5 pt-2.5 border-t border-gray-100 px-1">
@@ -548,23 +582,6 @@
 
         // 核心狀態變數
         let idleWatchId = null;
-
-        function startIdleGPS() {
-            if (idleWatchId) return;
-            idleWatchId = navigator.geolocation.watchPosition(pos => {
-                const lng = pos.coords.longitude, lat = pos.coords.latitude;
-                lastKnownLngLat = [lng, lat];
-                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
-                const acc = Math.round(pos.coords.accuracy);
-                if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
-                if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
-            }, () => {}, { enableHighAccuracy: true });
-        }
-
-        function stopIdleGPS() {
-            if (idleWatchId) { navigator.geolocation.clearWatch(idleWatchId); idleWatchId = null; }
-        }
-
         let isFollowingCamera = true;
         let isHeadingUpMode = true; 
         let currentHeading = 0;
@@ -575,6 +592,68 @@
         let routePoints = [], musicEvents = []; 
         let totalDistanceKm = 0, startTime = 0, elapsedSec = 0, timerInterval = null;
         let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
+        let isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
+
+        // 確認系統列與背景維持純黑 #000000
+        function ensurePureBlackSystemBars() {
+            let metaTheme = document.querySelector('meta[name="theme-color"]');
+            if (!metaTheme) {
+                metaTheme = document.createElement('meta');
+                metaTheme.name = 'theme-color';
+                document.head.appendChild(metaTheme);
+            }
+            metaTheme.setAttribute('content', '#000000');
+            document.documentElement.style.backgroundColor = '#000000';
+            if (document.body) document.body.style.backgroundColor = '#000000';
+        }
+        ensurePureBlackSystemBars();
+
+        // 判斷目前是否處於純黑省電遮罩蓋住畫面的狀態（暫停地圖畫面重繪，保留背景 GPS 與雷達上傳）
+        function isPowerSaveMapPaused() {
+            return Boolean(isBlackScreenActive && !isScreenAutoWoken);
+        }
+
+        // 持續啟用螢幕喚醒鎖定（Wake Lock API）防止手機休眠斷網
+        async function requestScreenWakeLock() {
+            try {
+                if ('wakeLock' in navigator && !wakeLock) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    wakeLock.addEventListener('release', () => {
+                        wakeLock = null;
+                    });
+                }
+            } catch (e) {}
+        }
+
+        async function releaseScreenWakeLockIfIdle() {
+            if (isBlackScreenActive || isRecording || followWatchId) return;
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                }
+            } catch (e) {
+                wakeLock = null;
+            }
+        }
+
+        function startIdleGPS() {
+            if (idleWatchId) return;
+            idleWatchId = navigator.geolocation.watchPosition(pos => {
+                const lng = pos.coords.longitude, lat = pos.coords.latitude;
+                lastKnownLngLat = [lng, lat];
+                if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
+                if (!isPowerSaveMapPaused()) {
+                    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
+                    const acc = Math.round(pos.coords.accuracy);
+                    if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
+                }
+            }, () => {}, { enableHighAccuracy: true });
+        }
+
+        function stopIdleGPS() {
+            if (idleWatchId) { navigator.geolocation.clearWatch(idleWatchId); idleWatchId = null; }
+        }
 
         let savedRoutes = [];
         let selectedRouteIdx = -1;
@@ -838,11 +917,13 @@
                 document.getElementById('appStatusTitle').innerText = '路線紀錄中...';
                 setCameraFollow(true);
 
-                try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+                await requestScreenWakeLock();
 
                 timerInterval = setInterval(() => {
                     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
-                    document.getElementById('timeText').innerText = new Date(elapsedSec * 1000).toISOString().substr(11, 8);
+                    if (!isPowerSaveMapPaused()) {
+                        document.getElementById('timeText').innerText = new Date(elapsedSec * 1000).toISOString().substr(11, 8);
+                    }
                 }, 1000);
 
                 watchId = navigator.geolocation.watchPosition(pos => {
@@ -850,14 +931,16 @@
                     const lng = pos.coords.longitude, lat = pos.coords.latitude;
                     if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
                     const acc = Math.round(pos.coords.accuracy);
-                    document.getElementById('recAccuracyText').innerText = `± ${acc} m`;
-                    if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
+                    if (!isPowerSaveMapPaused()) {
+                        document.getElementById('recAccuracyText').innerText = `± ${acc} m`;
+                        if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
+                    }
 
                     if (routePoints.length === 0) {
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: 0 });
                         addPinMarker([lng, lat], '<div class="pin-s"><span>S</span></div>');
-                        if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]);
+                        if (!isPowerSaveMapPaused() && vehicleMarker) vehicleMarker.setLngLat([lng, lat]);
                         lastRecordTime = now;
                         return;
                     }
@@ -869,15 +952,17 @@
                     if (distM >= minMoveMeters || (now - lastRecordTime >= gpsFreqMs && distM >= 1.5)) {
                         currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
                         totalDistanceKm += distKm;
-                        document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
-                        
                         lastKnownLngLat = [lng, lat];
                         routePoints.push({ lng, lat, time: now, musicActive, bearing: currentHeading });
-                        if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
-                        updateRouteLayers(routePoints);
 
-                        if (isFollowingCamera) {
-                            map.easeTo({ center: [lng, lat], bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                        if (!isPowerSaveMapPaused()) {
+                            document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
+                            if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
+                            updateRouteLayers(routePoints);
+
+                            if (isFollowingCamera) {
+                                map.easeTo({ center: [lng, lat], bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                            }
                         }
                         lastRecordTime = now;
                     }
@@ -889,7 +974,7 @@
                 isRecording = false;
                 if (watchId) navigator.geolocation.clearWatch(watchId);
                 clearInterval(timerInterval);
-                if (wakeLock) { wakeLock.release(); wakeLock = null; }
+                releaseScreenWakeLockIfIdle();
 
                 document.getElementById('recordingTopRow').classList.add('hidden');
                 document.getElementById('idleTopRow').classList.remove('hidden');
@@ -1432,12 +1517,13 @@
             document.getElementById('playbackUI').classList.add('hidden');
             document.getElementById('topBackBtn').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');
-            document.getElementById('blackOverlay').classList.add('hidden');
+            if (typeof exitBlackPowerSaveMode === 'function') exitBlackPowerSaveMode(false);
+            else document.getElementById('blackOverlay').classList.add('hidden');
             document.getElementById('mainUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
             clearDomMarkers(); updateRouteLayers([]);
             map.getSource('bg-route')?.setData(emptyGeoJSON());
-            try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
+            releaseScreenWakeLockIfIdle();
             startIdleGPS();
         }
 
@@ -1890,20 +1976,106 @@
             document.getElementById('topBackBtn').classList.remove('hidden'); openRouteDetail(selectedRouteIdx); 
         };
 
-        // --- 7. 🔥 Pro Max 級實戰導航引擎 ---
+        // --- 7. 🔥 Pro Max 級實戰導航引擎 ＆ 全螢幕純黑智慧省電模式 ---
         let triggeredMusicIndices = new Set(), triggeredTurnIndices = new Set();
-        let isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
 
         const blackOverlay = document.getElementById('blackOverlay');
         const offRouteWarning = document.getElementById('offRouteWarning');
         const banner = document.getElementById('musicAlertBanner');
 
-        document.getElementById('blackScreenBtn').onclick = () => { isBlackScreenActive = true; isScreenAutoWoken = false; blackOverlay.classList.remove('hidden'); };
-        blackOverlay.onclick = () => { isBlackScreenActive = false; isScreenAutoWoken = false; if (sleepTimer) clearTimeout(sleepTimer); blackOverlay.classList.add('hidden'); };
+        // 喚醒畫面時同步恢復地圖重繪與最新位置
+        function syncMapRenderOnWake() {
+            const mapEl = document.getElementById('map');
+            if (mapEl) mapEl.style.visibility = 'visible';
+            if (vehicleMarker && lastKnownLngLat) {
+                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+            }
+            if (isRecording && routePoints.length > 0) {
+                document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
+                updateRouteLayers(routePoints);
+            }
+            if (isFollowingCamera && lastKnownLngLat) {
+                map.jumpTo({
+                    center: lastKnownLngLat,
+                    bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
+                    offset: [0, 100]
+                });
+            }
+            if (typeof fetchAndRenderFleetRadar === 'function') {
+                fetchAndRenderFleetRadar();
+            }
+        }
+
+        // 進入全螢幕純黑 (#000000) 智慧省電模式
+        async function enterBlackPowerSaveMode(fromUserGesture = true) {
+            ensurePureBlackSystemBars();
+            isBlackScreenActive = true;
+            isScreenAutoWoken = false;
+            if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+
+            blackOverlay.style.backgroundColor = '#000000';
+            blackOverlay.classList.remove('hidden', 'opacity-0');
+
+            // 暫停底層地圖畫面重繪，達到極致省電
+            const mapEl = document.getElementById('map');
+            if (mapEl) mapEl.style.visibility = 'hidden';
+
+            // 嘗試於使用者點擊手勢中進入全螢幕（隱藏 Android 底部虛擬導覽列與頂部狀態列）
+            if (fromUserGesture) {
+                try {
+                    const docEl = document.documentElement;
+                    const reqFs = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.msRequestFullscreen;
+                    if (reqFs && !document.fullscreenElement && !document.webkitFullscreenElement) {
+                        Promise.resolve(reqFs.call(docEl)).catch(() => {});
+                    }
+                } catch (e) {}
+            }
+
+            // 持續啟用螢幕喚醒鎖定（Wake Lock API）防止手機休眠斷網
+            await requestScreenWakeLock();
+
+            // 確保背景 GPS 追蹤與車隊雷達位置上傳持續運作不中斷
+            if (!isRecording && !followWatchId) startIdleGPS();
+            if (typeof startFleetRadarSystem === 'function') startFleetRadarSystem();
+        }
+
+        // 退出全螢幕純黑省電模式
+        function exitBlackPowerSaveMode(fromUserGesture = true) {
+            isBlackScreenActive = false;
+            isScreenAutoWoken = false;
+            if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+
+            blackOverlay.classList.add('hidden');
+            blackOverlay.classList.remove('opacity-0');
+            ensurePureBlackSystemBars();
+
+            // 恢復地圖畫面重繪並同步最新座標
+            syncMapRenderOnWake();
+
+            if (fromUserGesture) {
+                try {
+                    if (document.fullscreenElement || document.webkitFullscreenElement) {
+                        const exitFs = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+                        if (exitFs) Promise.resolve(exitFs.call(document)).catch(() => {});
+                    }
+                } catch (e) {}
+            }
+
+            releaseScreenWakeLockIfIdle();
+        }
+
+        document.getElementById('blackScreenBtn').onclick = () => enterBlackPowerSaveMode(true);
+        const mainPowerSaveBtn = document.getElementById('mainPowerSaveBtn');
+        if (mainPowerSaveBtn) {
+            mainPowerSaveBtn.onclick = () => enterBlackPowerSaveMode(true);
+        }
+        blackOverlay.onclick = () => exitBlackPowerSaveMode(true);
 
         function autoWakeScreen() {
             if (!isBlackScreenActive || isScreenAutoWoken) return;
-            isScreenAutoWoken = true; blackOverlay.classList.add('opacity-0');
+            isScreenAutoWoken = true;
+            syncMapRenderOnWake();
+            blackOverlay.classList.add('opacity-0');
             setTimeout(() => { if(isScreenAutoWoken) blackOverlay.classList.add('hidden'); }, 300);
             vibrate([100, 50, 100]);
         }
@@ -1913,7 +2085,12 @@
             if (sleepTimer) clearTimeout(sleepTimer);
             sleepTimer = setTimeout(() => {
                 if (isBlackScreenActive) {
-                    isScreenAutoWoken = false; blackOverlay.classList.remove('hidden');
+                    isScreenAutoWoken = false;
+                    ensurePureBlackSystemBars();
+                    blackOverlay.style.backgroundColor = '#000000';
+                    blackOverlay.classList.remove('hidden');
+                    const mapEl = document.getElementById('map');
+                    if (mapEl) mapEl.style.visibility = 'hidden';
                     setTimeout(() => blackOverlay.classList.remove('opacity-0'), 10);
                 }
             }, 5000);
@@ -2024,7 +2201,7 @@
                 duration: 1500 // 飛行過場動畫 1.5 秒
             });
 
-            try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+            await requestScreenWakeLock();
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
                 const lng = pos.coords.longitude, lat = pos.coords.latitude;
@@ -2036,10 +2213,12 @@
                 }
                 
                 lastKnownLngLat = [lng, lat];
-                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                if (!isPowerSaveMapPaused()) {
+                    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
-                if (isFollowingCamera) {
-                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                    if (isFollowingCamera) {
+                        map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                    }
                 }
 
                 let isOffRoute = true, closestPtIdx = currentNavIdx, minDist = Infinity;
@@ -2162,8 +2341,8 @@
             document.getElementById('tacticalStopBtn').classList.add('hidden');
             document.getElementById('musicAlertBanner').classList.add('hidden');
             document.getElementById('offRouteWarning').classList.add('hidden');
-            document.getElementById('blackOverlay').classList.add('hidden');
-            try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch(e){}
+            exitBlackPowerSaveMode(false);
+            releaseScreenWakeLockIfIdle();
             openRouteDetail(selectedRouteIdx);
         };
         
@@ -3096,6 +3275,8 @@
 
         async function fetchAndRenderFleetRadar() {
             if (!fleetUserName || !navigator.onLine) return;
+            // 純黑省電模式下暫停地圖友車標記重繪，於喚醒畫面時立即同步更新
+            if (isPowerSaveMapPaused()) return;
             try {
                 const res = await fetch(LIVE_FLEET_ALL_URL, { cache: 'no-store' });
                 if (!res.ok) return;
@@ -3205,8 +3386,9 @@
 
         document.addEventListener('visibilitychange', async () => {
             if (document.visibilityState === 'visible') {
-                if (isRecording || followWatchId) {
-                    try { if ('wakeLock' in navigator) { wakeLock = await navigator.wakeLock.request('screen'); } } catch (err) {}
+                ensurePureBlackSystemBars();
+                if (isBlackScreenActive || isRecording || followWatchId) {
+                    await requestScreenWakeLock();
                 }
             }
         });
@@ -3216,6 +3398,7 @@
         (function setupAndroidBackButton() {
             // 1. 監聽實體返回鍵動作
             window.addEventListener('popstate', (e) => {
+                const blackOverlay = document.getElementById('blackOverlay');
                 const historyModal = document.getElementById('historyModal');
                 const cloudRoutesModal = document.getElementById('cloudRoutesModal');
                 const routeDetailUI = document.getElementById('routeDetailUI');
@@ -3227,7 +3410,10 @@
                 const uploadConflictModal = document.getElementById('uploadConflictModal');
 
                 // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
-                if (photoLightboxModal && !photoLightboxModal.classList.contains('hidden')) {
+                if (blackOverlay && !blackOverlay.classList.contains('hidden')) {
+                    exitBlackPowerSaveMode(false);
+                }
+                else if (photoLightboxModal && !photoLightboxModal.classList.contains('hidden')) {
                     document.getElementById('closePhotoLightboxBtn').click();
                 }
                 else if (uploadConflictModal && !uploadConflictModal.classList.contains('hidden')) {
@@ -3272,6 +3458,12 @@
 
             const cBtn = document.getElementById('openCloudModalBtn');
             if(cBtn) cBtn.addEventListener('click', pushFakeHistory);
+
+            const bBtn = document.getElementById('blackScreenBtn');
+            if(bBtn) bBtn.addEventListener('click', pushFakeHistory);
+
+            const mPowerBtn = document.getElementById('mainPowerSaveBtn');
+            if(mPowerBtn) mPowerBtn.addEventListener('click', pushFakeHistory);
 
             // 4. 攔截開啟路線詳情的函數
             if (typeof window.openRouteDetail === 'function') {

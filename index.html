@@ -112,14 +112,21 @@
 
     <!-- 頂部導航狀態與工具列 -->
     <div class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer">
-        <div class="flex items-center gap-2 pointer-events-auto">
-            <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
-                <i class="fa-solid fa-chevron-left text-lg"></i>
-            </button>
-            <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
-                <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500"></span>
-                <span id="appStatusTitle">鶯歌清運路線助手 Pro Max</span>
+        <div class="flex flex-col gap-1.5 items-start pointer-events-auto">
+            <div class="flex items-center gap-2">
+                <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
+                    <i class="fa-solid fa-chevron-left text-lg"></i>
+                </button>
+                <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
+                    <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500"></span>
+                    <span id="appStatusTitle">鶯歌清運路線助手 Pro Max</span>
+                </div>
             </div>
+            <button id="fleetUserBadgeBtn" type="button" class="bg-white/95 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-emerald-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all" title="點擊修改您的車隊顯示名稱">
+                <i class="fa-solid fa-truck-fast text-emerald-600"></i>
+                <span id="fleetUserBadgeText">設定名稱</span>
+                <i class="fa-solid fa-pen text-[10px] text-gray-400 ml-0.5"></i>
+            </button>
         </div>
 
         <div class="flex flex-col gap-2.5 pointer-events-auto">
@@ -407,6 +414,39 @@
                     <input type="radio" name="gpsMode" value="12" class="w-5 h-5">
                 </label>
             </div>
+            <div class="mt-4 pt-3.5 border-t border-gray-100 flex items-center justify-between">
+                <div class="text-xs font-extrabold text-gray-600 flex items-center gap-1.5">
+                    <i class="fa-solid fa-truck-fast text-emerald-600"></i>
+                    <span>車隊雷達顯示名稱：</span>
+                    <span id="settingsFleetNameText" class="text-gray-900 font-black">未設定</span>
+                </div>
+                <button id="settingsEditFleetNameBtn" type="button" class="bg-blue-50 hover:bg-blue-100 text-blue-600 font-extrabold text-xs px-3 py-1.5 rounded-xl active:scale-95 transition-all">
+                    修改名稱
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🚛 車隊支援雷達：首次開啟/修改使用者名稱彈窗 -->
+    <div id="fleetUserNameModal" class="hidden fixed inset-0 bg-black/70 z-[100002] flex items-center justify-center p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4 border border-gray-100">
+            <div class="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-2xl mx-auto shadow-sm">
+                <i class="fa-solid fa-truck-fast"></i>
+            </div>
+            <div class="text-center">
+                <h3 class="text-xl font-black text-gray-900">車隊支援定位雷達</h3>
+                <p class="text-xs font-bold text-gray-500 mt-1">請輸入您的名稱，讓線上隊員在地圖上看見彼此位置（僅需輸入名稱，不需車次代號）</p>
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-xs font-extrabold text-gray-600 ml-1">您的名稱（例如：凱哥、阿翔）</label>
+                <input type="text" id="fleetUserNameInput" maxlength="16" class="bg-gray-50 border-2 border-gray-200 focus:border-emerald-500 text-gray-900 text-base font-black rounded-2xl p-3.5 w-full outline-none transition-colors" placeholder="例如：凱哥、阿翔">
+            </div>
+            <button type="button" id="btnSaveFleetUserName" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-base">
+                <i class="fa-solid fa-check"></i> 確認並啟動雷達
+            </button>
+            <button type="button" id="btnCancelFleetUserName" class="hidden text-gray-400 font-extrabold py-1.5 active:scale-95 text-xs">
+                取消
+            </button>
         </div>
     </div>
 
@@ -517,6 +557,7 @@
                 if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
                 const acc = Math.round(pos.coords.accuracy);
                 if(document.getElementById('accuracyText')) document.getElementById('accuracyText').innerText = `± ${acc} m`;
+                if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
             }, () => {}, { enableHighAccuracy: true });
         }
 
@@ -807,6 +848,7 @@
                 watchId = navigator.geolocation.watchPosition(pos => {
                     const now = Date.now();
                     const lng = pos.coords.longitude, lat = pos.coords.latitude;
+                    if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
                     const acc = Math.round(pos.coords.accuracy);
                     document.getElementById('recAccuracyText').innerText = `± ${acc} m`;
                     if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
@@ -860,7 +902,7 @@
                     const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                     const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
                     if (name) {
-                        const savedAuthor = localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
+                        const savedAuthor = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
                         const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
                         localStorage.setItem('yinggeRouteLastAuthor', author);
 
@@ -1986,6 +2028,7 @@
 
             followWatchId = navigator.geolocation.watchPosition(pos => {
                 const lng = pos.coords.longitude, lat = pos.coords.latitude;
+                if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
                 if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
                     currentHeading = pos.coords.heading;
                 } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) {
@@ -2313,7 +2356,7 @@
 
             if (!confirm(`確定要將路線【${r.name}】上傳至車隊雲端路線庫嗎？`)) return;
 
-            const defaultAuthor = r.author || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
+            const defaultAuthor = r.author || localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
             const authorInput = prompt('請輸入分享者（創作者）名稱：', defaultAuthor);
             if (authorInput === null) return;
             const finalAuthor = authorInput.trim() || defaultAuthor;
@@ -2897,6 +2940,268 @@
             document.getElementById('currentModeText').innerText = text;
             document.getElementById('settingsModal').classList.add('hidden');
         };
+
+        // ==========================================
+        // 🚛 9. 全自動車隊支援定位雷達（全模式通用）
+        // ==========================================
+        const LIVE_FLEET_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/live_fleet';
+        const LIVE_FLEET_ALL_URL = `${LIVE_FLEET_BASE_URL}.json`;
+
+        // 獨立的友車圖層群組（不受 clearDomMarkers 影響，進入導航或切換路線時依然保留）
+        const fleetLayerGroup = {};
+
+        let fleetDeviceId = localStorage.getItem('deviceId') || localStorage.getItem('fleet_device_id');
+        if (!fleetDeviceId) {
+            fleetDeviceId = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
+            localStorage.setItem('deviceId', fleetDeviceId);
+            localStorage.setItem('fleet_device_id', fleetDeviceId);
+        } else {
+            localStorage.setItem('deviceId', fleetDeviceId);
+            localStorage.setItem('fleet_device_id', fleetDeviceId);
+        }
+
+        let fleetUserName = (localStorage.getItem('fleet_user_name') || '').trim();
+        let currentFleetLat = null;
+        let currentFleetLng = null;
+        let lastUploadedFleetLat = null;
+        let lastUploadedFleetLng = null;
+        let lastFleetUploadTime = 0;
+        let fleetRadarStarted = false;
+        let fleetPollTimer = null;
+        let fleetHeartbeatTimer = null;
+        let fleetRadarWatchId = null;
+
+        const fleetUserNameModal = document.getElementById('fleetUserNameModal');
+        const fleetUserNameInput = document.getElementById('fleetUserNameInput');
+        const btnSaveFleetUserName = document.getElementById('btnSaveFleetUserName');
+        const btnCancelFleetUserName = document.getElementById('btnCancelFleetUserName');
+        const fleetUserBadgeBtn = document.getElementById('fleetUserBadgeBtn');
+        const fleetUserBadgeText = document.getElementById('fleetUserBadgeText');
+        const settingsFleetNameText = document.getElementById('settingsFleetNameText');
+        const settingsEditFleetNameBtn = document.getElementById('settingsEditFleetNameBtn');
+
+        function syncFleetUserNameUI() {
+            const display = fleetUserName || '設定名稱';
+            if (fleetUserBadgeText) fleetUserBadgeText.innerText = display;
+            if (settingsFleetNameText) settingsFleetNameText.innerText = fleetUserName || '未設定';
+            if (fleetUserName) {
+                localStorage.setItem('yinggeRouteLastAuthor', fleetUserName);
+            }
+        }
+
+        function openFleetUserNameModal(isInitial) {
+            fleetUserNameInput.value = fleetUserName || localStorage.getItem('yinggeRouteLastAuthor') || '';
+            if (isInitial) {
+                btnCancelFleetUserName.classList.add('hidden');
+            } else {
+                btnCancelFleetUserName.classList.remove('hidden');
+            }
+            fleetUserNameModal.classList.remove('hidden');
+            setTimeout(() => fleetUserNameInput.focus(), 100);
+        }
+
+        function saveFleetUserNameFromModal() {
+            const val = (fleetUserNameInput.value || '').trim();
+            if (!val) {
+                alert('請輸入您的名稱（例如：凱哥、阿翔）！');
+                fleetUserNameInput.focus();
+                return;
+            }
+            fleetUserName = val;
+            localStorage.setItem('fleet_user_name', fleetUserName);
+            localStorage.setItem('yinggeRouteLastAuthor', fleetUserName);
+            syncFleetUserNameUI();
+            fleetUserNameModal.classList.add('hidden');
+
+            startFleetRadarSystem();
+            // 若已有座標，修改名稱後立即同步更新雲端名稱
+            if (currentFleetLat !== null && currentFleetLng !== null) {
+                uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+            }
+        }
+
+        btnSaveFleetUserName.onclick = saveFleetUserNameFromModal;
+        fleetUserNameInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveFleetUserNameFromModal();
+            }
+        };
+        btnCancelFleetUserName.onclick = () => fleetUserNameModal.classList.add('hidden');
+
+        fleetUserBadgeBtn.onclick = () => openFleetUserNameModal(false);
+        if (settingsEditFleetNameBtn) {
+            settingsEditFleetNameBtn.onclick = () => {
+                document.getElementById('settingsModal').classList.add('hidden');
+                openFleetUserNameModal(false);
+            };
+        }
+
+        async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
+            if (!fleetUserName || typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+            if (!navigator.onLine) return;
+
+            const now = Date.now();
+            if (!forceUpload && lastUploadedFleetLat !== null && lastUploadedFleetLng !== null) {
+                const distMeters = getDistanceKm(lastUploadedFleetLng, lastUploadedFleetLat, lng, lat) * 1000;
+                if (distMeters <= 10) return; // 移動未超過 10 公尺不重複上傳
+            }
+
+            lastUploadedFleetLat = lat;
+            lastUploadedFleetLng = lng;
+            lastFleetUploadTime = now;
+
+            const payload = {
+                name: fleetUserName,
+                lat: Number(lat.toFixed(6)),
+                lng: Number(lng.toFixed(6)),
+                updatedAt: now
+            };
+
+            try {
+                await fetch(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    keepalive: true
+                });
+            } catch (err) {
+                // 靜默忽略暫時性網路錯誤
+            }
+        }
+
+        window.onFleetPositionUpdate = function(lat, lng) {
+            if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+            currentFleetLat = lat;
+            currentFleetLng = lng;
+            if (fleetUserName) {
+                uploadMyFleetLocation(lat, lng, false);
+            }
+        };
+
+        function createFleetTruckMarkerElement(memberName) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
+            wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
+            wrapper.innerHTML = `
+                <div class="bg-emerald-600 text-white px-2.5 py-1 rounded-full border-2 border-white font-black text-xs flex items-center gap-1.5 whitespace-nowrap shadow-md">
+                    <i class="fa-solid fa-truck text-amber-300 text-xs"></i>
+                    <span class="fleet-member-name"></span>
+                </div>
+                <div class="w-2.5 h-2.5 bg-emerald-600 border-r-2 border-b-2 border-white transform rotate-45 -mt-1.5"></div>
+            `;
+            wrapper.querySelector('.fleet-member-name').textContent = memberName || '隊員';
+            return wrapper;
+        }
+
+        async function fetchAndRenderFleetRadar() {
+            if (!fleetUserName || !navigator.onLine) return;
+            try {
+                const res = await fetch(LIVE_FLEET_ALL_URL, { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json();
+                const now = Date.now();
+                const activeIds = new Set();
+
+                if (data && typeof data === 'object') {
+                    Object.entries(data).forEach(([devId, info]) => {
+                        if (!info || devId === fleetDeviceId) return; // 排除自己
+                        const lat = Number(info.lat);
+                        const lng = Number(info.lng);
+                        const updatedAt = typeof info.updatedAt === 'number'
+                            ? info.updatedAt
+                            : new Date(info.updatedAt || 0).getTime();
+
+                        if (isNaN(lat) || isNaN(lng) || !updatedAt) return;
+                        // 僅顯示 3 分鐘（180 秒）內有更新的線上友車
+                        if (now - updatedAt > 180 * 1000) return;
+
+                        activeIds.add(devId);
+                        const memberName = (info.name || '隊員').trim();
+
+                        if (fleetLayerGroup[devId]) {
+                            fleetLayerGroup[devId].marker.setLngLat([lng, lat]);
+                            if (fleetLayerGroup[devId].name !== memberName) {
+                                const nameSpan = fleetLayerGroup[devId].el.querySelector('.fleet-member-name');
+                                if (nameSpan) nameSpan.textContent = memberName;
+                                fleetLayerGroup[devId].name = memberName;
+                            }
+                        } else {
+                            const el = createFleetTruckMarkerElement(memberName);
+                            const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+                                .setLngLat([lng, lat])
+                                .addTo(map);
+                            fleetLayerGroup[devId] = { marker, el, name: memberName };
+                        }
+                    });
+                }
+
+                // 移除超過 3 分鐘未更新或已離線的友車標記
+                Object.keys(fleetLayerGroup).forEach(devId => {
+                    if (!activeIds.has(devId)) {
+                        fleetLayerGroup[devId].marker.remove();
+                        delete fleetLayerGroup[devId];
+                    }
+                });
+            } catch (err) {
+                // 靜默處理讀取失敗，不干擾導航
+            }
+        }
+
+        function removeMyFleetLocationOnUnload() {
+            if (!fleetDeviceId) return;
+            const targetUrl = `${LIVE_FLEET_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`;
+            try {
+                fetch(targetUrl, {
+                    method: 'DELETE',
+                    keepalive: true
+                }).catch(() => {});
+            } catch (e) {}
+        }
+
+        window.addEventListener('pagehide', removeMyFleetLocationOnUnload);
+        window.addEventListener('beforeunload', removeMyFleetLocationOnUnload);
+
+        function startFleetRadarSystem() {
+            if (fleetRadarStarted || !fleetUserName) return;
+            fleetRadarStarted = true;
+
+            // 啟動全模式背景定位監聽（確保即使在預覽或切換畫面時也能持續更新座標）
+            if ('geolocation' in navigator && !fleetRadarWatchId) {
+                fleetRadarWatchId = navigator.geolocation.watchPosition(pos => {
+                    window.onFleetPositionUpdate(pos.coords.latitude, pos.coords.longitude);
+                }, () => {}, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
+            }
+
+            // 若目前已有定位座標，立即進行首次上線回報
+            if (lastKnownLngLat && Array.isArray(lastKnownLngLat) && currentFleetLat !== null) {
+                uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+            } else if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(pos => {
+                    window.onFleetPositionUpdate(pos.coords.latitude, pos.coords.longitude);
+                }, () => {}, { enableHighAccuracy: true });
+            }
+
+            // 每 8 秒靜默讀取 /live_fleet.json 更新友車圖層
+            fetchAndRenderFleetRadar();
+            fleetPollTimer = setInterval(fetchAndRenderFleetRadar, 8000);
+
+            // 60 秒定點心跳保活機制：若超過 60 秒未觸發移動上傳，原地補送一次 updatedAt
+            fleetHeartbeatTimer = setInterval(() => {
+                if (!fleetUserName || currentFleetLat === null || currentFleetLng === null) return;
+                if (Date.now() - lastFleetUploadTime >= 60000) {
+                    uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+                }
+            }, 10000);
+        }
+
+        // 初始化檢查使用者名稱與啟動車隊雷達
+        syncFleetUserNameUI();
+        if (fleetUserName) {
+            startFleetRadarSystem();
+        } else {
+            openFleetUserNameModal(true);
+        }
 
         document.addEventListener('visibilitychange', async () => {
             if (document.visibilityState === 'visible') {

@@ -1560,10 +1560,18 @@
             const blob = new Blob([routeData], { type: 'text/plain' });
             const file = new File([blob], `${route.name}.txt`, { type: 'text/plain' });
             
+            // 🚀 判斷：如果手機支援原生分享
             if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                try { await navigator.share({ title: '分享清運路線', files: [file] }); return; } catch (err) {}
+                try { 
+                    await navigator.share({ title: '分享清運路線', files: [file] }); 
+                    return; // 分享成功，直接結束
+                } catch (err) {
+                    // 🚀 核心修復：如果按了取消或分享中斷，直接 return 結束，不要往下跑去下載！
+                    return; 
+                }
             }
             
+            // 只有在完全不支援分享的設備，才會走到傳統下載備案
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = `${route.name}.txt`;

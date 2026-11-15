@@ -301,7 +301,7 @@
         <div class="bg-white rounded-full px-4 py-2 shadow-xl pointer-events-auto w-full max-w-md flex items-center gap-3 border border-gray-100">
             <button id="playPauseBtn" class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-md flex-shrink-0 active:scale-95"><i class="fa-solid fa-pause"></i></button>
             <div class="flex-1 flex items-center py-2"><input id="playbackSlider" type="range" min="0" max="1000" value="0" step="1"></div>
-            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95">0.3x</button>
+            <button id="speedToggleBtn" class="text-xs font-black text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full flex-shrink-0 active:scale-95">1x</button>
         </div>
         <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md flex items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
@@ -1225,8 +1225,8 @@
 
         // --- 6. 模擬重播引擎 ---
         let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
-        const speedOptions = [0.3, 0.5, 1, 2, 4];
-        let speedMultiplier = 0.3;
+        const speedOptions = [1, 2, 4, 6];
+        let speedMultiplier = 1;
 
         const playbackSlider = document.getElementById('playbackSlider');
         const playPauseBtn = document.getElementById('playPauseBtn');
@@ -1234,12 +1234,13 @@
 
         document.getElementById('startReplayBtn').onclick = () => {
             const route = savedRoutes[selectedRouteIdx];
-            if (!route.points || route.points.length < 2) return;
+            if (!route || !route.points || route.points.length < 2) return;
 
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('playbackUI').classList.remove('hidden');
             document.getElementById('appStatusTitle').innerText = '路線重播複習';
             document.getElementById('playbackTitle').innerText = route.name;
+            speedToggleBtn.innerText = `${speedMultiplier}x`;
 
             map.getSource('bg-route')?.setData({
                 type: 'FeatureCollection',
@@ -1260,13 +1261,15 @@
 
         function renderInterpolatedStep(floatIdx) {
             const route = savedRoutes[selectedRouteIdx];
+            if (!route || !route.points || route.points.length < 2) return;
             const pts = route.points;
             const maxIdx = pts.length - 1;
             const clamped = Math.min(Math.max(floatIdx, 0), maxIdx);
-            const i = Math.floor(clamped);
+            const i = Math.min(Math.floor(clamped), maxIdx);
             const frac = clamped - i;
 
             const p1 = pts[i], p2 = pts[Math.min(i + 1, maxIdx)];
+            if (!p1 || !p2) return;
             const curLng = p1.lng + (p2.lng - p1.lng) * frac;
             const curLat = p1.lat + (p2.lat - p1.lat) * frac;
             lastKnownLngLat = [curLng, curLat];
@@ -1291,11 +1294,13 @@
 
         function playbackLoop(timestamp) {
             if (!isPlaying) return;
+            const route = savedRoutes[selectedRouteIdx];
+            if (!route || !route.points || route.points.length < 2) { stopSmoothPlayback(); return; }
             if (!lastFrameTime) lastFrameTime = timestamp;
-            const deltaSec = (timestamp - lastFrameTime) / 1000;
+            const deltaSec = Math.min(Math.max((timestamp - lastFrameTime) / 1000, 0), 0.1);
             lastFrameTime = timestamp;
 
-            const maxIdx = savedRoutes[selectedRouteIdx].points.length - 1;
+            const maxIdx = route.points.length - 1;
             playProgress += deltaSec * 2.5 * speedMultiplier;
 
             if (playProgress >= maxIdx) {

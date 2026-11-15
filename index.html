@@ -222,11 +222,6 @@
                 <i class="fa-solid fa-play"></i> <span id="recordBtnText">開始紀錄路線</span>
             </button>
 
-            <button id="mainPowerSaveBtn" type="button" class="w-full mt-2.5 bg-black hover:bg-gray-900 text-amber-400 font-extrabold py-3 rounded-2xl text-sm flex items-center justify-center gap-2 shadow-md border border-gray-800 active:scale-[0.98] transition-all">
-                <span>🌙 極致省電</span>
-                <span class="text-xs font-bold text-gray-400">（純黑關屏 · 持續分享位置）</span>
-            </button>
-
             <div class="flex justify-between text-center mt-3.5 pt-2.5 border-t border-gray-100 px-1">
                 <div class="flex-1">
                     <div class="text-gray-400 text-[11px] font-bold">距離</div>
@@ -2078,10 +2073,6 @@
         }
 
         document.getElementById('blackScreenBtn').onclick = () => enterBlackPowerSaveMode(true);
-        const mainPowerSaveBtn = document.getElementById('mainPowerSaveBtn');
-        if (mainPowerSaveBtn) {
-            mainPowerSaveBtn.onclick = () => enterBlackPowerSaveMode(true);
-        }
         blackOverlay.onclick = () => exitBlackPowerSaveMode(true);
 
         function autoWakeScreen() {
@@ -3497,9 +3488,6 @@
 
             const bBtn = document.getElementById('blackScreenBtn');
             if(bBtn) bBtn.addEventListener('click', pushFakeHistory);
-
-            const mPowerBtn = document.getElementById('mainPowerSaveBtn');
-            if(mPowerBtn) mPowerBtn.addEventListener('click', pushFakeHistory);
 
             // 4. 攔截開啟路線詳情的函數
             if (typeof window.openRouteDetail === 'function') {

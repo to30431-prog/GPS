@@ -65,20 +65,24 @@
                 </h3>
                 <span id="quickNavAlertCoordBadge" class="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-extrabold px-2 py-0.5 rounded-full">📍 已鎖定當下座標</span>
             </div>
-            <div class="flex flex-col gap-2">
-                <input type="text" id="quickNavAlertInput" maxlength="50" class="bg-gray-50 border-2 border-amber-300 focus:border-amber-500 text-gray-900 text-base font-black rounded-2xl p-3.5 w-full outline-none transition-colors" placeholder="直接輸入或語音口述（空白預設：注意路段）">
-                <button type="button" id="btnQuickNavVoiceInput" class="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm">
-                    <i id="quickNavVoiceIcon" class="fa-solid fa-microphone text-base text-indigo-600"></i>
-                    <span id="quickNavVoiceBtnText">🎤 語音輸入</span>
-                </button>
-                <div id="quickNavVoiceStatus" class="hidden text-xs font-bold text-center text-indigo-600"></div>
+            <!-- 🔴 明顯的收音狀態提示（紅色呼吸燈動畫） -->
+            <div id="quickNavVoiceStatus" class="voice-breathing-banner bg-red-50 border-2 border-red-300 text-red-600 rounded-2xl px-3.5 py-2.5 flex items-center justify-center gap-2 text-sm font-black text-center shadow-sm">
+                <span id="quickNavVoiceDot" class="voice-breathing-dot"></span>
+                <span id="quickNavVoiceStatusText">🔴 正在聆聽中... 請直接說話</span>
             </div>
-            <div class="grid grid-cols-2 gap-2.5 mt-1">
-                <button type="button" id="btnCancelQuickNavAlert" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-3.5 rounded-2xl active:scale-95 text-base border border-gray-200">
+            <div class="flex flex-col gap-2.5">
+                <input type="text" id="quickNavAlertInput" maxlength="50" class="bg-gray-50 border-2 border-amber-300 focus:border-amber-500 text-gray-900 text-base font-black rounded-2xl p-3.5 w-full outline-none transition-colors" placeholder="直接說話自動填入，或點擊手動修改（空白預設：注意路段）">
+                <button type="button" id="btnQuickNavVoiceInput" class="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm">
+                    <i id="quickNavVoiceIcon" class="fa-solid fa-microphone-lines text-base text-indigo-600"></i>
+                    <span id="quickNavVoiceBtnText">🎤 重新語音輸入</span>
+                </button>
+            </div>
+            <div class="grid grid-cols-3 gap-2.5 mt-1">
+                <button type="button" id="btnCancelQuickNavAlert" class="col-span-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-4 rounded-2xl active:scale-95 text-base border-2 border-gray-200">
                     取消
                 </button>
-                <button type="button" id="btnConfirmQuickNavAlert" class="bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-base">
-                    <i class="fa-solid fa-check"></i> 確定標記
+                <button type="button" id="btnConfirmQuickNavAlert" class="col-span-2 bg-amber-500 hover:bg-amber-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 flex items-center justify-center gap-2 text-lg border-2 border-amber-400">
+                    <i class="fa-solid fa-check text-xl"></i> 確定標記
                 </button>
             </div>
         </div>

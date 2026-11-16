@@ -2008,7 +2008,7 @@ const endFollowAction = () => {
 document.getElementById('followStopBtn').onclick = endFollowAction;
 document.getElementById('tacticalStopBtn').onclick = endFollowAction;
 
-// --- 7.5 ⚠️ 遵循導航中「一鍵即時標記黃色注意點（支援語音輸入）」 ---
+// --- 7.5 ⚠️ 遵循導航中「一鍵即時標記黃色注意點（預設自動啟動語音輸入，不自動彈出鍵盤）」 ---
 const tacticalQuickAlertBtn = document.getElementById('tacticalQuickAlertBtn');
 const quickNavAlertModal = document.getElementById('quickNavAlertModal');
 const quickNavAlertInput = document.getElementById('quickNavAlertInput');
@@ -2017,6 +2017,8 @@ const btnQuickNavVoiceInput = document.getElementById('btnQuickNavVoiceInput');
 const quickNavVoiceIcon = document.getElementById('quickNavVoiceIcon');
 const quickNavVoiceBtnText = document.getElementById('quickNavVoiceBtnText');
 const quickNavVoiceStatus = document.getElementById('quickNavVoiceStatus');
+const quickNavVoiceDot = document.getElementById('quickNavVoiceDot');
+const quickNavVoiceStatusText = document.getElementById('quickNavVoiceStatusText');
 const btnConfirmQuickNavAlert = document.getElementById('btnConfirmQuickNavAlert');
 const btnCancelQuickNavAlert = document.getElementById('btnCancelQuickNavAlert');
 
@@ -2026,29 +2028,138 @@ let lockedQuickAlertPtIdx = 0;
 let lockedQuickAlertBearing = 0;
 let quickSpeechRecognition = null;
 let isQuickSpeechListening = false;
+let quickSpeechSessionId = 0;
+
+function updateQuickVoiceStatusUI(mode, message) {
+    if (!quickNavVoiceStatus) return;
+    quickNavVoiceStatus.classList.remove('hidden');
+
+    if (mode === 'listening') {
+        quickNavVoiceStatus.className = 'voice-breathing-banner bg-red-50 border-2 border-red-300 text-red-600 rounded-2xl px-3.5 py-2.5 flex items-center justify-center gap-2 text-sm font-black text-center shadow-sm';
+        if (quickNavVoiceDot) quickNavVoiceDot.className = 'voice-breathing-dot';
+    } else if (mode === 'success') {
+        quickNavVoiceStatus.className = 'bg-emerald-50 border-2 border-emerald-300 text-emerald-700 rounded-2xl px-3.5 py-2.5 flex items-center justify-center gap-2 text-xs sm:text-sm font-extrabold text-center shadow-sm';
+        if (quickNavVoiceDot) quickNavVoiceDot.className = 'hidden';
+    } else {
+        quickNavVoiceStatus.className = 'bg-amber-50 border-2 border-amber-200 text-amber-700 rounded-2xl px-3.5 py-2.5 flex items-center justify-center gap-2 text-xs font-extrabold text-center shadow-sm';
+        if (quickNavVoiceDot) quickNavVoiceDot.className = 'hidden';
+    }
+
+    if (quickNavVoiceStatusText) {
+        quickNavVoiceStatusText.textContent = message;
+    } else {
+        quickNavVoiceStatus.textContent = message;
+    }
+}
 
 function stopQuickSpeechRecognition() {
     isQuickSpeechListening = false;
+    quickSpeechSessionId++;
     if (quickSpeechRecognition) {
-        try { quickSpeechRecognition.stop(); } catch (e) {}
+        const recToStop = quickSpeechRecognition;
         quickSpeechRecognition = null;
+        try {
+            recToStop.onresult = null;
+            recToStop.onerror = null;
+            recToStop.onend = null;
+            recToStop.stop();
+        } catch (e) {}
     }
     if (btnQuickNavVoiceInput) {
         btnQuickNavVoiceInput.className = 'w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm';
     }
     if (quickNavVoiceIcon) {
-        quickNavVoiceIcon.className = 'fa-solid fa-microphone text-base text-indigo-600';
+        quickNavVoiceIcon.className = 'fa-solid fa-microphone-lines text-base text-indigo-600';
     }
     if (quickNavVoiceBtnText) {
-        quickNavVoiceBtnText.textContent = '🎤 語音輸入';
+        quickNavVoiceBtnText.textContent = '🎤 重新語音輸入';
+    }
+}
+
+function startQuickSpeechRecognition(clearExisting = false) {
+    stopQuickSpeechRecognition();
+
+    if (clearExisting && quickNavAlertInput) {
+        quickNavAlertInput.value = '';
+    }
+
+    // 暫停正在播報的 TTS 語音，避免干擾麥克風收音
+    if ('speechSynthesis' in window) {
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+        updateQuickVoiceStatusUI('warn', '⚠️ 此瀏覽器不支援自動語音收音，請點擊輸入框使用鍵盤語音或手動輸入');
+        return;
+    }
+
+    try {
+        const sessionId = ++quickSpeechSessionId;
+        const rec = new SpeechRec();
+        rec.lang = 'zh-TW';
+        rec.continuous = false;
+        rec.interimResults = true;
+        quickSpeechRecognition = rec;
+        isQuickSpeechListening = true;
+
+        updateQuickVoiceStatusUI('listening', '🔴 正在聆聽中... 請直接說話');
+
+        if (btnQuickNavVoiceInput) {
+            btnQuickNavVoiceInput.className = 'w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm';
+        }
+        if (quickNavVoiceIcon) {
+            quickNavVoiceIcon.className = 'fa-solid fa-rotate-right text-base text-indigo-600';
+        }
+        if (quickNavVoiceBtnText) {
+            quickNavVoiceBtnText.textContent = '🎤 重新語音輸入';
+        }
+
+        rec.onresult = (event) => {
+            if (sessionId !== quickSpeechSessionId) return;
+            let transcript = '';
+            for (let i = 0; i < event.results.length; i++) {
+                transcript += event.results[i][0].transcript;
+            }
+            const cleanTranscript = transcript.trim();
+            if (quickNavAlertInput && cleanTranscript) {
+                quickNavAlertInput.value = cleanTranscript;
+            }
+        };
+
+        rec.onerror = () => {
+            if (sessionId !== quickSpeechSessionId) return;
+            stopQuickSpeechRecognition();
+            const hasText = Boolean(quickNavAlertInput && quickNavAlertInput.value.trim());
+            if (hasText) {
+                updateQuickVoiceStatusUI('success', '✅ 語音辨識完成！可直接點擊「確定標記」');
+            } else {
+                updateQuickVoiceStatusUI('warn', '⚠️ 未偵測到語音，請按「🎤 重新語音輸入」再講一次，或點擊文字框手動輸入');
+            }
+        };
+
+        rec.onend = () => {
+            if (sessionId !== quickSpeechSessionId) return;
+            stopQuickSpeechRecognition();
+            const hasText = Boolean(quickNavAlertInput && quickNavAlertInput.value.trim());
+            if (hasText) {
+                updateQuickVoiceStatusUI('success', '✅ 語音辨識完成！可直接點擊下方「確定標記」');
+            } else {
+                updateQuickVoiceStatusUI('warn', '🎤 收音結束（未偵測到語音），可按「🎤 重新語音輸入」或直接點擊「確定標記」');
+            }
+        };
+
+        rec.start();
+    } catch (err) {
+        stopQuickSpeechRecognition();
+        updateQuickVoiceStatusUI('warn', '⚠️ 無法啟動麥克風，請按「🎤 重新語音輸入」重試或點擊文字框輸入');
     }
 }
 
 function closeQuickNavAlertModal() {
     stopQuickSpeechRecognition();
-    if (quickNavVoiceStatus) {
-        quickNavVoiceStatus.classList.add('hidden');
-        quickNavVoiceStatus.textContent = '';
+    if (quickNavAlertInput) {
+        quickNavAlertInput.blur();
     }
     if (quickNavAlertModal) {
         quickNavAlertModal.classList.add('hidden');
@@ -2089,28 +2200,17 @@ function openQuickNavAlertModal() {
     }
     if (quickNavAlertInput) {
         quickNavAlertInput.value = '';
-    }
-    stopQuickSpeechRecognition();
-
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec && quickNavVoiceStatus) {
-        quickNavVoiceStatus.textContent = '💡 請直接點擊下方鍵盤上的「🎤 麥克風」進行語音輸入';
-        quickNavVoiceStatus.classList.remove('hidden');
-    } else if (quickNavVoiceStatus) {
-        quickNavVoiceStatus.classList.add('hidden');
-        quickNavVoiceStatus.textContent = '';
+        // 禁止自動彈出手機鍵盤：確保輸入框不處於 focus 狀態，讓整個提醒視窗與下方大按鈕完整露出
+        quickNavAlertInput.blur();
     }
 
     if (quickNavAlertModal) {
         window.history.pushState({ pwa: true }, '');
         quickNavAlertModal.classList.remove('hidden');
-        // 自動聚焦輸入框，喚起手機鍵盤方便直接使用鍵盤語音或打字
-        setTimeout(() => {
-            if (quickNavAlertInput) {
-                quickNavAlertInput.focus();
-            }
-        }, 80);
     }
+
+    // 點擊黃色 ⚠️ 按鈕打開彈窗的同時，立即自動呼叫 Web Speech API (zh-TW) 開始收音
+    startQuickSpeechRecognition(true);
 }
 
 if (tacticalQuickAlertBtn) {
@@ -2122,82 +2222,11 @@ if (tacticalQuickAlertBtn) {
 
 if (btnQuickNavVoiceInput) {
     btnQuickNavVoiceInput.onclick = () => {
-        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRec) {
-            if (quickNavVoiceStatus) {
-                quickNavVoiceStatus.textContent = '💡 此瀏覽器不支援內建語音辨識，請點擊手機鍵盤上的「🎤 麥克風」語音輸入！';
-                quickNavVoiceStatus.classList.remove('hidden');
-            }
-            if (quickNavAlertInput) quickNavAlertInput.focus();
-            return;
+        // 保持軟鍵盤收起，直接重新啟動語音輸入（並清空前一次講錯的內容重新填入）
+        if (quickNavAlertInput) {
+            quickNavAlertInput.blur();
         }
-
-        if (isQuickSpeechListening) {
-            stopQuickSpeechRecognition();
-            if (quickNavVoiceStatus) {
-                quickNavVoiceStatus.textContent = '⏹️ 已停止語音聆聽';
-                quickNavVoiceStatus.classList.remove('hidden');
-            }
-            return;
-        }
-
-        try {
-            stopQuickSpeechRecognition();
-            const rec = new SpeechRec();
-            rec.lang = 'zh-TW';
-            rec.continuous = false;
-            rec.interimResults = true;
-            quickSpeechRecognition = rec;
-            isQuickSpeechListening = true;
-
-            btnQuickNavVoiceInput.className = 'w-full bg-red-50 hover:bg-red-100 text-red-600 border-2 border-red-300 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm animate-pulse';
-            if (quickNavVoiceIcon) quickNavVoiceIcon.className = 'fa-solid fa-microphone-lines text-base text-red-600';
-            if (quickNavVoiceBtnText) quickNavVoiceBtnText.textContent = '🔴 正在聆聽口述...（點擊停止）';
-            if (quickNavVoiceStatus) {
-                quickNavVoiceStatus.textContent = '🎙️ 請開始說話（例如：窄巷倒車、小心惡犬）...';
-                quickNavVoiceStatus.classList.remove('hidden');
-            }
-
-            const existingPrefix = (quickNavAlertInput?.value || '').trim();
-
-            rec.onresult = (event) => {
-                let transcript = '';
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    transcript += event.results[i][0].transcript;
-                }
-                const cleanTranscript = transcript.trim();
-                if (quickNavAlertInput && cleanTranscript) {
-                    quickNavAlertInput.value = existingPrefix ? `${existingPrefix} ${cleanTranscript}` : cleanTranscript;
-                }
-            };
-
-            rec.onerror = () => {
-                stopQuickSpeechRecognition();
-                if (quickNavVoiceStatus) {
-                    quickNavVoiceStatus.textContent = '⚠️ 未偵測到語音或麥克風未授權，亦可直接使用鍵盤🎤語音輸入';
-                    quickNavVoiceStatus.classList.remove('hidden');
-                }
-            };
-
-            rec.onend = () => {
-                stopQuickSpeechRecognition();
-                if (quickNavAlertInput && quickNavAlertInput.value.trim()) {
-                    if (quickNavVoiceStatus) {
-                        quickNavVoiceStatus.textContent = '✅ 語音辨識完成！可直接點擊「確定標記」';
-                        quickNavVoiceStatus.classList.remove('hidden');
-                    }
-                }
-            };
-
-            rec.start();
-        } catch (err) {
-            stopQuickSpeechRecognition();
-            if (quickNavVoiceStatus) {
-                quickNavVoiceStatus.textContent = '💡 請直接使用下方手機鍵盤的「🎤 麥克風」語音輸入';
-                quickNavVoiceStatus.classList.remove('hidden');
-            }
-            if (quickNavAlertInput) quickNavAlertInput.focus();
-        }
+        startQuickSpeechRecognition(true);
     };
 }
 

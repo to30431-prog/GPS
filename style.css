@@ -75,3 +75,65 @@ input[type=range]::-webkit-slider-runnable-track {
     100% { transform: translateX(-50%) scale(1); opacity: 1; }
 }
 .nav-alert-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+/* 📍 全車隊共享地圖地標：藍色水滴＋縮圖照片樣式 */
+.shared-pin-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.45));
+    transition: transform 0.15s ease-out;
+}
+.shared-pin-wrapper:active {
+    transform: scale(0.92);
+}
+.shared-pin-label {
+    background: rgba(30, 58, 138, 0.92);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1.5px solid #ffffff;
+    margin-bottom: 5px;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+.shared-pin-teardrop {
+    width: 44px;
+    height: 44px;
+    border-radius: 50% 50% 50% 0;
+    transform: rotate(-45deg);
+    background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+    border: 2.5px solid #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    margin-bottom: 4px;
+}
+.shared-pin-inner {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    transform: rotate(45deg);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.15);
+}
+.shared-pin-inner img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    border-radius: 50%;
+}
+

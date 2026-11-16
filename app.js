@@ -1627,6 +1627,9 @@ function syncMapRenderOnWake() {
     if (typeof fetchAndRenderFleetRadar === 'function') {
         fetchAndRenderFleetRadar();
     }
+    if (typeof fetchAndRenderSharedMapPins === 'function') {
+        fetchAndRenderSharedMapPins();
+    }
 }
 
 // 進入全螢幕純黑 (#000000) 智慧省電模式
@@ -3154,6 +3157,9 @@ function startFleetRadarSystem() {
     // 每 8 秒靜默讀取 /live_fleet.json 更新友車圖層
     fetchAndRenderFleetRadar();
     fleetPollTimer = setInterval(fetchAndRenderFleetRadar, 8000);
+    if (typeof fetchAndRenderSharedMapPins === 'function') {
+        fetchAndRenderSharedMapPins();
+    }
 
     // 60 秒定點心跳保活機制：若超過 60 秒未觸發移動上傳，原地補送一次 updatedAt
     fleetHeartbeatTimer = setInterval(() => {
@@ -3185,8 +3191,549 @@ document.addEventListener('visibilitychange', async () => {
             uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
         }
         fetchAndRenderFleetRadar();
+        if (typeof fetchAndRenderSharedMapPins === 'function') {
+            fetchAndRenderSharedMapPins();
+        }
     }
 });
+
+// ==========================================
+// 📍 10. 全車隊共享地圖地標（藍色水滴＋縮圖照片）
+// ==========================================
+const MAP_PINS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/map_pins';
+const MAP_PINS_ALL_URL = `${MAP_PINS_BASE_URL}.json`;
+
+// 獨立的共享地標圖層群組（不受 clearDomMarkers 影響，於一般、錄製、預覽、重播與導航模式皆保留）
+const pinsLayerGroup = {};
+window.pinsLayerGroup = pinsLayerGroup;
+
+let mapPinsPollTimer = null;
+let isFetchingMapPins = false;
+let pendingMapPinLat = null;
+let pendingMapPinLng = null;
+let currentMapPinPhotoBase64 = '';
+let activeViewingMapPin = null;
+
+const createMapPinModal = document.getElementById('createMapPinModal');
+const createMapPinCoordsText = document.getElementById('createMapPinCoordsText');
+const mapPinTitleInput = document.getElementById('mapPinTitleInput');
+const mapPinCameraInput = document.getElementById('mapPinCameraInput');
+const mapPinGalleryInput = document.getElementById('mapPinGalleryInput');
+const mapPinPhotoStatus = document.getElementById('mapPinPhotoStatus');
+const mapPinPhotoPreviewWrap = document.getElementById('mapPinPhotoPreviewWrap');
+const mapPinPhotoPreviewImg = document.getElementById('mapPinPhotoPreviewImg');
+const btnRemoveMapPinPhoto = document.getElementById('btnRemoveMapPinPhoto');
+const btnSaveMapPin = document.getElementById('btnSaveMapPin');
+const btnCancelCreateMapPin = document.getElementById('btnCancelCreateMapPin');
+const btnCloseCreateMapPinTop = document.getElementById('btnCloseCreateMapPinTop');
+
+const viewMapPinModal = document.getElementById('viewMapPinModal');
+const viewMapPinTitleText = document.getElementById('viewMapPinTitleText');
+const viewMapPinAuthorText = document.getElementById('viewMapPinAuthorText');
+const viewMapPinTimeText = document.getElementById('viewMapPinTimeText');
+const viewMapPinPhotoWrap = document.getElementById('viewMapPinPhotoWrap');
+const viewMapPinPhotoImg = document.getElementById('viewMapPinPhotoImg');
+const btnDeleteMapPin = document.getElementById('btnDeleteMapPin');
+const btnCloseViewMapPin = document.getElementById('btnCloseViewMapPin');
+const btnCloseViewMapPinTop = document.getElementById('btnCloseViewMapPinTop');
+
+function formatPinCreatedAt(ts) {
+    if (!ts) return '未知時間';
+    const d = new Date(typeof ts === 'number' ? ts : Number(ts) || ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString('zh-TW', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function resetMapPinPhotoInputs() {
+    if (mapPinCameraInput) mapPinCameraInput.value = '';
+    if (mapPinGalleryInput) mapPinGalleryInput.value = '';
+}
+
+function updateMapPinPhotoPreviewUI(base64Str, statusText = '') {
+    currentMapPinPhotoBase64 = base64Str || '';
+    if (currentMapPinPhotoBase64) {
+        if (mapPinPhotoPreviewImg) mapPinPhotoPreviewImg.src = currentMapPinPhotoBase64;
+        if (mapPinPhotoPreviewWrap) mapPinPhotoPreviewWrap.classList.remove('hidden');
+        if (mapPinPhotoStatus) {
+            if (statusText) {
+                mapPinPhotoStatus.innerText = statusText;
+            } else {
+                const kb = Math.max(1, Math.round((currentMapPinPhotoBase64.length * 0.75) / 1024));
+                mapPinPhotoStatus.innerText = `✅ 已附加現場照片（約 ${kb} KB）`;
+            }
+            mapPinPhotoStatus.classList.remove('hidden');
+        }
+    } else {
+        if (mapPinPhotoPreviewImg) mapPinPhotoPreviewImg.src = '';
+        if (mapPinPhotoPreviewWrap) mapPinPhotoPreviewWrap.classList.add('hidden');
+        if (mapPinPhotoStatus) {
+            mapPinPhotoStatus.innerText = '';
+            mapPinPhotoStatus.classList.add('hidden');
+        }
+    }
+}
+
+if (btnRemoveMapPinPhoto) {
+    btnRemoveMapPinPhoto.onclick = () => {
+        resetMapPinPhotoInputs();
+        updateMapPinPhotoPreviewUI('');
+    };
+}
+if (mapPinPhotoPreviewImg) {
+    mapPinPhotoPreviewImg.onclick = () => {
+        if (currentMapPinPhotoBase64) window.openPhotoLightbox(currentMapPinPhotoBase64);
+    };
+}
+if (viewMapPinPhotoImg) {
+    viewMapPinPhotoImg.onclick = () => {
+        if (viewMapPinPhotoImg.src) window.openPhotoLightbox(viewMapPinPhotoImg.src);
+    };
+}
+
+// 使用前端 <canvas> 自動等比例縮放壓縮至寬度最大 600px、JPEG 品質 0.7
+function renderPinImageToCompressedBase64(source, srcWidth, srcHeight) {
+    const maxWidth = 600;
+    let targetW = srcWidth || 600;
+    let targetH = srcHeight || 450;
+    if (targetW > maxWidth) {
+        targetH = Math.round(targetH * (maxWidth / targetW));
+        targetW = maxWidth;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.drawImage(source, 0, 0, targetW, targetH);
+
+    let quality = 0.7;
+    let dataUrl = canvas.toDataURL('image/jpeg', quality);
+    let byteSize = Math.round((dataUrl.length - 'data:image/jpeg;base64,'.length) * 0.75);
+
+    while (byteSize > 120 * 1024 && quality > 0.35) {
+        quality = Math.max(0.3, quality - 0.1);
+        dataUrl = canvas.toDataURL('image/jpeg', quality);
+        byteSize = Math.round((dataUrl.length - 'data:image/jpeg;base64,'.length) * 0.75);
+    }
+
+    return { dataUrl, kb: Math.max(1, Math.round(byteSize / 1024)) };
+}
+
+function compressMapPinImageFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('讀取照片失敗'));
+        reader.onload = (ev) => {
+            const rawDataUrl = ev.target.result;
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    resolve(renderPinImageToCompressedBase64(img, img.naturalWidth || img.width, img.naturalHeight || img.height));
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            img.onerror = async () => {
+                if (typeof window.createImageBitmap === 'function') {
+                    try {
+                        const bmp = await window.createImageBitmap(file);
+                        const res = renderPinImageToCompressedBase64(bmp, bmp.width, bmp.height);
+                        if (typeof bmp.close === 'function') bmp.close();
+                        resolve(res);
+                        return;
+                    } catch (e) {}
+                }
+                reject(new Error('不支援的照片格式'));
+            };
+            img.src = rawDataUrl;
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+async function handleMapPinPhotoInputChange(e) {
+    const inputEl = e.target;
+    const file = inputEl.files && inputEl.files[0];
+    inputEl.value = '';
+    if (!file) return;
+
+    if (mapPinPhotoStatus) {
+        mapPinPhotoStatus.innerText = '⏳ 正在縮放壓縮照片...';
+        mapPinPhotoStatus.classList.remove('hidden');
+    }
+    try {
+        const { dataUrl, kb } = await compressMapPinImageFile(file);
+        updateMapPinPhotoPreviewUI(dataUrl, `✅ 照片已壓縮完成（${kb} KB · 寬度 ≤ 600px）`);
+    } catch (err) {
+        console.error('地標照片壓縮失敗:', err);
+        alert('⚠️ 無法處理此照片格式，請改用相機拍照或選擇一般 JPG/PNG 圖片！');
+        updateMapPinPhotoPreviewUI(currentMapPinPhotoBase64 || '');
+    }
+}
+
+if (mapPinCameraInput) mapPinCameraInput.onchange = handleMapPinPhotoInputChange;
+if (mapPinGalleryInput) mapPinGalleryInput.onchange = handleMapPinPhotoInputChange;
+
+function openCreateMapPinModal(lat, lng) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+    pendingMapPinLat = lat;
+    pendingMapPinLng = lng;
+
+    if (createMapPinCoordsText) {
+        createMapPinCoordsText.innerText = `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+    if (mapPinTitleInput) {
+        mapPinTitleInput.value = '';
+    }
+    resetMapPinPhotoInputs();
+    updateMapPinPhotoPreviewUI('');
+
+    if (createMapPinModal) {
+        window.history.pushState({ pwa: true }, '');
+        createMapPinModal.classList.remove('hidden');
+        setTimeout(() => mapPinTitleInput?.focus(), 120);
+    }
+}
+
+function closeCreateMapPinModal() {
+    if (createMapPinModal) createMapPinModal.classList.add('hidden');
+    pendingMapPinLat = null;
+    pendingMapPinLng = null;
+}
+
+if (btnCancelCreateMapPin) btnCancelCreateMapPin.onclick = closeCreateMapPinModal;
+if (btnCloseCreateMapPinTop) btnCloseCreateMapPinTop.onclick = closeCreateMapPinModal;
+
+async function saveNewSharedMapPin() {
+    if (pendingMapPinLat === null || pendingMapPinLng === null) return;
+    const titleVal = (mapPinTitleInput?.value || '').trim();
+    if (!titleVal) {
+        alert('請輸入地標備註標題或說明（例如：巷口大型廢棄物堆置）！');
+        mapPinTitleInput?.focus();
+        return;
+    }
+    if (!navigator.onLine) {
+        alert('⚠️ 目前無網路連線，請確認網路狀態後再新增共享地標！');
+        return;
+    }
+
+    const pinId = 'pin_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    const authorName = (fleetUserName || localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '熱心隊員').trim();
+    const createdAt = Date.now();
+
+    const pinData = {
+        id: pinId,
+        lat: Number(pendingMapPinLat.toFixed(6)),
+        lng: Number(pendingMapPinLng.toFixed(6)),
+        title: titleVal,
+        photo: currentMapPinPhotoBase64 || '',
+        author: authorName,
+        createdAt: createdAt
+    };
+
+    const origBtnHtml = btnSaveMapPin ? btnSaveMapPin.innerHTML : '';
+    if (btnSaveMapPin) {
+        btnSaveMapPin.disabled = true;
+        btnSaveMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在上傳地標...';
+    }
+
+    try {
+        const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pinData)
+        }, 5000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        upsertPinMarkerOnMap(pinId, pinData);
+        closeCreateMapPinModal();
+        fetchAndRenderSharedMapPins();
+    } catch (err) {
+        console.error('上傳共享地標失敗:', err);
+        alert('❌ 新增地標失敗（網路不穩或 5 秒連線逾時），請稍後再試！');
+    } finally {
+        if (btnSaveMapPin) {
+            btnSaveMapPin.disabled = false;
+            btnSaveMapPin.innerHTML = origBtnHtml;
+        }
+    }
+}
+
+if (btnSaveMapPin) btnSaveMapPin.onclick = saveNewSharedMapPin;
+
+function openViewMapPinModal(pin) {
+    if (!pin) return;
+    activeViewingMapPin = pin;
+
+    if (viewMapPinTitleText) viewMapPinTitleText.textContent = pin.title || '現場注意事項';
+    if (viewMapPinAuthorText) viewMapPinAuthorText.textContent = pin.author || '熱心隊員';
+    if (viewMapPinTimeText) viewMapPinTimeText.textContent = formatPinCreatedAt(pin.createdAt);
+
+    if (pin.photo) {
+        if (viewMapPinPhotoImg) viewMapPinPhotoImg.src = pin.photo;
+        if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.remove('hidden');
+    } else {
+        if (viewMapPinPhotoImg) viewMapPinPhotoImg.src = '';
+        if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.add('hidden');
+    }
+
+    if (viewMapPinModal) {
+        window.history.pushState({ pwa: true }, '');
+        viewMapPinModal.classList.remove('hidden');
+    }
+}
+
+function closeViewMapPinModal() {
+    if (viewMapPinModal) viewMapPinModal.classList.add('hidden');
+    activeViewingMapPin = null;
+}
+
+if (btnCloseViewMapPin) btnCloseViewMapPin.onclick = closeViewMapPinModal;
+if (btnCloseViewMapPinTop) btnCloseViewMapPinTop.onclick = closeViewMapPinModal;
+
+if (btnDeleteMapPin) {
+    btnDeleteMapPin.onclick = async () => {
+        if (!activeViewingMapPin || !activeViewingMapPin.id) return;
+        const pinId = activeViewingMapPin.id;
+        const pinTitle = activeViewingMapPin.title || '此地標';
+
+        if (!confirm(`確定「${pinTitle}」已清理完畢，要從全車隊地圖同步移除嗎？`)) return;
+        if (!navigator.onLine) {
+            alert('⚠️ 目前無網路連線，無法同步移除雲端地標！');
+            return;
+        }
+
+        const origHtml = btnDeleteMapPin.innerHTML;
+        btnDeleteMapPin.disabled = true;
+        btnDeleteMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步銷案...';
+
+        try {
+            const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
+                method: 'DELETE'
+            }, 5000);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            if (pinsLayerGroup[pinId]) {
+                try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
+                delete pinsLayerGroup[pinId];
+            }
+            closeViewMapPinModal();
+            fetchAndRenderSharedMapPins();
+        } catch (err) {
+            console.error('刪除共享地標失敗:', err);
+            alert('❌ 移除地標失敗（網路不穩或連線逾時），請稍後再試！');
+        } finally {
+            btnDeleteMapPin.disabled = false;
+            btnDeleteMapPin.innerHTML = origHtml;
+        }
+    };
+}
+
+function createSharedPinMarkerElement(pin) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'shared-pin-wrapper';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'shared-pin-label';
+    labelEl.textContent = pin.title || '現場地標';
+    wrapper.appendChild(labelEl);
+
+    const teardrop = document.createElement('div');
+    teardrop.className = 'shared-pin-teardrop';
+
+    const inner = document.createElement('div');
+    inner.className = 'shared-pin-inner';
+
+    if (pin.photo) {
+        const img = document.createElement('img');
+        img.src = pin.photo;
+        img.alt = pin.title || '地標縮圖';
+        inner.appendChild(img);
+    } else {
+        inner.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-white text-sm"></i>';
+    }
+
+    teardrop.appendChild(inner);
+    wrapper.appendChild(teardrop);
+
+    wrapper.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (pinsLayerGroup[pin.id]?.data) {
+            openViewMapPinModal(pinsLayerGroup[pin.id].data);
+        } else {
+            openViewMapPinModal(pin);
+        }
+    });
+
+    return wrapper;
+}
+
+function upsertPinMarkerOnMap(pinId, pinData) {
+    const lat = Number(pinData.lat);
+    const lng = Number(pinData.lng);
+    if (isNaN(lat) || isNaN(lng)) return;
+
+    const normalizedPin = { ...pinData, id: pinId, lat, lng };
+    const signature = `${normalizedPin.title || ''}|${Boolean(normalizedPin.photo)}|${(normalizedPin.photo || '').length}`;
+
+    if (pinsLayerGroup[pinId]) {
+        pinsLayerGroup[pinId].marker.setLngLat([lng, lat]);
+        pinsLayerGroup[pinId].data = normalizedPin;
+        if (pinsLayerGroup[pinId].signature !== signature) {
+            try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
+            const el = createSharedPinMarkerElement(normalizedPin);
+            const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+                .setLngLat([lng, lat])
+                .addTo(map);
+            pinsLayerGroup[pinId] = { marker, el, data: normalizedPin, signature };
+        }
+    } else {
+        const el = createSharedPinMarkerElement(normalizedPin);
+        const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+            .setLngLat([lng, lat])
+            .addTo(map);
+        pinsLayerGroup[pinId] = { marker, el, data: normalizedPin, signature };
+    }
+}
+
+async function fetchAndRenderSharedMapPins() {
+    if (!navigator.onLine || isFetchingMapPins) return;
+    if (isPowerSaveMapPaused()) return;
+    isFetchingMapPins = true;
+    try {
+        const res = await fetchWithTimeout(MAP_PINS_ALL_URL, { cache: 'no-store' }, 5000);
+        if (!res.ok) return;
+        const data = await res.json();
+        const activePinIds = new Set();
+
+        if (data && typeof data === 'object') {
+            Object.entries(data).forEach(([key, pin]) => {
+                if (!pin || typeof pin !== 'object') return;
+                const pinId = pin.id || key;
+                const lat = Number(pin.lat);
+                const lng = Number(pin.lng);
+                if (isNaN(lat) || isNaN(lng)) return;
+                activePinIds.add(pinId);
+                upsertPinMarkerOnMap(pinId, { ...pin, id: pinId });
+            });
+        }
+
+        // 同步清除已被隊友銷案移除的地標
+        Object.keys(pinsLayerGroup).forEach(pinId => {
+            if (!activePinIds.has(pinId)) {
+                try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
+                delete pinsLayerGroup[pinId];
+            }
+        });
+    } catch (err) {
+        // 弱訊號或超時靜默略過，下週期自動恢復
+    } finally {
+        isFetchingMapPins = false;
+    }
+}
+
+// 綁定長按 1.5 秒（1500ms）防誤觸與桌面右鍵新增地標互動
+(function setupMapLongPressForPins() {
+    let longPressTimer = null;
+    let startClientX = 0;
+    let startClientY = 0;
+    let pendingLngLat = null;
+
+    function clearLongPressTimer() {
+        if (longPressTimer !== null) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    }
+
+    const canvasContainer = map.getCanvasContainer();
+
+    canvasContainer.addEventListener('touchstart', (e) => {
+        clearLongPressTimer();
+        if (isEditingMode) return;
+        if (!e.touches || e.touches.length !== 1) return;
+
+        const targetEl = e.target;
+        if (targetEl && targetEl.closest && targetEl.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker, .pin-s, .pin-e')) {
+            return;
+        }
+
+        const touch = e.touches[0];
+        startClientX = touch.clientX;
+        startClientY = touch.clientY;
+
+        const rect = canvasContainer.getBoundingClientRect();
+        const pointX = touch.clientX - rect.left;
+        const pointY = touch.clientY - rect.top;
+        pendingLngLat = map.unproject([pointX, pointY]);
+
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            if (isEditingMode || !pendingLngLat) return;
+            try { navigator.vibrate?.(50); } catch (err) {}
+            openCreateMapPinModal(pendingLngLat.lat, pendingLngLat.lng);
+        }, 1500);
+    }, { passive: true });
+
+    canvasContainer.addEventListener('touchmove', (e) => {
+        if (longPressTimer === null) return;
+        if (!e.touches || e.touches.length !== 1) {
+            clearLongPressTimer();
+            return;
+        }
+        const touch = e.touches[0];
+        const moveDist = Math.hypot(touch.clientX - startClientX, touch.clientY - startClientY);
+        if (moveDist > 10) {
+            clearLongPressTimer();
+        }
+    }, { passive: true });
+
+    canvasContainer.addEventListener('touchend', clearLongPressTimer, { passive: true });
+    canvasContainer.addEventListener('touchcancel', clearLongPressTimer, { passive: true });
+
+    ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach(evtName => {
+        map.on(evtName, clearLongPressTimer);
+    });
+
+    // 桌面端支援右鍵 contextmenu 觸發
+    map.on('contextmenu', (e) => {
+        clearLongPressTimer();
+        if (isEditingMode) return;
+        const origTarget = e.originalEvent?.target;
+        if (origTarget && origTarget.closest && origTarget.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker')) {
+            return;
+        }
+        if (e.originalEvent) e.originalEvent.preventDefault();
+        try { navigator.vibrate?.(50); } catch (err) {}
+        if (e.lngLat) {
+            openCreateMapPinModal(e.lngLat.lat, e.lngLat.lng);
+        }
+    });
+})();
+
+function startSharedMapPinsSystem() {
+    if (mapPinsPollTimer !== null) {
+        clearInterval(mapPinsPollTimer);
+        mapPinsPollTimer = null;
+    }
+    fetchAndRenderSharedMapPins();
+    mapPinsPollTimer = setInterval(fetchAndRenderSharedMapPins, 20000);
+}
+
+// 開啟 App 時立即讀取一次 /map_pins.json 並啟動定期同步
+if (map.loaded()) {
+    startSharedMapPinsSystem();
+} else {
+    map.once('load', startSharedMapPinsSystem);
+}
+startSharedMapPinsSystem();
 
 // ==========================================
 // 🚀 【終極防誤關 App】攔截手機實體返回鍵
@@ -3204,6 +3751,8 @@ document.addEventListener('visibilitychange', async () => {
         const viewAlertModal = document.getElementById('viewAlertModal');
         const photoLightboxModal = document.getElementById('photoLightboxModal');
         const uploadConflictModal = document.getElementById('uploadConflictModal');
+        const createMapPinModal = document.getElementById('createMapPinModal');
+        const viewMapPinModal = document.getElementById('viewMapPinModal');
 
         // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
         if (blackOverlay && !blackOverlay.classList.contains('hidden')) {
@@ -3214,6 +3763,12 @@ document.addEventListener('visibilitychange', async () => {
         }
         else if (uploadConflictModal && !uploadConflictModal.classList.contains('hidden')) {
             document.getElementById('btnConflictCancel').click();
+        }
+        else if (viewMapPinModal && !viewMapPinModal.classList.contains('hidden')) {
+            document.getElementById('btnCloseViewMapPin').click();
+        }
+        else if (createMapPinModal && !createMapPinModal.classList.contains('hidden')) {
+            document.getElementById('btnCancelCreateMapPin').click();
         }
         else if (viewAlertModal && !viewAlertModal.classList.contains('hidden')) {
             document.getElementById('btnCloseViewAlert').click();

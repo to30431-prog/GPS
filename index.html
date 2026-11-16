@@ -502,6 +502,87 @@
         </div>
     </div>
 
+    <!-- 📍 長按地圖：新增全車隊共享現場地標彈窗 -->
+    <div id="createMapPinModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto transition-opacity">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto border-2 border-blue-500">
+            <div class="flex items-center justify-between gap-2">
+                <h3 class="text-base sm:text-lg font-black text-blue-700 flex items-center gap-1.5">
+                    <span>📍 新增現場地標（如髒亂點／注意事項）</span>
+                </h3>
+                <button type="button" id="btnCloseCreateMapPinTop" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center active:scale-90 flex-shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="createMapPinCoordsText" class="text-[11px] font-bold text-gray-400 -mt-2 ml-1">座標：--</div>
+            <div class="flex flex-col gap-1">
+                <label class="text-sm font-bold text-gray-600 ml-1">備註標題／說明</label>
+                <input type="text" id="mapPinTitleInput" maxlength="60" class="bg-gray-50 border border-gray-200 text-gray-900 text-base font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例如：巷口大型廢棄物堆置">
+            </div>
+            <div class="flex flex-col gap-2">
+                <label class="text-sm font-bold text-gray-600 ml-1">現場照片（選填，自動縮放壓縮至 600px）</label>
+                <div class="grid grid-cols-2 gap-2.5">
+                    <label class="bg-blue-50 hover:bg-blue-100 text-blue-700 border-2 border-dashed border-blue-300 font-extrabold py-3 px-2 rounded-2xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs sm:text-sm shadow-sm text-center">
+                        <span>📷 相機拍照</span>
+                        <input type="file" id="mapPinCameraInput" accept="image/*" capture="environment" class="hidden">
+                    </label>
+                    <label class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-dashed border-indigo-300 font-extrabold py-3 px-2 rounded-2xl cursor-pointer active:scale-95 transition-all flex items-center justify-center gap-1.5 text-xs sm:text-sm shadow-sm text-center">
+                        <span>🖼️ 照片上傳</span>
+                        <input type="file" id="mapPinGalleryInput" accept="image/*" class="hidden">
+                    </label>
+                </div>
+                <div id="mapPinPhotoStatus" class="hidden text-xs font-bold text-emerald-600 text-center"></div>
+                <div id="mapPinPhotoPreviewWrap" class="hidden bg-gray-50 p-2.5 rounded-2xl border border-gray-200 flex flex-col items-center gap-2">
+                    <div class="relative w-full">
+                        <img id="mapPinPhotoPreviewImg" src="" alt="地標照片預覽" class="w-full max-h-44 object-cover rounded-xl shadow-sm cursor-pointer active:scale-[0.99]" title="點擊放大檢視">
+                        <span class="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] font-bold px-2 py-0.5 rounded-full pointer-events-none">🔍 點擊放大</span>
+                    </div>
+                    <button type="button" id="btnRemoveMapPinPhoto" class="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold py-2 rounded-xl text-xs flex items-center justify-center gap-1.5 active:scale-95">
+                        ❌ 移除照片
+                    </button>
+                </div>
+            </div>
+            <button type="button" id="btnSaveMapPin" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base shadow-md mt-1">
+                <i class="fa-solid fa-cloud-arrow-up"></i> 確認發布至全車隊地圖
+            </button>
+            <button type="button" id="btnCancelCreateMapPin" class="text-gray-500 font-extrabold py-1.5 active:scale-95 text-sm">取消</button>
+        </div>
+    </div>
+
+    <!-- 👀 點擊藍色水滴地標：檢視詳情與全隊同步銷案彈窗 -->
+    <div id="viewMapPinModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto transition-opacity">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto border-2 border-blue-500">
+            <div class="flex items-center justify-between">
+                <span class="bg-blue-100 text-blue-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5">
+                    <i class="fa-solid fa-location-dot text-blue-600"></i> 全車隊共享現場地標
+                </span>
+                <button type="button" id="btnCloseViewMapPinTop" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center active:scale-90">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="viewMapPinTitleText" class="text-xl font-black text-gray-900 px-1 break-words leading-snug">現場地標說明</div>
+            <div class="flex items-center justify-between text-xs font-bold text-gray-500 bg-gray-50 px-3 py-2 rounded-xl border border-gray-100">
+                <span class="flex items-center gap-1.5 text-blue-700">
+                    <i class="fa-solid fa-user-check"></i>
+                    <span>回報人：</span>
+                    <span id="viewMapPinAuthorText" class="font-black">隊員</span>
+                </span>
+                <span id="viewMapPinTimeText" class="text-gray-400">--</span>
+            </div>
+            <div id="viewMapPinPhotoWrap" class="hidden flex flex-col gap-1.5">
+                <div class="relative">
+                    <img id="viewMapPinPhotoImg" src="" alt="現場地標完整照片" class="w-full max-h-64 object-cover rounded-2xl border border-gray-200 shadow-md cursor-pointer active:scale-[0.99]">
+                    <span class="absolute bottom-2.5 right-2.5 bg-black/65 text-white text-xs font-bold px-2.5 py-1 rounded-full pointer-events-none">🔍 點擊照片放大檢視</span>
+                </div>
+            </div>
+            <button type="button" id="btnDeleteMapPin" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm mt-1">
+                🗑️ 已清理／移除地標
+            </button>
+            <button type="button" id="btnCloseViewMapPin" class="bg-gray-100 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 text-xs">
+                關閉視窗
+            </button>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

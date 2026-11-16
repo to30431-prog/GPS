@@ -188,6 +188,10 @@
                 <i class="fa-solid fa-play"></i> <span id="recordBtnText">開始紀錄路線</span>
             </button>
 
+            <button id="startManualDrawBtn" type="button" class="w-full mt-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 rounded-2xl text-sm flex items-center justify-center gap-2 shadow-md active:scale-[0.98] transition-all">
+                <span>✏️ 手拉畫路線</span>
+            </button>
+
             <div class="flex justify-between text-center mt-3.5 pt-2.5 border-t border-gray-100 px-1">
                 <div class="flex-1">
                     <div class="text-gray-400 text-[11px] font-bold">距離</div>
@@ -203,6 +207,50 @@
                     <div class="text-gray-400 text-[11px] font-bold">時速</div>
                     <div class="font-black text-lg text-gray-800"><span id="speedText">0.0</span> <span class="text-xs font-normal">km/h</span></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ✏️ 手拉畫路線：頂部操作提示橫幅 -->
+    <div id="manualDrawTopBanner" class="hidden fixed top-20 left-4 right-4 z-[46] flex justify-center pointer-events-none">
+        <div id="manualDrawPromptBadge" class="bg-indigo-600/95 backdrop-blur text-white font-extrabold text-xs sm:text-sm px-4 py-2.5 rounded-2xl shadow-xl border-2 border-white pointer-events-auto flex items-center justify-center gap-2 text-center max-w-md">
+            <span id="manualDrawPromptText">請依序點擊地圖上的起點與轉彎路口</span>
+        </div>
+    </div>
+
+    <!-- ✏️ 1.5 手拉畫路線（手動規劃路線）底部操作面板 -->
+    <div id="manualDrawUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex flex-col items-center gap-2.5 z-50">
+        <div class="bg-white rounded-3xl p-4 shadow-2xl pointer-events-auto w-full max-w-md flex flex-col gap-3 border border-gray-100">
+            <div class="flex items-center justify-between px-1 text-xs font-extrabold text-gray-600">
+                <span id="manualDrawStatsNodes" class="flex items-center gap-1.5 text-indigo-700">
+                    <i class="fa-solid fa-location-dot"></i> 已點選 0 個節點
+                </span>
+                <span id="manualDrawStatsDist" class="bg-gray-100 text-gray-800 px-2.5 py-1 rounded-full font-black">
+                    總距離 0.00 km
+                </span>
+            </div>
+
+            <!-- 音樂狀態切換開關 -->
+            <div class="grid grid-cols-2 gap-2 bg-gray-100 p-1.5 rounded-2xl">
+                <button type="button" id="btnManualMusicOn" class="bg-green-600 text-white font-extrabold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-1">
+                    <span>🟢 音樂收運（畫綠線）</span>
+                </button>
+                <button type="button" id="btnManualMusicOff" class="bg-transparent text-gray-600 hover:bg-white/60 font-extrabold py-2.5 px-2 rounded-xl text-xs sm:text-sm active:scale-95 transition-all flex items-center justify-center gap-1">
+                    <span>🔵 音樂關閉（畫藍線）</span>
+                </button>
+            </div>
+
+            <!-- 復原上一步、完成儲存、取消按鈕 -->
+            <div class="grid grid-cols-3 gap-2">
+                <button type="button" id="btnManualUndo" class="bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-extrabold py-3 px-2 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-1 text-xs sm:text-sm disabled:opacity-40" disabled>
+                    <span>↩️ 復原上一步</span>
+                </button>
+                <button type="button" id="btnManualSave" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 transition-all flex items-center justify-center gap-1 text-xs sm:text-sm">
+                    <span>✅ 完成儲存</span>
+                </button>
+                <button type="button" id="btnManualCancel" class="bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 font-extrabold py-3 px-2 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-1 text-xs sm:text-sm">
+                    <span>✕ 取消</span>
+                </button>
             </div>
         </div>
     </div>

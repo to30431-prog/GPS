@@ -136,4 +136,18 @@ input[type=range]::-webkit-slider-runnable-track {
     display: block;
     border-radius: 50%;
 }
+.pin-distance-line-badge {
+    background: #2563eb;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 900;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 2px solid #ffffff;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+    white-space: nowrap;
+    pointer-events: auto;
+    cursor: pointer;
+}
+
 

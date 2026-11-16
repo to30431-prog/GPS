@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'yingge-clean-route-v2.2.0';
+const CACHE_VERSION = 'yingge-clean-route-v2.3.0';
 const CACHE_ASSETS = [
     './',
     './index.html',

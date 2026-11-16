@@ -3233,9 +3233,199 @@ const viewMapPinAuthorText = document.getElementById('viewMapPinAuthorText');
 const viewMapPinTimeText = document.getElementById('viewMapPinTimeText');
 const viewMapPinPhotoWrap = document.getElementById('viewMapPinPhotoWrap');
 const viewMapPinPhotoImg = document.getElementById('viewMapPinPhotoImg');
+const btnGoogleNavMapPin = document.getElementById('btnGoogleNavMapPin');
+const btnDistanceGuideMapPin = document.getElementById('btnDistanceGuideMapPin');
 const btnDeleteMapPin = document.getElementById('btnDeleteMapPin');
 const btnCloseViewMapPin = document.getElementById('btnCloseViewMapPin');
 const btnCloseViewMapPinTop = document.getElementById('btnCloseViewMapPinTop');
+
+const pinDistanceGuideBanner = document.getElementById('pinDistanceGuideBanner');
+const pinDistanceGuideText = document.getElementById('pinDistanceGuideText');
+const btnCancelPinDistanceGuideBanner = document.getElementById('btnCancelPinDistanceGuideBanner');
+
+let activeDistanceGuidePin = null;
+let pinDistanceGuideTimer = null;
+let pinDistanceLineMarker = null;
+
+function ensurePinDistanceGuideLayer() {
+    if (!map || !map.isStyleLoaded()) return false;
+    if (!map.getSource('pin-distance-guide')) {
+        map.addSource('pin-distance-guide', {
+            type: 'geojson',
+            data: emptyGeoJSON()
+        });
+    }
+    if (!map.getLayer('pin-distance-guide-line')) {
+        map.addLayer({
+            id: 'pin-distance-guide-line',
+            type: 'line',
+            source: 'pin-distance-guide',
+            layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+            },
+            paint: {
+                'line-color': '#2563eb',
+                'line-width': 4.5,
+                'line-dasharray': [2, 2],
+                'line-opacity': 0.92
+            }
+        });
+    }
+    return true;
+}
+
+function formatDistanceToPinText(distMeters) {
+    const roundedM = Math.round(distMeters);
+    if (roundedM >= 1000) {
+        return `距離目標 ${(distMeters / 1000).toFixed(2)}km`;
+    }
+    return `距離目標 ${roundedM}m`;
+}
+
+function syncDistanceGuideButtonUI(pin) {
+    if (!btnDistanceGuideMapPin) return;
+    const isGuidingThisPin = Boolean(activeDistanceGuidePin && pin && activeDistanceGuidePin.id === pin.id);
+    if (isGuidingThisPin) {
+        btnDistanceGuideMapPin.className = 'bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
+        btnDistanceGuideMapPin.innerHTML = '🎯 取消距離指引';
+    } else {
+        btnDistanceGuideMapPin.className = 'bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
+        btnDistanceGuideMapPin.innerHTML = '🎯 距離指引';
+    }
+}
+
+function clearPinDistanceGuide() {
+    activeDistanceGuidePin = null;
+    if (pinDistanceGuideTimer !== null) {
+        clearInterval(pinDistanceGuideTimer);
+        pinDistanceGuideTimer = null;
+    }
+    if (pinDistanceLineMarker) {
+        try { pinDistanceLineMarker.remove(); } catch (e) {}
+        pinDistanceLineMarker = null;
+    }
+    try {
+        map.getSource('pin-distance-guide')?.setData(emptyGeoJSON());
+    } catch (e) {}
+    if (pinDistanceGuideBanner) {
+        pinDistanceGuideBanner.classList.add('hidden');
+    }
+    if (activeViewingMapPin) {
+        syncDistanceGuideButtonUI(activeViewingMapPin);
+    }
+}
+
+function updatePinDistanceGuideRender() {
+    if (!activeDistanceGuidePin) return;
+    if (isPowerSaveMapPaused()) return;
+
+    const targetLat = Number(activeDistanceGuidePin.lat);
+    const targetLng = Number(activeDistanceGuidePin.lng);
+    if (isNaN(targetLat) || isNaN(targetLng)) {
+        clearPinDistanceGuide();
+        return;
+    }
+
+    const userLng = (typeof currentFleetLng === 'number' && !isNaN(currentFleetLng))
+        ? currentFleetLng
+        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[0]) : 121.346);
+    const userLat = (typeof currentFleetLat === 'number' && !isNaN(currentFleetLat))
+        ? currentFleetLat
+        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[1]) : 24.954);
+
+    const distMeters = getDistanceKm(userLng, userLat, targetLng, targetLat) * 1000;
+    const distLabel = formatDistanceToPinText(distMeters);
+
+    if (ensurePinDistanceGuideLayer()) {
+        map.getSource('pin-distance-guide')?.setData({
+            type: 'FeatureCollection',
+            features: [
+                {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: [
+                            [userLng, userLat],
+                            [targetLng, targetLat]
+                        ]
+                    }
+                }
+            ]
+        });
+    }
+
+    const midLng = (userLng + targetLng) / 2;
+    const midLat = (userLat + targetLat) / 2;
+
+    if (!pinDistanceLineMarker) {
+        const badgeEl = document.createElement('div');
+        badgeEl.className = 'pin-distance-line-badge';
+        badgeEl.title = '點擊取消距離指引';
+        badgeEl.onclick = (e) => {
+            e.stopPropagation();
+            clearPinDistanceGuide();
+        };
+        pinDistanceLineMarker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
+            .setLngLat([midLng, midLat])
+            .addTo(map);
+    } else {
+        pinDistanceLineMarker.setLngLat([midLng, midLat]);
+    }
+
+    const badgeDom = pinDistanceLineMarker.getElement();
+    if (badgeDom) {
+        badgeDom.textContent = `🎯 ${distLabel}`;
+    }
+
+    if (pinDistanceGuideBanner && pinDistanceGuideText) {
+        const shortTitle = (activeDistanceGuidePin.title || '目標地標').slice(0, 10);
+        pinDistanceGuideText.textContent = `${shortTitle} · ${distLabel}`;
+        pinDistanceGuideBanner.classList.remove('hidden');
+    }
+}
+
+function togglePinDistanceGuide(pin) {
+    if (!pin) return;
+    if (activeDistanceGuidePin && activeDistanceGuidePin.id === pin.id) {
+        clearPinDistanceGuide();
+        return;
+    }
+
+    if (pinDistanceGuideTimer !== null) {
+        clearInterval(pinDistanceGuideTimer);
+        pinDistanceGuideTimer = null;
+    }
+
+    activeDistanceGuidePin = { ...pin };
+    syncDistanceGuideButtonUI(pin);
+    closeViewMapPinModal();
+
+    updatePinDistanceGuideRender();
+    pinDistanceGuideTimer = setInterval(updatePinDistanceGuideRender, 1000);
+}
+
+if (btnCancelPinDistanceGuideBanner) {
+    btnCancelPinDistanceGuideBanner.onclick = () => clearPinDistanceGuide();
+}
+
+if (btnGoogleNavMapPin) {
+    btnGoogleNavMapPin.onclick = () => {
+        if (!activeViewingMapPin) return;
+        const lat = Number(activeViewingMapPin.lat);
+        const lng = Number(activeViewingMapPin.lng);
+        if (isNaN(lat) || isNaN(lng)) return;
+        const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+        window.open(navUrl, '_blank', 'noopener,noreferrer');
+    };
+}
+
+if (btnDistanceGuideMapPin) {
+    btnDistanceGuideMapPin.onclick = () => {
+        if (!activeViewingMapPin) return;
+        togglePinDistanceGuide(activeViewingMapPin);
+    };
+}
 
 function formatPinCreatedAt(ts) {
     if (!ts) return '未知時間';
@@ -3484,6 +3674,8 @@ function openViewMapPinModal(pin) {
         if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.add('hidden');
     }
 
+    syncDistanceGuideButtonUI(pin);
+
     if (viewMapPinModal) {
         window.history.pushState({ pwa: true }, '');
         viewMapPinModal.classList.remove('hidden');
@@ -3523,6 +3715,9 @@ if (btnDeleteMapPin) {
             if (pinsLayerGroup[pinId]) {
                 try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
                 delete pinsLayerGroup[pinId];
+            }
+            if (activeDistanceGuidePin && activeDistanceGuidePin.id === pinId) {
+                clearPinDistanceGuide();
             }
             closeViewMapPinModal();
             fetchAndRenderSharedMapPins();
@@ -3630,8 +3825,14 @@ async function fetchAndRenderSharedMapPins() {
             if (!activePinIds.has(pinId)) {
                 try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
                 delete pinsLayerGroup[pinId];
+                if (activeDistanceGuidePin && activeDistanceGuidePin.id === pinId) {
+                    clearPinDistanceGuide();
+                }
             }
         });
+        if (activeDistanceGuidePin) {
+            updatePinDistanceGuideRender();
+        }
     } catch (err) {
         // 弱訊號或超時靜默略過，下週期自動恢復
     } finally {

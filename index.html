@@ -31,6 +31,15 @@
     <!-- 語音與視覺警報橫幅 (移至畫面上方) -->
     <div id="musicAlertBanner" class="hidden fixed top-24 left-4 right-4 z-50 rounded-2xl p-5 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex flex-col items-center justify-center gap-2"></div>
 
+    <!-- 🎯 地標即時距離指引浮動膠囊 -->
+    <div id="pinDistanceGuideBanner" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-[48] bg-blue-600/95 backdrop-blur text-white px-4 py-2 rounded-full shadow-xl border-2 border-white pointer-events-auto flex items-center gap-2.5 text-xs sm:text-sm font-black whitespace-nowrap">
+        <span>🎯</span>
+        <span id="pinDistanceGuideText">距離目標 --m</span>
+        <button type="button" id="btnCancelPinDistanceGuideBanner" class="ml-1 w-5 h-5 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-xs active:scale-90" title="取消距離指引">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+
     <!-- 🚀 戰術倒數儀表板 (底部面板風格，純顯示資訊) -->
     <div id="tacticalTimePanel" class="hidden absolute bottom-0 left-0 right-0 z-[45] bg-gray-900/90 backdrop-blur-md px-4 py-3 shadow-[0_-4px_15px_rgba(0,0,0,0.3)] text-white pointer-events-auto transition-all duration-300 flex flex-col items-center border-t border-gray-700 pb-5">
         <div id="nextStopName" class="text-sm font-extrabold text-gray-300 truncate w-full text-center">正在載入下一站...</div>
@@ -574,7 +583,15 @@
                     <span class="absolute bottom-2.5 right-2.5 bg-black/65 text-white text-xs font-bold px-2.5 py-1 rounded-full pointer-events-none">🔍 點擊照片放大檢視</span>
                 </div>
             </div>
-            <button type="button" id="btnDeleteMapPin" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm mt-1">
+            <div class="grid grid-cols-2 gap-2.5 mt-1">
+                <button type="button" id="btnGoogleNavMapPin" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+                    🧭 Google 導航
+                </button>
+                <button type="button" id="btnDistanceGuideMapPin" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+                    🎯 距離指引
+                </button>
+            </div>
+            <button type="button" id="btnDeleteMapPin" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm">
                 🗑️ 已清理／移除地標
             </button>
             <button type="button" id="btnCloseViewMapPin" class="bg-gray-100 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 text-xs">

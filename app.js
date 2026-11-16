@@ -1349,35 +1349,117 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         freehandStartIndex = -1;
     }
 
+    // 雙指平移與防誤觸狀態鎖
+    let isMultiTouchLocked = false;
+    let lastTwoFingerCenter = null;
+
     // 觸控事件監聽
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isEditingMode || editSubMode !== 'freehand') return;
-        if (!e.touches || e.touches.length !== 1) {
+        if (!e.touches) return;
+
+        // 偵測到雙指（或多指）觸控：立即取消未完成的單指手繪草稿，並初始化雙指中點以供拖動平移地圖
+        if (e.touches.length === 2) {
+            isMultiTouchLocked = true;
+            if (isFreehandDrawing) cancelActiveFreehandStroke();
+            const promptEl = document.getElementById('editPromptText');
+            if (promptEl) {
+                promptEl.innerText = "手指在路線附近按住滑動，放開後自動銜接原路線";
+            }
+            lastTwoFingerCenter = {
+                x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                y: (e.touches[0].clientY + e.touches[1].clientY) / 2
+            };
+            return;
+        }
+
+        if (e.touches.length > 2) {
+            isMultiTouchLocked = true;
+            lastTwoFingerCenter = null;
             if (isFreehandDrawing) cancelActiveFreehandStroke();
             return;
         }
-        const touch = e.touches[0];
-        handleStrokeStart(touch.clientX, touch.clientY, e);
+
+        // 防誤觸保護：若剛進行過雙指操作且尚未全部手指離開螢幕，禁止觸發單指畫線
+        if (isMultiTouchLocked) return;
+
+        if (e.touches.length === 1) {
+            const touch = e.touches[0];
+            handleStrokeStart(touch.clientX, touch.clientY, e);
+        }
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
-        if (!isEditingMode || editSubMode !== 'freehand' || !isFreehandDrawing) return;
-        if (!e.touches || e.touches.length !== 1) {
-            cancelActiveFreehandStroke();
+        if (!isEditingMode || editSubMode !== 'freehand') return;
+        if (!e.touches) return;
+
+        // 雙指同方向滑動：即時計算雙指中點位移量 (dx, dy) 並呼叫 map.panBy 平移地圖（同時保留雙指縮放）
+        if (e.touches.length === 2) {
+            isMultiTouchLocked = true;
+            if (isFreehandDrawing) cancelActiveFreehandStroke();
+            const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            if (lastTwoFingerCenter) {
+                const dx = centerX - lastTwoFingerCenter.x;
+                const dy = centerY - lastTwoFingerCenter.y;
+                if (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2) {
+                    map.panBy([-dx, -dy], { animate: false });
+                }
+            }
+            lastTwoFingerCenter = { x: centerX, y: centerY };
             return;
         }
-        if (e.cancelable) e.preventDefault();
-        const touch = e.touches[0];
-        handleStrokeMove(touch.clientX, touch.clientY);
+
+        if (e.touches.length > 2) {
+            isMultiTouchLocked = true;
+            lastTwoFingerCenter = null;
+            if (isFreehandDrawing) cancelActiveFreehandStroke();
+            return;
+        }
+
+        // 防誤觸保護：雙指放開剩單指在螢幕上時，不觸發手繪
+        if (isMultiTouchLocked || !isFreehandDrawing) return;
+
+        if (e.touches.length === 1) {
+            if (e.cancelable) e.preventDefault();
+            const touch = e.touches[0];
+            handleStrokeMove(touch.clientX, touch.clientY);
+        }
     }, { passive: false });
 
-    canvasContainer.addEventListener('touchend', () => {
-        if (!isEditingMode || editSubMode !== 'freehand') return;
-        handleStrokeEnd();
+    canvasContainer.addEventListener('touchend', (e) => {
+        if (!isEditingMode || editSubMode !== 'freehand') {
+            if (!e.touches || e.touches.length === 0) {
+                isMultiTouchLocked = false;
+                lastTwoFingerCenter = null;
+            }
+            return;
+        }
+
+        if (!e.touches || e.touches.length < 2) {
+            lastTwoFingerCenter = null;
+        }
+
+        // 若處於雙指操作鎖定狀態，需等兩根手指「完全離開螢幕 (touches.length === 0)」才解除鎖定
+        if (isMultiTouchLocked) {
+            if (isFreehandDrawing) cancelActiveFreehandStroke();
+            if (!e.touches || e.touches.length === 0) {
+                isMultiTouchLocked = false;
+            }
+            return;
+        }
+
+        if (!e.touches || e.touches.length === 0) {
+            handleStrokeEnd();
+        }
     }, { passive: true });
 
-    canvasContainer.addEventListener('touchcancel', () => {
+    canvasContainer.addEventListener('touchcancel', (e) => {
+        lastTwoFingerCenter = null;
         if (isFreehandDrawing) cancelActiveFreehandStroke();
+        if (!e.touches || e.touches.length === 0) {
+            isMultiTouchLocked = false;
+        }
     }, { passive: true });
 
     // 滑鼠事件監聽

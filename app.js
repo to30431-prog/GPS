@@ -78,6 +78,136 @@ async function releaseScreenWakeLockIfIdle() {
     }
 }
 
+// ==========================================
+// 🛡️ GPS 防亂飄與雜訊過濾核心引擎
+// 1. 剔除低精度飄移點（accuracy > 35m 直接捨棄）
+// 2. 剔除衛星反射瞬移（換算時速 > 120 km/h 視為雜訊忽略）
+// 3. 停車防抖動鎖定（距離 < 8m 或 speed < 0.5 m/s 凍結位置與車頭朝向）
+// 4. 移動中輕量加權平滑（新座標 0.7 + 前一座標 0.3）
+// ==========================================
+let lastValidGpsLat = null;
+let lastValidGpsLng = null;
+let lastValidGpsTime = 0;
+let lastRawGpsFixKey = '';
+let lastRawGpsFixWallTime = 0;
+let lastFilteredGpsResult = null;
+
+function processFilteredGpsPosition(pos) {
+    if (!pos || !pos.coords) return null;
+    const rawLat = Number(pos.coords.latitude);
+    const rawLng = Number(pos.coords.longitude);
+    if (isNaN(rawLat) || isNaN(rawLng)) return null;
+
+    const accuracy = typeof pos.coords.accuracy === 'number' && !isNaN(pos.coords.accuracy)
+        ? pos.coords.accuracy
+        : 10;
+
+    // 1. 剔除低精度飄移點：若誤差大於 35 公尺（訊號遮蔽落入基地台粗略定位），直接捨棄
+    if (accuracy > 35) {
+        return null;
+    }
+
+    const now = Date.now();
+    // 防止多個 watchPosition 監聽器在極短時間內收到同一筆硬體座標時重複計算造成誤判靜止
+    const fixKey = `${rawLat.toFixed(6)},${rawLng.toFixed(6)}`;
+    if (fixKey === lastRawGpsFixKey && (now - lastRawGpsFixWallTime) < 350 && lastFilteredGpsResult) {
+        return lastFilteredGpsResult;
+    }
+
+    const rawSpeed = (typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed) && pos.coords.speed >= 0)
+        ? pos.coords.speed
+        : null;
+    const rawHeading = (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) && pos.coords.heading >= 0)
+        ? pos.coords.heading
+        : null;
+
+    // 首次取得合格高精度定位：直接初始化基準點
+    if (lastValidGpsLat === null || lastValidGpsLng === null) {
+        lastValidGpsLat = rawLat;
+        lastValidGpsLng = rawLng;
+        lastValidGpsTime = now;
+        if (rawHeading !== null && (rawSpeed === null || rawSpeed >= 0.5)) {
+            currentHeading = rawHeading;
+        }
+        lastKnownLngLat = [rawLng, rawLat];
+        const firstRes = {
+            lng: rawLng,
+            lat: rawLat,
+            heading: currentHeading,
+            speedKmh: rawSpeed !== null ? (rawSpeed * 3.6) : 0,
+            accuracy,
+            isStationary: false,
+            isFirstFix: true
+        };
+        lastRawGpsFixKey = fixKey;
+        lastRawGpsFixWallTime = now;
+        lastFilteredGpsResult = firstRes;
+        return firstRes;
+    }
+
+    const distKm = getDistanceKm(lastValidGpsLng, lastValidGpsLat, rawLng, rawLat);
+    const distMeters = distKm * 1000;
+    const dtSec = Math.max(0.25, (now - lastValidGpsTime) / 1000);
+    const impliedSpeedKmh = (distKm / dtSec) * 3600;
+
+    // 2. 剔除衛星反射瞬移：若換算時速超過 120 km/h（不合理跳點），視為雜訊直接忽略
+    if (distMeters >= 8 && impliedSpeedKmh > 120) {
+        return null;
+    }
+
+    // 3. 停車防抖動鎖定：當與上一筆有效座標距離 < 8 公尺（或 coords.speed < 0.5 m/s）時，
+    //    判定車輛處於靜止作業狀態，凍結位置與車頭朝向（heading）更新
+    const isLowSpeed = (rawSpeed !== null && rawSpeed < 0.5);
+    if (distMeters < 8 || isLowSpeed) {
+        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+        const stationaryRes = {
+            lng: lastValidGpsLng,
+            lat: lastValidGpsLat,
+            heading: currentHeading,
+            speedKmh: 0,
+            accuracy,
+            isStationary: true,
+            isFirstFix: false
+        };
+        lastRawGpsFixKey = fixKey;
+        lastRawGpsFixWallTime = now;
+        lastFilteredGpsResult = stationaryRes;
+        return stationaryRes;
+    }
+
+    // 4. 移動中輕量加權平滑：新座標佔 0.7、前一有效座標佔 0.3
+    const smoothedLng = Number((rawLng * 0.7 + lastValidGpsLng * 0.3).toFixed(6));
+    const smoothedLat = Number((rawLat * 0.7 + lastValidGpsLat * 0.3).toFixed(6));
+
+    // 更新移動中的車頭朝向（優先採用平滑軌跡切線方向，穩定不亂轉）
+    const moveStepM = getDistanceKm(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat) * 1000;
+    if (moveStepM >= 1.5) {
+        currentHeading = getBearing(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat);
+    } else if (rawHeading !== null) {
+        currentHeading = rawHeading;
+    }
+
+    lastValidGpsLng = smoothedLng;
+    lastValidGpsLat = smoothedLat;
+    lastValidGpsTime = now;
+    lastKnownLngLat = [smoothedLng, smoothedLat];
+
+    const movingSpeedKmh = rawSpeed !== null ? (rawSpeed * 3.6) : Math.min(impliedSpeedKmh, 120);
+    const movingRes = {
+        lng: smoothedLng,
+        lat: smoothedLat,
+        heading: currentHeading,
+        speedKmh: movingSpeedKmh,
+        accuracy,
+        isStationary: false,
+        isFirstFix: false
+    };
+    lastRawGpsFixKey = fixKey;
+    lastRawGpsFixWallTime = now;
+    lastFilteredGpsResult = movingRes;
+    return movingRes;
+}
+
 function stopIdleGPS() {
     if (idleWatchId !== null) {
         navigator.geolocation.clearWatch(idleWatchId);
@@ -89,14 +219,19 @@ function startIdleGPS() {
     stopIdleGPS();
     if (!('geolocation' in navigator)) return;
     idleWatchId = navigator.geolocation.watchPosition(pos => {
-        const lng = pos.coords.longitude, lat = pos.coords.latitude;
-        lastKnownLngLat = [lng, lat];
-        if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
+        const filtered = processFilteredGpsPosition(pos);
+        if (!filtered) return; // 誤差 > 35m 或 > 120km/h 暴衝跳點直接捨棄
+
         if (!isPowerSaveMapPaused()) {
-            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
-            const acc = Math.round(pos.coords.accuracy);
+            const acc = Math.round(filtered.accuracy);
             const accEl = document.getElementById('accuracyText');
             if (accEl) accEl.innerText = `± ${acc} m`;
+            if (!filtered.isStationary && vehicleMarker) {
+                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(filtered.heading);
+            }
+        }
+        if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
+            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
         }
     }, () => {}, { enableHighAccuracy: true });
 }
@@ -450,13 +585,19 @@ document.getElementById('recordBtn').onclick = async () => {
         }, 1000);
 
         watchId = navigator.geolocation.watchPosition(pos => {
+            const filtered = processFilteredGpsPosition(pos);
+            if (!filtered) return; // 剔除 accuracy > 35m 低精度與 > 120km/h 衛星反射瞬移
+
             const now = Date.now();
-            const lng = pos.coords.longitude, lat = pos.coords.latitude;
-            if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
-            const acc = Math.round(pos.coords.accuracy);
+            const lng = filtered.lng, lat = filtered.lat;
+            const acc = Math.round(filtered.accuracy);
             if (!isPowerSaveMapPaused()) {
                 document.getElementById('recAccuracyText').innerText = `± ${acc} m`;
-                if (pos.coords.speed !== null) document.getElementById('speedText').innerText = (pos.coords.speed * 3.6).toFixed(1);
+                document.getElementById('speedText').innerText = filtered.isStationary ? '0.0' : filtered.speedKmh.toFixed(1);
+            }
+
+            if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
+                window.onFleetPositionUpdate(lat, lng);
             }
 
             if (routePoints.length === 0) {
@@ -467,6 +608,9 @@ document.getElementById('recordBtn').onclick = async () => {
                 lastRecordTime = now;
                 return;
             }
+
+            // 停車防抖動鎖定：靜止狀態下凍結位置與車頭朝向更新
+            if (filtered.isStationary) return;
 
             const prev = routePoints[routePoints.length - 1];
             const distKm = getDistanceKm(prev.lng, prev.lat, lng, lat);
@@ -2841,20 +2985,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
     await requestScreenWakeLock();
 
     followWatchId = navigator.geolocation.watchPosition(pos => {
-        const lng = pos.coords.longitude, lat = pos.coords.latitude;
-        if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
-        if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
-            currentHeading = pos.coords.heading;
-        } else if (lastKnownLngLat[0] !== lng || lastKnownLngLat[1] !== lat) {
-            if (pos.coords.speed > 1) currentHeading = getBearing(lastKnownLngLat[0], lastKnownLngLat[1], lng, lat);
-        }
-        
-        lastKnownLngLat = [lng, lat];
-        if (!isPowerSaveMapPaused()) {
-            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+        const filtered = processFilteredGpsPosition(pos);
+        if (!filtered) return; // 剔除 accuracy > 35m 低精度與 > 120km/h 衛星反射瞬移
 
-            if (isFollowingCamera) {
-                map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+        const lng = filtered.lng, lat = filtered.lat;
+        if (!filtered.isStationary) {
+            if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
+            if (!isPowerSaveMapPaused()) {
+                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+
+                if (isFollowingCamera) {
+                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                }
             }
         }
 
@@ -4420,7 +4562,9 @@ function startFleetRadarSystem() {
     // 啟動全模式背景定位監聽（確保即使在預覽或切換畫面時也能持續更新座標）
     if ('geolocation' in navigator) {
         fleetRadarWatchId = navigator.geolocation.watchPosition(pos => {
-            window.onFleetPositionUpdate(pos.coords.latitude, pos.coords.longitude);
+            const filtered = processFilteredGpsPosition(pos);
+            if (!filtered || filtered.isStationary) return;
+            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
         }, () => {}, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
     }
 
@@ -4429,7 +4573,9 @@ function startFleetRadarSystem() {
         uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
     } else if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(pos => {
-            window.onFleetPositionUpdate(pos.coords.latitude, pos.coords.longitude);
+            const filtered = processFilteredGpsPosition(pos);
+            if (!filtered) return;
+            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
         }, () => {}, { enableHighAccuracy: true });
     }
 

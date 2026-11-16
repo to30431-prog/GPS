@@ -1061,6 +1061,8 @@ function backToMain() {
     }
     document.getElementById('followStopBtn').classList.add('hidden');
     document.getElementById('tacticalStopBtn').classList.add('hidden');
+    document.getElementById('tacticalQuickAlertBtn')?.classList.add('hidden');
+    if (typeof closeQuickNavAlertModal === 'function') closeQuickNavAlertModal();
     document.getElementById('tacticalTimePanel').classList.add('hidden');
     document.getElementById('musicAlertBanner').classList.add('hidden');
     document.getElementById('routeDetailUI').classList.add('hidden');
@@ -1803,8 +1805,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
     const route = savedRoutes[selectedRouteIdx];
     if (!route) return;
     document.getElementById('routeDetailUI').classList.add('hidden');
-    // 顯示右下角的獨立結束按鈕
+    // 顯示右下角的獨立結束按鈕與左下角的一鍵標記黃色注意點按鈕
     document.getElementById('tacticalStopBtn').classList.remove('hidden');
+    document.getElementById('tacticalQuickAlertBtn')?.classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
     
     let hasAnnouncedStart = false, hasAnnouncedEnd = false, wasOffRoute = false; 
@@ -1822,6 +1825,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
         }
         return { ...ev, ptIdx: evPtIdx };
     });
+    window.activeFollowMappedEvents = mappedEvents;
 
     window.stopsQueue = (route.points || []).map((p, index) => ({ ...p, ptIdx: index })).filter(p => p.is_stop === true);
     window.currentStopIndex = 0;
@@ -1988,9 +1992,12 @@ const endFollowAction = () => {
         clearInterval(window.tacticalTimer);
         window.tacticalTimer = null;
     }
+    window.activeFollowMappedEvents = null;
+    if (typeof closeQuickNavAlertModal === 'function') closeQuickNavAlertModal();
     document.getElementById('tacticalTimePanel').classList.add('hidden');
-    // 隱藏右下角的獨立結束按鈕
+    // 隱藏右下角的獨立結束按鈕與左下角的一鍵標記按鈕
     document.getElementById('tacticalStopBtn').classList.add('hidden');
+    document.getElementById('tacticalQuickAlertBtn')?.classList.add('hidden');
     document.getElementById('musicAlertBanner').classList.add('hidden');
     document.getElementById('offRouteWarning').classList.add('hidden');
     exitBlackPowerSaveMode(false);
@@ -2000,6 +2007,262 @@ const endFollowAction = () => {
 
 document.getElementById('followStopBtn').onclick = endFollowAction;
 document.getElementById('tacticalStopBtn').onclick = endFollowAction;
+
+// --- 7.5 ⚠️ 遵循導航中「一鍵即時標記黃色注意點（支援語音輸入）」 ---
+const tacticalQuickAlertBtn = document.getElementById('tacticalQuickAlertBtn');
+const quickNavAlertModal = document.getElementById('quickNavAlertModal');
+const quickNavAlertInput = document.getElementById('quickNavAlertInput');
+const quickNavAlertCoordBadge = document.getElementById('quickNavAlertCoordBadge');
+const btnQuickNavVoiceInput = document.getElementById('btnQuickNavVoiceInput');
+const quickNavVoiceIcon = document.getElementById('quickNavVoiceIcon');
+const quickNavVoiceBtnText = document.getElementById('quickNavVoiceBtnText');
+const quickNavVoiceStatus = document.getElementById('quickNavVoiceStatus');
+const btnConfirmQuickNavAlert = document.getElementById('btnConfirmQuickNavAlert');
+const btnCancelQuickNavAlert = document.getElementById('btnCancelQuickNavAlert');
+
+let lockedQuickAlertLng = null;
+let lockedQuickAlertLat = null;
+let lockedQuickAlertPtIdx = 0;
+let lockedQuickAlertBearing = 0;
+let quickSpeechRecognition = null;
+let isQuickSpeechListening = false;
+
+function stopQuickSpeechRecognition() {
+    isQuickSpeechListening = false;
+    if (quickSpeechRecognition) {
+        try { quickSpeechRecognition.stop(); } catch (e) {}
+        quickSpeechRecognition = null;
+    }
+    if (btnQuickNavVoiceInput) {
+        btnQuickNavVoiceInput.className = 'w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm';
+    }
+    if (quickNavVoiceIcon) {
+        quickNavVoiceIcon.className = 'fa-solid fa-microphone text-base text-indigo-600';
+    }
+    if (quickNavVoiceBtnText) {
+        quickNavVoiceBtnText.textContent = '🎤 語音輸入';
+    }
+}
+
+function closeQuickNavAlertModal() {
+    stopQuickSpeechRecognition();
+    if (quickNavVoiceStatus) {
+        quickNavVoiceStatus.classList.add('hidden');
+        quickNavVoiceStatus.textContent = '';
+    }
+    if (quickNavAlertModal) {
+        quickNavAlertModal.classList.add('hidden');
+    }
+}
+
+function openQuickNavAlertModal() {
+    const route = savedRoutes[selectedRouteIdx];
+    if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
+
+    // 點擊瞬間立即擷取並鎖定當下最新的 GPS 經緯度與對應路線進度點（避免講話期間車輛移動導致標記偏移）
+    const curLng = Array.isArray(lastKnownLngLat) && typeof lastKnownLngLat[0] === 'number'
+        ? lastKnownLngLat[0]
+        : route.points[0].lng;
+    const curLat = Array.isArray(lastKnownLngLat) && typeof lastKnownLngLat[1] === 'number'
+        ? lastKnownLngLat[1]
+        : route.points[0].lat;
+
+    lockedQuickAlertLng = Number(curLng);
+    lockedQuickAlertLat = Number(curLat);
+    lockedQuickAlertBearing = Number(currentHeading) || 0;
+
+    let minDist = Infinity;
+    let closestIdx = 0;
+    for (let i = 0; i < route.points.length; i++) {
+        const d = getDistanceKm(lockedQuickAlertLng, lockedQuickAlertLat, route.points[i].lng, route.points[i].lat);
+        if (d < minDist) {
+            minDist = d;
+            closestIdx = i;
+        }
+    }
+    lockedQuickAlertPtIdx = closestIdx;
+
+    vibrate(50);
+
+    if (quickNavAlertCoordBadge) {
+        quickNavAlertCoordBadge.textContent = `📍 已鎖定座標 (${lockedQuickAlertLat.toFixed(4)}, ${lockedQuickAlertLng.toFixed(4)})`;
+    }
+    if (quickNavAlertInput) {
+        quickNavAlertInput.value = '';
+    }
+    stopQuickSpeechRecognition();
+
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec && quickNavVoiceStatus) {
+        quickNavVoiceStatus.textContent = '💡 請直接點擊下方鍵盤上的「🎤 麥克風」進行語音輸入';
+        quickNavVoiceStatus.classList.remove('hidden');
+    } else if (quickNavVoiceStatus) {
+        quickNavVoiceStatus.classList.add('hidden');
+        quickNavVoiceStatus.textContent = '';
+    }
+
+    if (quickNavAlertModal) {
+        window.history.pushState({ pwa: true }, '');
+        quickNavAlertModal.classList.remove('hidden');
+        // 自動聚焦輸入框，喚起手機鍵盤方便直接使用鍵盤語音或打字
+        setTimeout(() => {
+            if (quickNavAlertInput) {
+                quickNavAlertInput.focus();
+            }
+        }, 80);
+    }
+}
+
+if (tacticalQuickAlertBtn) {
+    tacticalQuickAlertBtn.onclick = (e) => {
+        e.stopPropagation();
+        openQuickNavAlertModal();
+    };
+}
+
+if (btnQuickNavVoiceInput) {
+    btnQuickNavVoiceInput.onclick = () => {
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRec) {
+            if (quickNavVoiceStatus) {
+                quickNavVoiceStatus.textContent = '💡 此瀏覽器不支援內建語音辨識，請點擊手機鍵盤上的「🎤 麥克風」語音輸入！';
+                quickNavVoiceStatus.classList.remove('hidden');
+            }
+            if (quickNavAlertInput) quickNavAlertInput.focus();
+            return;
+        }
+
+        if (isQuickSpeechListening) {
+            stopQuickSpeechRecognition();
+            if (quickNavVoiceStatus) {
+                quickNavVoiceStatus.textContent = '⏹️ 已停止語音聆聽';
+                quickNavVoiceStatus.classList.remove('hidden');
+            }
+            return;
+        }
+
+        try {
+            stopQuickSpeechRecognition();
+            const rec = new SpeechRec();
+            rec.lang = 'zh-TW';
+            rec.continuous = false;
+            rec.interimResults = true;
+            quickSpeechRecognition = rec;
+            isQuickSpeechListening = true;
+
+            btnQuickNavVoiceInput.className = 'w-full bg-red-50 hover:bg-red-100 text-red-600 border-2 border-red-300 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-center gap-2 text-sm shadow-sm animate-pulse';
+            if (quickNavVoiceIcon) quickNavVoiceIcon.className = 'fa-solid fa-microphone-lines text-base text-red-600';
+            if (quickNavVoiceBtnText) quickNavVoiceBtnText.textContent = '🔴 正在聆聽口述...（點擊停止）';
+            if (quickNavVoiceStatus) {
+                quickNavVoiceStatus.textContent = '🎙️ 請開始說話（例如：窄巷倒車、小心惡犬）...';
+                quickNavVoiceStatus.classList.remove('hidden');
+            }
+
+            const existingPrefix = (quickNavAlertInput?.value || '').trim();
+
+            rec.onresult = (event) => {
+                let transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    transcript += event.results[i][0].transcript;
+                }
+                const cleanTranscript = transcript.trim();
+                if (quickNavAlertInput && cleanTranscript) {
+                    quickNavAlertInput.value = existingPrefix ? `${existingPrefix} ${cleanTranscript}` : cleanTranscript;
+                }
+            };
+
+            rec.onerror = () => {
+                stopQuickSpeechRecognition();
+                if (quickNavVoiceStatus) {
+                    quickNavVoiceStatus.textContent = '⚠️ 未偵測到語音或麥克風未授權，亦可直接使用鍵盤🎤語音輸入';
+                    quickNavVoiceStatus.classList.remove('hidden');
+                }
+            };
+
+            rec.onend = () => {
+                stopQuickSpeechRecognition();
+                if (quickNavAlertInput && quickNavAlertInput.value.trim()) {
+                    if (quickNavVoiceStatus) {
+                        quickNavVoiceStatus.textContent = '✅ 語音辨識完成！可直接點擊「確定標記」';
+                        quickNavVoiceStatus.classList.remove('hidden');
+                    }
+                }
+            };
+
+            rec.start();
+        } catch (err) {
+            stopQuickSpeechRecognition();
+            if (quickNavVoiceStatus) {
+                quickNavVoiceStatus.textContent = '💡 請直接使用下方手機鍵盤的「🎤 麥克風」語音輸入';
+                quickNavVoiceStatus.classList.remove('hidden');
+            }
+            if (quickNavAlertInput) quickNavAlertInput.focus();
+        }
+    };
+}
+
+function confirmQuickNavAlert() {
+    const route = savedRoutes[selectedRouteIdx];
+    if (!route || lockedQuickAlertLng === null || lockedQuickAlertLat === null) {
+        closeQuickNavAlertModal();
+        return;
+    }
+
+    const noteVal = (quickNavAlertInput?.value || '').trim() || '注意路段';
+    route.events = route.events || [];
+
+    const newAlertEv = {
+        type: 'alert',
+        note: noteVal,
+        lng: lockedQuickAlertLng,
+        lat: lockedQuickAlertLat,
+        ptIdx: lockedQuickAlertPtIdx,
+        bearing: lockedQuickAlertBearing || 0
+    };
+
+    route.events.push(newAlertEv);
+
+    // 同步加入當下正在執行的導航事件陣列，並標記為本次已觸發（避免剛標記完原地立刻重複播報，下趟經過時即正常播報）
+    if (Array.isArray(window.activeFollowMappedEvents)) {
+        const newIdx = window.activeFollowMappedEvents.length;
+        window.activeFollowMappedEvents.push({ ...newAlertEv });
+        triggeredMusicIndices.add(newIdx);
+    }
+
+    // 同步儲存回大容量資料庫 (localforage) 與 localStorage
+    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
+    try {
+        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+    } catch (e) {}
+
+    // 同步更新路線詳情面板上的標記數量
+    const detailEventsEl = document.getElementById('detailEvents');
+    if (detailEventsEl) {
+        detailEventsEl.innerText = `${route.events.length} 處`;
+    }
+
+    // 立即於地圖上渲染出該黃色驚嘆號提醒標記
+    renderRouteMarkers(route);
+
+    closeQuickNavAlertModal();
+    vibrate([100, 50, 100]);
+    showNavAlert('⚠️', `已標記：${noteVal}`, 'bg-amber-600');
+}
+
+if (btnConfirmQuickNavAlert) {
+    btnConfirmQuickNavAlert.onclick = confirmQuickNavAlert;
+}
+if (btnCancelQuickNavAlert) {
+    btnCancelQuickNavAlert.onclick = closeQuickNavAlertModal;
+}
+if (quickNavAlertInput) {
+    quickNavAlertInput.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            confirmQuickNavAlert();
+        }
+    };
+}
 
 // --- 8. 路線分享與匯入功能 ---
 document.getElementById('exportRouteBtn').onclick = async () => {
@@ -3954,6 +4217,7 @@ startSharedMapPinsSystem();
         const uploadConflictModal = document.getElementById('uploadConflictModal');
         const createMapPinModal = document.getElementById('createMapPinModal');
         const viewMapPinModal = document.getElementById('viewMapPinModal');
+        const quickNavAlertModal = document.getElementById('quickNavAlertModal');
 
         // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
         if (blackOverlay && !blackOverlay.classList.contains('hidden')) {
@@ -3961,6 +4225,9 @@ startSharedMapPinsSystem();
         }
         else if (photoLightboxModal && !photoLightboxModal.classList.contains('hidden')) {
             document.getElementById('closePhotoLightboxBtn').click();
+        }
+        else if (quickNavAlertModal && !quickNavAlertModal.classList.contains('hidden')) {
+            document.getElementById('btnCancelQuickNavAlert').click();
         }
         else if (uploadConflictModal && !uploadConflictModal.classList.contains('hidden')) {
             document.getElementById('btnConflictCancel').click();

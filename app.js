@@ -401,39 +401,114 @@ function getAngleDiff(angle1, angle2) {
 }
 
 // ==========================================
-// 🔊 強化語音播報穩定度（解決偶發無聲與 GC 切斷問題）
+// 🔊 語音播報排隊管理器（FIFO Queue，防連續觸發切斷與 3 秒防重複鎖）
 // ==========================================
 let isVoiceEnabled = true;
 window._activeSpeechUtterance = null;
 
-function speakText(text) {
-    // 如果開關被關掉，或是手機不支援語音，就直接中斷不講話！
-    if (!isVoiceEnabled || !('speechSynthesis' in window) || !text) return;
-    try {
-        window.speechSynthesis.cancel();
-        if (window.speechSynthesis.paused) {
-            window.speechSynthesis.resume();
+const VoiceQueue = {
+    queue: [],
+    maxSize: 4,
+    debounceMs: 3000,
+    isSpeaking: false,
+    recentHistory: new Map(),
+    _watchdogTimer: null,
+
+    enqueue(text) {
+        if (!isVoiceEnabled || !('speechSynthesis' in window) || !text) return;
+        const cleanText = String(text).trim();
+        if (!cleanText) return;
+
+        // 3 秒內相同文字防重複鎖（Debounce），避免 GPS 漂移重複播報同一句
+        const now = Date.now();
+        for (const [k, ts] of this.recentHistory.entries()) {
+            if (now - ts >= this.debounceMs) {
+                this.recentHistory.delete(k);
+            }
         }
-        const u = new SpeechSynthesisUtterance(String(text));
-        u.lang = 'zh-TW';
-        u.rate = 1.05;
-        u.onend = () => {
-            if (window._activeSpeechUtterance === u) {
-                window._activeSpeechUtterance = null;
+        const lastTime = this.recentHistory.get(cleanText);
+        if (lastTime && (now - lastTime) < this.debounceMs) {
+            return;
+        }
+        this.recentHistory.set(cleanText, now);
+
+        // 將觸發的語音依序加入 FIFO 佇列；上限 4 句，超過時自動丟棄最舊的一句
+        this.queue.push(cleanText);
+        while (this.queue.length > this.maxSize) {
+            this.queue.shift();
+        }
+
+        this.processNext();
+    },
+
+    processNext() {
+        if (!isVoiceEnabled || !('speechSynthesis' in window)) {
+            this.clear();
+            return;
+        }
+        if (this.isSpeaking || this.queue.length === 0) return;
+
+        const nextText = this.queue.shift();
+        if (!nextText) return;
+
+        this.isSpeaking = true;
+        try {
+            if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
             }
-        };
-        u.onerror = () => {
-            if (window._activeSpeechUtterance === u) {
-                window._activeSpeechUtterance = null;
-            }
-            try { window.speechSynthesis.cancel(); } catch (e) {}
-        };
-        // 將 SpeechSynthesisUtterance 實例保存於全域變數中，避免被瀏覽器垃圾回收機制中途切斷導致無聲
-        window._activeSpeechUtterance = u;
-        window.speechSynthesis.speak(u);
-    } catch (e) {
+            const u = new SpeechSynthesisUtterance(nextText);
+            u.lang = 'zh-TW';
+            u.rate = 1.05;
+
+            let finished = false;
+            const onComplete = () => {
+                if (finished) return;
+                finished = true;
+                if (this._watchdogTimer) {
+                    clearTimeout(this._watchdogTimer);
+                    this._watchdogTimer = null;
+                }
+                if (window._activeSpeechUtterance === u) {
+                    window._activeSpeechUtterance = null;
+                }
+                this.isSpeaking = false;
+                this.processNext();
+            };
+
+            u.onend = onComplete;
+            u.onerror = onComplete;
+
+            // 安全保底：防止行動裝置瀏覽器偶發未觸發 onend 卡住佇列
+            this._watchdogTimer = setTimeout(onComplete, 12000);
+
+            // 將 SpeechSynthesisUtterance 實例保存於全域變數中，避免被瀏覽器垃圾回收機制中途切斷導致無聲
+            window._activeSpeechUtterance = u;
+            window.speechSynthesis.speak(u);
+        } catch (e) {
+            window._activeSpeechUtterance = null;
+            this.isSpeaking = false;
+            this.processNext();
+        }
+    },
+
+    clear() {
+        this.queue.length = 0;
+        this.isSpeaking = false;
+        this.recentHistory.clear();
+        if (this._watchdogTimer) {
+            clearTimeout(this._watchdogTimer);
+            this._watchdogTimer = null;
+        }
         window._activeSpeechUtterance = null;
+        if ('speechSynthesis' in window) {
+            try { window.speechSynthesis.cancel(); } catch (e) {}
+        }
     }
+};
+window.VoiceQueue = VoiceQueue;
+
+function speakText(text) {
+    VoiceQueue.enqueue(text);
 }
 
 // 🚀 綁定語音開關按鈕切換邏輯
@@ -455,11 +530,8 @@ document.getElementById('voiceToggleBtn').onclick = () => {
         icon.className = "fa-solid fa-volume-xmark text-base";
         label.innerText = "語音關";
         
-        // 強制中斷目前正在唸的語音
-        if ('speechSynthesis' in window) {
-            try { window.speechSynthesis.cancel(); } catch (e) {}
-        }
-        window._activeSpeechUtterance = null;
+        // 切換為「語音關」時，呼叫 speechSynthesis.cancel() 並清空排隊佇列
+        VoiceQueue.clear();
     }
 };
 
@@ -2251,6 +2323,7 @@ document.getElementById('cancelEditBtn').onclick = () => {
 
 function backToMain() {
     stopSmoothPlayback();
+    VoiceQueue.clear();
     if (followWatchId !== null) {
         navigator.geolocation.clearWatch(followWatchId);
         followWatchId = null;
@@ -2294,7 +2367,7 @@ function backToMain() {
 
 document.getElementById('topBackBtn').onclick = (e) => {
     if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-        stopSmoothPlayback(); window.openRouteDetail(selectedRouteIdx);
+        stopSmoothPlayback(); VoiceQueue.clear(); window.openRouteDetail(selectedRouteIdx);
     } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || !document.getElementById('tacticalStopBtn').classList.contains('hidden')) {
         document.getElementById('followStopBtn').click();
     } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
@@ -2714,10 +2787,10 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
             if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= triggerWindow) {
                 replayTriggeredMusicSet.add(idx);
                 if (ev.type === 'on') {
-                    showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600');
+                    showNavAlert('🎵', '開啟音樂！', 'bg-green-600');
                     speakText('請開啟音樂');
                 } else if (ev.type === 'off') {
-                    showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600');
+                    showNavAlert('🔇', '關閉音樂！', 'bg-red-600');
                     speakText('請關閉音樂');
                 }
             }
@@ -2806,8 +2879,7 @@ speedToggleBtn.onclick = () => {
 };
 document.getElementById('stopPlaybackBtn').onclick = () => { 
     stopSmoothPlayback();
-    if ('speechSynthesis' in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
-    window._activeSpeechUtterance = null;
+    VoiceQueue.clear();
     document.getElementById('playbackUI').classList.add('hidden'); 
     document.getElementById('musicAlertBanner').classList.add('hidden');
     document.getElementById('topBackBtn').classList.remove('hidden');
@@ -2937,29 +3009,30 @@ let navAlertHideTimer = null;
 function showNavAlert(iconHtml, text, bgColorClass, photoUrl = null) {
     if (navAlertHideTimer) clearTimeout(navAlertHideTimer);
     if (text === '') {
-        // 🚀 無文字模式 (轉彎專用)：變成 36x36 的完美圓角正方形大圖示
-        banner.className = `fixed top-24 left-1/2 -translate-x-1/2 z-[60] rounded-[2rem] shadow-2xl text-white font-black nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center w-36 h-36 ${bgColorClass}`;
-        banner.innerHTML = `<span class="text-[90px] drop-shadow-lg leading-none">${iconHtml}</span>`;
+        // 🚀 無文字模式 (轉彎專用)：水平置中圓角正方形大圖示
+        banner.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[60] rounded-3xl shadow-2xl text-white font-black nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center w-28 h-28 ${bgColorClass}`;
+        banner.innerHTML = `<span class="text-[72px] drop-shadow-lg leading-none">${iconHtml}</span>`;
     } else if (bgColorClass && bgColorClass.includes('amber')) {
-        // ⚠️ 導航／重播模式下的黃色注意路段：頂部精簡橫幅（最大高度 84px，不擋車頭路線）
-        banner.className = `fixed top-[4.5rem] left-1/2 -translate-x-1/2 z-[60] rounded-2xl shadow-2xl text-white font-black nav-alert-pop border-2 border-white pointer-events-auto flex items-center justify-between px-3.5 py-2 w-11/12 max-w-sm max-h-[84px] overflow-hidden gap-2.5 ${bgColorClass}`;
+        // ⚠️ 導航／重播模式下的黃色注意路段：頂部精簡橫幅（水平置中、寬度自適應、不擋兩側按鈕與車頭路線）
+        banner.className = `fixed top-[4.5rem] left-1/2 -translate-x-1/2 z-[60] w-fit max-w-[calc(100vw-140px)] rounded-2xl shadow-2xl text-white font-black nav-alert-pop border-2 border-white pointer-events-auto flex items-center justify-between px-4 py-2 max-h-[84px] overflow-hidden gap-2.5 ${bgColorClass}`;
         const thumbHtml = photoUrl
-            ? `<button type="button" onclick="openPhotoLightbox(this.querySelector('img').src)" class="relative w-[56px] h-[56px] flex-shrink-0 rounded-xl overflow-hidden border-2 border-white shadow-md active:scale-95 focus:outline-none" title="點擊放大檢視照片">
+            ? `<button type="button" onclick="openPhotoLightbox(this.querySelector('img').src)" class="relative w-[52px] h-[52px] flex-shrink-0 rounded-xl overflow-hidden border-2 border-white shadow-md active:scale-95 focus:outline-none" title="點擊放大檢視照片">
                    <img src="${photoUrl}" alt="提醒縮圖" class="w-full h-full object-cover">
                    <span class="absolute bottom-0.5 right-0.5 bg-black/70 text-white text-[9px] leading-none px-1 py-0.5 rounded pointer-events-none">🔍</span>
                </button>`
             : '';
         banner.innerHTML = `
             <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span class="text-2xl flex-shrink-0 drop-shadow">${iconHtml}</span>
-                <span class="text-base sm:text-lg font-black leading-tight text-left break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${text}</span>
+                <span class="text-xl flex-shrink-0 drop-shadow">${iconHtml}</span>
+                <span class="text-sm sm:text-base font-black leading-tight text-left break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${text}</span>
             </div>
             ${thumbHtml}
         `;
     } else {
-        // 其他有文字模式 (開關音樂、抵達起點等橫幅)
-        banner.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[60] rounded-3xl shadow-2xl text-white font-black text-center nav-alert-pop border-4 border-white pointer-events-auto flex flex-col items-center justify-center p-4 w-11/12 max-w-sm gap-2 text-2xl ${bgColorClass}`;
-        banner.innerHTML = `<div class="flex items-center justify-center gap-2"><span class="text-3xl drop-shadow-md">${iconHtml}</span> <span>${text}</span></div>`;
+        // 🎵 開關音樂、抵達起點等橫幅：水平置中、寬度自適應內容、預留左右 140px 空間不遮擋右上角按鈕
+        banner.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[60] w-fit max-w-[calc(100vw-140px)] rounded-2xl shadow-2xl text-white font-black text-center nav-alert-pop border-2 border-white pointer-events-auto flex items-center justify-center px-4 py-2 gap-1.5 text-base sm:text-lg whitespace-nowrap ${bgColorClass}`;
+        const displayStr = (iconHtml && !String(text).startsWith(iconHtml)) ? `${iconHtml} ${text}` : String(text);
+        banner.innerHTML = `<span class="drop-shadow-sm truncate">${displayStr}</span>`;
     }
     
     banner.classList.remove('hidden');
@@ -3183,9 +3256,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
                     if (distMeters <= 15) {
                         triggeredMusicIndices.add(idx); autoWakeScreen();
-                        if (ev.type === 'on') { showNavAlert('🎵', '開啟回收音樂！', 'bg-green-600'); speakText("請開啟音樂"); }
-                        else if (ev.type === 'off') { showNavAlert('🔇', '關閉回收音樂！', 'bg-red-600'); speakText("請關閉音樂"); }
-                        else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null); speakText(`前方提醒，${ev.note}`); }
+                        if (ev.type === 'on') { showNavAlert('🎵', '開啟音樂！', 'bg-green-600'); speakText("請開啟音樂"); }
+                        else if (ev.type === 'off') { showNavAlert('🔇', '關閉音樂！', 'bg-red-600'); speakText("請關閉音樂"); }
+                        else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null); speakText(`前方提醒，${ev.note || '注意路況'}`); }
                         autoSleepScreen();
                     }
                 }
@@ -3195,6 +3268,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 };
 
 const endFollowAction = () => {
+    VoiceQueue.clear();
     if (followWatchId !== null) {
         navigator.geolocation.clearWatch(followWatchId);
         followWatchId = null;
@@ -3294,10 +3368,8 @@ function startQuickSpeechRecognition(clearExisting = false) {
         quickNavAlertInput.value = '';
     }
 
-    // 暫停正在播報的 TTS 語音，避免干擾麥克風收音
-    if ('speechSynthesis' in window) {
-        try { window.speechSynthesis.cancel(); } catch (e) {}
-    }
+    // 暫停正在播報的 TTS 語音並清空排隊佇列，避免干擾麥克風收音
+    VoiceQueue.clear();
 
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {

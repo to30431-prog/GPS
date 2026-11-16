@@ -68,6 +68,17 @@ input[type=range]::-webkit-slider-runnable-track {
     width: 100%; height: 8px; cursor: pointer; background: #e2e8f0; border-radius: 999px;
 }
 
+/* 頂部狀態提示橫幅（水平置中、自適應寬度、預留左右按鈕空間不重疊） */
+#musicAlertBanner {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: fit-content;
+    max-width: calc(100vw - 140px);
+    padding: 0.55rem 1.1rem;
+    box-sizing: border-box;
+}
+
 /* 導航方向指示大圖標動畫 (加入 translateX 保持絕對置中) */
 @keyframes popIn {
     0% { transform: translateX(-50%) scale(0.5); opacity: 0; }

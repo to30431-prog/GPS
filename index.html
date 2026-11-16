@@ -28,8 +28,8 @@
 
     <div id="map"></div>
 
-    <!-- 語音與視覺警報橫幅 (移至畫面上方) -->
-    <div id="musicAlertBanner" class="hidden fixed top-24 left-4 right-4 z-50 rounded-2xl p-5 shadow-2xl text-white font-black text-center animate-bounce border-2 border-white pointer-events-auto flex flex-col items-center justify-center gap-2"></div>
+    <!-- 語音與視覺警報橫幅 (移至畫面上方，水平置中自適應寬度，不遮擋兩側按鈕) -->
+    <div id="musicAlertBanner" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-50 w-fit max-w-[calc(100vw-140px)] rounded-2xl px-4 py-2 shadow-2xl text-white font-black text-center border-2 border-white pointer-events-auto flex items-center justify-center gap-1.5"></div>
 
     <!-- 🎯 地標即時距離指引浮動膠囊 -->
     <div id="pinDistanceGuideBanner" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-[48] bg-blue-600/95 backdrop-blur text-white px-4 py-2 rounded-full shadow-xl border-2 border-white pointer-events-auto flex items-center gap-2.5 text-xs sm:text-sm font-black whitespace-nowrap">

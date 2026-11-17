@@ -324,24 +324,34 @@ function fixSymbolTextAlignment() {
     try {
         const style = map.getStyle();
         if (!style || !style.layers) return;
+        
         style.layers.forEach(layer => {
             if (layer.type === 'symbol') {
                 const layout = layer.layout || {};
                 if (layout['text-field'] !== undefined) {
-                    try {
-                        map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
-                        map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
-                    } catch (e) {}
-                    // 沿道路線排列的路名圖層，額外確保文字正面朝上
-                    if (layout['symbol-placement'] === 'line') {
+                    
+                    // 判斷是否為沿道路線條排列的路名
+                    const isLinePlacement = layout['symbol-placement'] === 'line';
+
+                    if (isLinePlacement) {
+                        // 🟢 【道路名稱】：必須跟隨地圖 (map) 旋轉才能貼合道路，並開啟防倒立翻轉
                         try {
-                            map.setLayoutProperty(layer.id, 'text-keep-upright', true);
+                            map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'map');
+                            map.setLayoutProperty(layer.id, 'text-keep-upright', true); 
+                        } catch (e) {}
+                    } else {
+                        // 🟢 【一般地標】：永遠面對螢幕 (viewport)，不隨地圖旋轉與傾斜
+                        try {
+                            map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
+                            map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
                         } catch (e) {}
                     }
                 }
             }
         });
-    } catch (e) {}
+    } catch (e) {
+        console.error("修正字體對齊時發生錯誤:", e);
+    }
 }
 
 map.on('load', () => {

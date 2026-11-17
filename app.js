@@ -2431,7 +2431,7 @@ document.getElementById('topBackBtn').onclick = (e) => {
         }
         
         window.openRouteDetail(selectedRouteIdx);
-    } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || ...
+    } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || !document.getElementById('tacticalStopBtn').classList.contains('hidden')) {
         document.getElementById('followStopBtn').click();
     } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
         document.getElementById('routeDetailUI').classList.add('hidden');

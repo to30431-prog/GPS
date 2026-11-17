@@ -226,7 +226,8 @@ function startIdleGPS() {
             const acc = Math.round(filtered.accuracy);
             const accEl = document.getElementById('accuracyText');
             if (accEl) accEl.innerText = `± ${acc} m`;
-            if (!filtered.isStationary && vehicleMarker) {
+            // 🚀 修改：移除 !filtered.isStationary，確保靜止時車子也能立即校正回實際定位
+            if (vehicleMarker) {
                 vehicleMarker.setLngLat(lastKnownLngLat).setRotation(filtered.heading);
             }
         }
@@ -2407,14 +2408,30 @@ function backToMain() {
     document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
     clearDomMarkers(); updateRouteLayers([]);
     map.getSource('bg-route')?.setData(emptyGeoJSON());
+    
+    // 🚀 新增：回到主畫面時，強制將車子座標拉回最後一次紀錄的真實 GPS 位置
+    if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
+        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+        if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+    }
+    
     releaseScreenWakeLockIfIdle();
     startIdleGPS();
 }
 
 document.getElementById('topBackBtn').onclick = (e) => {
     if (!document.getElementById('playbackUI').classList.contains('hidden')) {
-        stopSmoothPlayback(); VoiceQueue.clear(); window.openRouteDetail(selectedRouteIdx);
-    } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || !document.getElementById('tacticalStopBtn').classList.contains('hidden')) {
+        stopSmoothPlayback(); 
+        VoiceQueue.clear(); 
+        
+        // 🚀 新增：按左上角返回中斷重播時，拉回真實位置
+        if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
+            lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+        }
+        
+        window.openRouteDetail(selectedRouteIdx);
+    } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || ...
         document.getElementById('followStopBtn').click();
     } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
         document.getElementById('routeDetailUI').classList.add('hidden');
@@ -2929,6 +2946,13 @@ document.getElementById('stopPlaybackBtn').onclick = () => {
     document.getElementById('playbackUI').classList.add('hidden'); 
     document.getElementById('musicAlertBanner').classList.add('hidden');
     document.getElementById('topBackBtn').classList.remove('hidden');
+    
+    // 🚀 新增：退出重播時，瞬間把車子拉回真實位置
+    if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
+        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+        if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+    }
+    
     window.openRouteDetail(selectedRouteIdx); 
 };
 

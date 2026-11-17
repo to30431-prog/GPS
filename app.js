@@ -316,6 +316,34 @@ puckEl.innerHTML = `
 
 let vehicleMarker = null;
 
+// ==========================================
+// 🗺️ 地圖路名與地標文字永遠跟隨駕駛視角轉正
+// 避免「車頭上」模式旋轉時文字倒立
+// ==========================================
+function fixSymbolTextAlignment() {
+    try {
+        const style = map.getStyle();
+        if (!style || !style.layers) return;
+        style.layers.forEach(layer => {
+            if (layer.type === 'symbol') {
+                const layout = layer.layout || {};
+                if (layout['text-field'] !== undefined) {
+                    try {
+                        map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
+                        map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
+                    } catch (e) {}
+                    // 沿道路線排列的路名圖層，額外確保文字正面朝上
+                    if (layout['symbol-placement'] === 'line') {
+                        try {
+                            map.setLayoutProperty(layer.id, 'text-keep-upright', true);
+                        } catch (e) {}
+                    }
+                }
+            }
+        });
+    } catch (e) {}
+}
+
 map.on('load', () => {
     vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
     
@@ -328,10 +356,18 @@ map.on('load', () => {
     map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
     map.addLayer({ id: 'freehand-temp-layer', type: 'line', source: 'freehand-temp-source', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 } });
 
+    // 修正地圖文字圖層對齊（避免車頭上模式文字倒立）
+    fixSymbolTextAlignment();
+
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
         map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
     });
+});
+
+// 切換地圖樣式 (setStyle) 後重新修正文字對齊
+map.on('style.load', () => {
+    fixSymbolTextAlignment();
 });
 
 function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
@@ -4354,6 +4390,12 @@ window.setMode = function(sec, meters, text) {
 // ==========================================
 const LIVE_FLEET_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/live_fleet';
 const LIVE_FLEET_ALL_URL = `${LIVE_FLEET_BASE_URL}.json`;
+const SYSTEM_CONFIG_URL = `${FIREBASE_BASE_URL}/system_config.json`;
+const DEFAULT_RADAR_INTERVAL_SEC = 5;
+
+let currentRadarIntervalSec = DEFAULT_RADAR_INTERVAL_SEC;
+let selectedAdminInterval = DEFAULT_RADAR_INTERVAL_SEC;
+let lastKnownCloudInterval = DEFAULT_RADAR_INTERVAL_SEC;
 
 // 獨立的友車圖層群組（不受 clearDomMarkers 影響，進入導航或切換路線時依然保留）
 const fleetLayerGroup = {};
@@ -4475,9 +4517,11 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     if (!navigator.onLine || isUploadingFleetLocation) return;
 
     const now = Date.now();
+    const minUploadIntervalMs = (typeof currentRadarIntervalSec === 'number' && currentRadarIntervalSec > 0 ? currentRadarIntervalSec : 5) * 1000;
     if (!forceUpload && lastUploadedFleetLat !== null && lastUploadedFleetLng !== null) {
+        if (now - lastFleetUploadTime < minUploadIntervalMs) return; // 依雲端設定秒數頻率上傳
         const distMeters = getDistanceKm(lastUploadedFleetLng, lastUploadedFleetLat, lng, lat) * 1000;
-        if (distMeters <= 10) return; // 移動未超過 10 公尺不重複上傳
+        if (distMeters <= 5) return; // 移動未超過 5 公尺不重複上傳
     }
 
     const prevLat = lastUploadedFleetLat;
@@ -4733,9 +4777,10 @@ function startFleetRadarSystem() {
         }, () => {}, { enableHighAccuracy: true });
     }
 
-    // 每 8 秒靜默讀取 /live_fleet.json 更新友車圖層
+    // 靜默讀取 /live_fleet.json 更新友車圖層（依雲端動態秒數，預設 5 秒）
     fetchAndRenderFleetRadar();
-    fleetPollTimer = setInterval(fetchAndRenderFleetRadar, 8000);
+    const pollIntervalMs = (typeof currentRadarIntervalSec === 'number' && currentRadarIntervalSec > 0 ? currentRadarIntervalSec : 5) * 1000;
+    fleetPollTimer = setInterval(fetchAndRenderFleetRadar, pollIntervalMs);
     if (typeof fetchAndRenderSharedMapPins === 'function') {
         fetchAndRenderSharedMapPins();
     }
@@ -5516,6 +5561,227 @@ if (map.loaded()) {
 startSharedMapPinsSystem();
 
 // ==========================================
+// ⚙️ 10. 管理員隱藏設定面板（6 位數密碼驗證＋全隊同步調整更新秒數）
+// ==========================================
+const ADMIN_SETTINGS_PASSWORD = '888888';
+
+// --- 10.1 從 Firebase 讀取全隊雷達更新秒數 ---
+async function fetchSystemConfig() {
+    try {
+        const res = await fetchWithTimeout(SYSTEM_CONFIG_URL, { cache: 'no-store' }, 5000);
+        if (!res.ok) return DEFAULT_RADAR_INTERVAL_SEC;
+        const data = await res.json();
+        if (data && typeof data.radarIntervalSec === 'number' && data.radarIntervalSec > 0) {
+            return data.radarIntervalSec;
+        }
+        return DEFAULT_RADAR_INTERVAL_SEC;
+    } catch (e) {
+        return DEFAULT_RADAR_INTERVAL_SEC;
+    }
+}
+
+// --- 10.2 檢查雲端秒數是否變更，若變更則即時套用（無須重開 App） ---
+let isCheckingSystemConfig = false;
+async function checkAndApplyRadarInterval() {
+    if (isCheckingSystemConfig) return;
+    isCheckingSystemConfig = true;
+    try {
+        const cloudSec = await fetchSystemConfig();
+        if (cloudSec && cloudSec !== currentRadarIntervalSec) {
+            currentRadarIntervalSec = cloudSec;
+            lastKnownCloudInterval = cloudSec;
+            // 清除舊計時器並以新秒數重新啟動雷達輪詢
+            restartFleetRadarWithNewInterval(cloudSec);
+            updateAdminIntervalDisplay(cloudSec);
+        }
+    } finally {
+        isCheckingSystemConfig = false;
+    }
+}
+
+// --- 10.3 以新秒數重新啟動車隊雷達輪詢（GPS 上傳 + 雷達讀取） ---
+function restartFleetRadarWithNewInterval(intervalSec) {
+    if (!fleetUserName) return;
+
+    // 清除舊的 fleetPollTimer（雷達讀取）
+    if (fleetPollTimer !== null) {
+        clearInterval(fleetPollTimer);
+        fleetPollTimer = null;
+    }
+    // 以新秒數重新啟動輪詢
+    const intervalMs = (intervalSec || DEFAULT_RADAR_INTERVAL_SEC) * 1000;
+    fetchAndRenderFleetRadar();
+    fleetPollTimer = setInterval(fetchAndRenderFleetRadar, intervalMs);
+}
+
+// --- 10.4 初始化：讀取雲端秒數並套用 ---
+(async function initRadarInterval() {
+    const cloudSec = await fetchSystemConfig();
+    currentRadarIntervalSec = cloudSec;
+    lastKnownCloudInterval = cloudSec;
+    // 若車隊雷達已啟動，以雲端秒數重新啟動輪詢
+    if (fleetRadarStarted && fleetUserName) {
+        restartFleetRadarWithNewInterval(cloudSec);
+    }
+})();
+
+// --- 10.5 在每次 fetchAndRenderFleetRadar 時一併檢查雲端秒數是否變更 ---
+const _originalFetchAndRenderFleetRadar = fetchAndRenderFleetRadar;
+fetchAndRenderFleetRadar = async function() {
+    await _originalFetchAndRenderFleetRadar();
+    checkAndApplyRadarInterval();
+};
+
+// --- 10.6 標題連續點擊 5 次隱藏觸發機制 ---
+(function setupAdminTitleTrigger() {
+    const titleEl = document.getElementById('appStatusTitle');
+    if (!titleEl) return;
+
+    let tapCount = 0;
+    let tapTimer = null;
+
+    titleEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tapCount++;
+        if (tapTimer) clearTimeout(tapTimer);
+        // 3 秒內連點 5 下觸發
+        tapTimer = setTimeout(() => { tapCount = 0; }, 3000);
+
+        if (tapCount >= 5) {
+            tapCount = 0;
+            if (tapTimer) { clearTimeout(tapTimer); tapTimer = null; }
+            openAdminPasswordModal();
+        }
+    });
+})();
+
+// --- 10.7 密碼驗證彈窗 ---
+function openAdminPasswordModal() {
+    const modal = document.getElementById('adminPasswordModal');
+    const input = document.getElementById('adminPasswordInput');
+    const errorEl = document.getElementById('adminPasswordError');
+    if (!modal || !input) return;
+    input.value = '';
+    errorEl?.classList.add('hidden');
+    modal.classList.remove('hidden');
+    setTimeout(() => input.focus(), 100);
+}
+
+document.getElementById('btnVerifyAdminPassword')?.addEventListener('click', () => {
+    const input = document.getElementById('adminPasswordInput');
+    const errorEl = document.getElementById('adminPasswordError');
+    const pwd = (input?.value || '').trim();
+    if (pwd === ADMIN_SETTINGS_PASSWORD) {
+        document.getElementById('adminPasswordModal')?.classList.add('hidden');
+        openAdminSettingsPanel();
+    } else {
+        errorEl?.classList.remove('hidden');
+        if (input) { input.value = ''; input.focus(); }
+        try { navigator.vibrate?.(200); } catch (e) {}
+    }
+});
+
+document.getElementById('adminPasswordInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        document.getElementById('btnVerifyAdminPassword')?.click();
+    }
+});
+
+document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () => {
+    document.getElementById('adminPasswordModal')?.classList.add('hidden');
+});
+
+// --- 10.8 管理員設定面板 ---
+async function openAdminSettingsPanel() {
+    const modal = document.getElementById('adminSettingsModal');
+    if (!modal) return;
+
+    // 讀取最新雲端秒數
+    const cloudSec = await fetchSystemConfig();
+    currentRadarIntervalSec = cloudSec;
+    lastKnownCloudInterval = cloudSec;
+    selectedAdminInterval = cloudSec;
+
+    // 更新顯示
+    updateAdminIntervalDisplay(cloudSec);
+    highlightAdminIntervalBtn(cloudSec);
+
+    modal.classList.remove('hidden');
+}
+
+function updateAdminIntervalDisplay(sec) {
+    const el = document.getElementById('adminCurrentIntervalDisplay');
+    if (el) el.textContent = `${sec} 秒`;
+}
+
+function highlightAdminIntervalBtn(activeSec) {
+    const btns = document.querySelectorAll('.admin-interval-btn');
+    btns.forEach(btn => {
+        const val = parseInt(btn.dataset.interval, 10);
+        if (val === activeSec) {
+            btn.className = 'admin-interval-btn bg-blue-50 border-2 border-blue-400 text-blue-800 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-between text-sm ring-2 ring-blue-300';
+        } else {
+            btn.className = 'admin-interval-btn bg-gray-50 hover:bg-blue-50 border-2 border-gray-200 text-gray-800 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-between text-sm';
+        }
+    });
+}
+
+// 秒數選擇按鈕點擊事件
+document.querySelectorAll('.admin-interval-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const val = parseInt(btn.dataset.interval, 10);
+        if (!isNaN(val) && val > 0) {
+            selectedAdminInterval = val;
+            highlightAdminIntervalBtn(val);
+        }
+    });
+});
+
+// 儲存按鈕
+document.getElementById('btnSaveAdminSettings')?.addEventListener('click', async () => {
+    const saveBtn = document.getElementById('btnSaveAdminSettings');
+    if (!saveBtn) return;
+    const originalText = saveBtn.innerHTML;
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 儲存中...';
+    saveBtn.disabled = true;
+
+    try {
+        const payload = {
+            radarIntervalSec: selectedAdminInterval,
+            updatedAt: Date.now()
+        };
+        await fetchWithTimeout(SYSTEM_CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }, 5000);
+
+        currentRadarIntervalSec = selectedAdminInterval;
+        lastKnownCloudInterval = selectedAdminInterval;
+        updateAdminIntervalDisplay(selectedAdminInterval);
+
+        // 本機立即套用新秒數
+        restartFleetRadarWithNewInterval(selectedAdminInterval);
+
+        saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> 已成功儲存！';
+        setTimeout(() => {
+            saveBtn.innerHTML = originalText;
+            saveBtn.disabled = false;
+            document.getElementById('adminSettingsModal')?.classList.add('hidden');
+        }, 1500);
+    } catch (err) {
+        saveBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> 儲存失敗，請重試';
+        saveBtn.disabled = false;
+        setTimeout(() => { saveBtn.innerHTML = originalText; }, 2000);
+    }
+});
+
+// 關閉按鈕
+document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () => {
+    document.getElementById('adminSettingsModal')?.classList.add('hidden');
+});
+
+// ==========================================
 // 🚀 【終極防誤關 App】攔截手機實體返回鍵
 // ==========================================
 (function setupAndroidBackButton() {
@@ -5535,9 +5801,17 @@ startSharedMapPinsSystem();
         const viewMapPinModal = document.getElementById('viewMapPinModal');
         const quickNavAlertModal = document.getElementById('quickNavAlertModal');
         const manualDrawUI = document.getElementById('manualDrawUI');
+        const adminSettingsModal = document.getElementById('adminSettingsModal');
+        const adminPasswordModal = document.getElementById('adminPasswordModal');
 
         // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
-        if (blackOverlay && !blackOverlay.classList.contains('hidden')) {
+        if (adminSettingsModal && !adminSettingsModal.classList.contains('hidden')) {
+            adminSettingsModal.classList.add('hidden');
+        }
+        else if (adminPasswordModal && !adminPasswordModal.classList.contains('hidden')) {
+            adminPasswordModal.classList.add('hidden');
+        }
+        else if (blackOverlay && !blackOverlay.classList.contains('hidden')) {
             exitBlackPowerSaveMode(false);
         }
         else if (photoLightboxModal && !photoLightboxModal.classList.contains('hidden')) {

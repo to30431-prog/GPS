@@ -222,6 +222,23 @@ input[type=range]::-webkit-slider-runnable-track {
     white-space: nowrap;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
 }
+/* 🏢 社區大樓標記：常駐於橘色水滴正上方的清晰醒目大樓名稱標籤 */
+.shared-pin-label.is-building {
+    background: linear-gradient(135deg, #c2410c 0%, #9a3412 100%);
+    color: #ffffff;
+    font-size: 12.5px;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: 10px;
+    border: 2px solid #ffedd5;
+    margin-bottom: 6px;
+    max-width: 210px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45);
+}
 .shared-pin-teardrop {
     width: 44px;
     height: 44px;
@@ -234,6 +251,12 @@ input[type=range]::-webkit-slider-runnable-track {
     justify-content: center;
     box-sizing: border-box;
     margin-bottom: 4px;
+}
+/* 🏢 社區大樓標記：橘色水滴（Orange Teardrop Pin） */
+.shared-pin-teardrop.is-building {
+    background: linear-gradient(135deg, #fb923c 0%, #ea580c 55%, #c2410c 100%);
+    border: 2.5px solid #ffffff;
+    box-shadow: 0 2px 8px rgba(234, 88, 12, 0.55);
 }
 .shared-pin-inner {
     width: 34px;
@@ -488,4 +511,108 @@ input[type=range]::-webkit-slider-runnable-track {
     border-bottom: 2.5px solid currentColor;
     opacity: 0.75;
 }
+
+/* ==========================================
+   🛋️ 家具模式（3 組大型家具協作＋純木頭垃圾車支援火紅標記）
+   重要規範：傳給 new maplibregl.Marker({ element }) 的外層容器 (.furniture-pin-wrapper / .furniture-popup-wrapper)
+   嚴禁設定任何 CSS transform，動畫與縮放一律放在內層子元素，確保縮放或旋轉地圖時 100% 精準不位移！
+   ========================================== */
+.furniture-pin-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    z-index: 36;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.furniture-pin-wrapper.is-wood-support {
+    z-index: 44;
+}
+.furniture-pin-wrapper.is-other-group {
+    z-index: 33;
+}
+
+.furniture-pin-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1.15;
+    border: 2.5px solid #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.38);
+    white-space: nowrap;
+    transition: transform 0.15s ease-out;
+}
+.furniture-pin-pill:active {
+    transform: scale(0.92);
+}
+.furniture-pin-pill.group-group1 {
+    background: linear-gradient(135deg, #9333ea, #7e22ce);
+}
+.furniture-pin-pill.group-group2 {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+}
+.furniture-pin-pill.group-group3 {
+    background: linear-gradient(135deg, #0d9488, #0f766e);
+}
+.furniture-pin-pill.is-collected {
+    background: #64748b !important;
+    opacity: 0.82;
+}
+.furniture-pin-pill.is-wood-support {
+    background: linear-gradient(135deg, #dc2626, #ea580c) !important;
+    border: 2.5px solid #fef08a !important;
+    box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.35), 0 6px 16px rgba(185, 28, 28, 0.55) !important;
+    animation: woodSupportFirePulse 1.25s infinite ease-in-out;
+}
+
+@keyframes woodSupportFirePulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.09);
+    }
+}
+
+.furniture-pin-arrow {
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 7px solid #ffffff;
+    margin-top: -1px;
+    filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.28));
+}
+.furniture-pin-arrow.is-wood-support {
+    border-top-color: #dc2626;
+}
+
+.furniture-popup-wrapper {
+    z-index: 60;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.furniture-popup-card {
+    background: #ffffff;
+    border-radius: 18px;
+    padding: 12px;
+    width: 248px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
+    border: 2.5px solid #f59e0b;
+    color: #1f2937;
+    font-size: 12px;
+}
+.furniture-popup-card.is-wood-support {
+    border-color: #dc2626;
+}
+
 

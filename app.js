@@ -1,11 +1,11 @@
 // ==========================================
 // 🔑 雲端路線庫管理員密碼與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.22';
+const APP_VERSION = 'v3.24';
 window.APP_VERSION = APP_VERSION;
 const ADMIN_PASSWORD = '5201314';
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.22
+// 確保畫面上所有版本號膠囊同步顯示為 v3.24
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -698,6 +698,9 @@ let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedFurnitureOtherRoutesGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedFurnitureManualDraftGeoJSON = { type: 'FeatureCollection', features: [] };
 
 const map = new maplibregl.Map({
     container: 'map',
@@ -1043,6 +1046,95 @@ function ensureCustomRouteSourcesAndLayers() {
             });
         }
 
+        // 5. 🛋️ 家具模式專屬圖層（其他 2 組路線＋本組主路線＋手動拉線草稿）
+        if (!map.getSource('furniture-other-routes-source')) {
+            map.addSource('furniture-other-routes-source', {
+                type: 'geojson',
+                data: cachedFurnitureOtherRoutesGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('furniture-other-routes-casing')) {
+            map.addLayer({
+                id: 'furniture-other-routes-casing',
+                type: 'line',
+                source: 'furniture-other-routes-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 7,
+                    'line-opacity': 0.85
+                }
+            });
+        }
+        if (!map.getLayer('furniture-other-routes-line')) {
+            map.addLayer({
+                id: 'furniture-other-routes-line',
+                type: 'line',
+                source: 'furniture-other-routes-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#2563eb'],
+                    'line-width': 4,
+                    'line-dasharray': [2, 1.5],
+                    'line-opacity': 0.9
+                }
+            });
+        }
+
+        if (!map.getSource('furniture-own-route-source')) {
+            map.addSource('furniture-own-route-source', {
+                type: 'geojson',
+                data: cachedFurnitureOwnRouteGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('furniture-own-route-casing')) {
+            map.addLayer({
+                id: 'furniture-own-route-casing',
+                type: 'line',
+                source: 'furniture-own-route-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 11,
+                    'line-opacity': 0.92
+                }
+            });
+        }
+        if (!map.getLayer('furniture-own-route-line')) {
+            map.addLayer({
+                id: 'furniture-own-route-line',
+                type: 'line',
+                source: 'furniture-own-route-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#9333ea'],
+                    'line-width': 7,
+                    'line-opacity': 0.96
+                }
+            });
+        }
+
+        if (!map.getSource('furniture-manual-draft-source')) {
+            map.addSource('furniture-manual-draft-source', {
+                type: 'geojson',
+                data: cachedFurnitureManualDraftGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('furniture-manual-draft-layer')) {
+            map.addLayer({
+                id: 'furniture-manual-draft-layer',
+                type: 'line',
+                source: 'furniture-manual-draft-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#f97316',
+                    'line-width': 5.5,
+                    'line-dasharray': [2, 1.2],
+                    'line-opacity': 0.95
+                }
+            });
+        }
+
         if (typeof activeDistanceGuidePin !== 'undefined' && activeDistanceGuidePin && typeof updatePinDistanceGuideRender === 'function') {
             updatePinDistanceGuideRender();
         }
@@ -1135,6 +1227,23 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
                 }
             });
         }
+        if (typeof furnitureDomMarkers !== 'undefined' && Array.isArray(furnitureDomMarkers)) {
+            furnitureDomMarkers.forEach(m => {
+                if (m && typeof m.getElement === 'function') {
+                    const el = m.getElement();
+                    if (el && !el.isConnected) m.addTo(map);
+                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+                }
+            });
+        }
+        if (typeof furnitureSearchPreviewMarker !== 'undefined' && furnitureSearchPreviewMarker) {
+            const el = furnitureSearchPreviewMarker.getElement?.();
+            if (el && !el.isConnected) furnitureSearchPreviewMarker.addTo(map);
+        }
+        if (typeof activeFurniturePopupMarker !== 'undefined' && activeFurniturePopupMarker) {
+            const el = activeFurniturePopupMarker.getElement?.();
+            if (el && !el.isConnected) activeFurniturePopupMarker.addTo(map);
+        }
     } catch (e) {}
 }
 
@@ -1148,10 +1257,16 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
         map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
         map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
         map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON || emptyGeoJSON());
+        map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON || emptyGeoJSON());
+        map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON || emptyGeoJSON());
+        map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON || emptyGeoJSON());
         if (currentMapLayerPreset?.isVector) {
             fixSymbolTextAlignment();
         }
         ensureDomMarkersIntactAfterStyleSwitch();
+        if (typeof renderAllFurnitureMapElements === 'function') {
+            renderAllFurnitureMapElements();
+        }
     } finally {
         isRestoringCustomStyleLayers = false;
     }
@@ -4739,12 +4854,22 @@ async function handleManualDrawMapClick(e) {
 
 map.on('click', (e) => {
     const origTarget = e.originalEvent?.target;
-    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker, .furniture-pin-wrapper, .furniture-popup-wrapper')) {
         return;
     }
-    // 點擊地圖空白處自動收合已展開的警示氣泡卡片
+    // 點擊地圖空白處自動收合已展開的警示氣泡卡片與家具點位卡片
     if (activeAlertPopupMarker) {
         closeActiveAlertPopup();
+    }
+    if (typeof closeFurniturePinPopup === 'function') {
+        closeFurniturePinPopup();
+    }
+
+    if (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) {
+        if (typeof handleFurnitureMapClick === 'function') {
+            handleFurnitureMapClick(e);
+        }
+        return;
     }
 
     if (isManualDrawingMode) {
@@ -8280,8 +8405,25 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 // ==========================================
-// 📍 10. 全車隊共享地圖地標（藍色水滴＋縮圖照片）
+// 📍 10. 全車隊共享地圖地標（藍色水滴髒亂點 ＋ 橘色水滴社區大樓）
 // ==========================================
+const longPressPinTypeModal = document.getElementById('longPressPinTypeModal');
+const longPressPinTypeCoordsText = document.getElementById('longPressPinTypeCoordsText');
+const btnChooseDirtySpotPin = document.getElementById('btnChooseDirtySpotPin');
+const btnChooseBuildingPin = document.getElementById('btnChooseBuildingPin');
+const btnCancelLongPressPinType = document.getElementById('btnCancelLongPressPinType');
+const btnCloseLongPressTypeTop = document.getElementById('btnCloseLongPressTypeTop');
+
+const createBuildingPinModal = document.getElementById('createBuildingPinModal');
+const buildingPinModalTitle = document.getElementById('buildingPinModalTitle');
+const buildingPinCoordsText = document.getElementById('buildingPinCoordsText');
+const buildingPinNameInput = document.getElementById('buildingPinNameInput');
+const btnSaveBuildingPin = document.getElementById('btnSaveBuildingPin');
+const btnSaveBuildingPinText = document.getElementById('btnSaveBuildingPinText');
+const btnCancelBuildingPin = document.getElementById('btnCancelBuildingPin');
+const btnCloseBuildingPinTop = document.getElementById('btnCloseBuildingPinTop');
+let editingBuildingPinTarget = null;
+
 const createMapPinModal = document.getElementById('createMapPinModal');
 const createMapPinCoordsText = document.getElementById('createMapPinCoordsText');
 const mapPinTitleInput = document.getElementById('mapPinTitleInput');
@@ -8296,6 +8438,8 @@ const btnCancelCreateMapPin = document.getElementById('btnCancelCreateMapPin');
 const btnCloseCreateMapPinTop = document.getElementById('btnCloseCreateMapPinTop');
 
 const viewMapPinModal = document.getElementById('viewMapPinModal');
+const viewMapPinModalCard = document.getElementById('viewMapPinModalCard');
+const viewMapPinCategoryBadge = document.getElementById('viewMapPinCategoryBadge');
 const viewMapPinTitleText = document.getElementById('viewMapPinTitleText');
 const viewMapPinAuthorText = document.getElementById('viewMapPinAuthorText');
 const viewMapPinTimeText = document.getElementById('viewMapPinTimeText');
@@ -8303,6 +8447,7 @@ const viewMapPinPhotoWrap = document.getElementById('viewMapPinPhotoWrap');
 const viewMapPinPhotoImg = document.getElementById('viewMapPinPhotoImg');
 const btnGoogleNavMapPin = document.getElementById('btnGoogleNavMapPin');
 const btnDistanceGuideMapPin = document.getElementById('btnDistanceGuideMapPin');
+const btnEditMapPinTitle = document.getElementById('btnEditMapPinTitle');
 const btnDeleteMapPin = document.getElementById('btnDeleteMapPin');
 const btnCloseViewMapPin = document.getElementById('btnCloseViewMapPin');
 const btnCloseViewMapPinTop = document.getElementById('btnCloseViewMapPinTop');
@@ -8640,6 +8785,165 @@ async function handleMapPinPhotoInputChange(e) {
 if (mapPinCameraInput) mapPinCameraInput.onchange = handleMapPinPhotoInputChange;
 if (mapPinGalleryInput) mapPinGalleryInput.onchange = handleMapPinPhotoInputChange;
 
+function openLongPressPinTypeModal(lat, lng) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+    pendingMapPinLat = lat;
+    pendingMapPinLng = lng;
+
+    if (longPressPinTypeCoordsText) {
+        longPressPinTypeCoordsText.innerText = `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+    if (longPressPinTypeModal) {
+        window.history.pushState({ pwa: true }, '');
+        longPressPinTypeModal.classList.remove('hidden');
+    }
+}
+
+function closeLongPressPinTypeModal(clearCoords = true) {
+    if (longPressPinTypeModal) longPressPinTypeModal.classList.add('hidden');
+    if (clearCoords) {
+        pendingMapPinLat = null;
+        pendingMapPinLng = null;
+    }
+}
+
+if (btnCancelLongPressPinType) btnCancelLongPressPinType.onclick = () => closeLongPressPinTypeModal(true);
+if (btnCloseLongPressTypeTop) btnCloseLongPressTypeTop.onclick = () => closeLongPressPinTypeModal(true);
+
+if (btnChooseDirtySpotPin) {
+    btnChooseDirtySpotPin.onclick = () => {
+        const lat = pendingMapPinLat;
+        const lng = pendingMapPinLng;
+        closeLongPressPinTypeModal(false);
+        openCreateMapPinModal(lat, lng);
+    };
+}
+
+if (btnChooseBuildingPin) {
+    btnChooseBuildingPin.onclick = () => {
+        const lat = pendingMapPinLat;
+        const lng = pendingMapPinLng;
+        closeLongPressPinTypeModal(false);
+        openCreateBuildingPinModal(lat, lng, null);
+    };
+}
+
+function openCreateBuildingPinModal(lat, lng, existingPin = null) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+    pendingMapPinLat = lat;
+    pendingMapPinLng = lng;
+    editingBuildingPinTarget = existingPin || null;
+
+    if (buildingPinCoordsText) {
+        buildingPinCoordsText.innerText = `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+    if (buildingPinModalTitle) {
+        buildingPinModalTitle.innerHTML = existingPin
+            ? '<span>🏢 修改社區大樓名稱</span>'
+            : '<span>🏢 標記社區大樓（橘色水滴）</span>';
+    }
+    if (btnSaveBuildingPinText) {
+        btnSaveBuildingPinText.textContent = existingPin
+            ? '確認修改並同步全隊'
+            : '確認標記並同步全隊';
+    }
+    if (buildingPinNameInput) {
+        buildingPinNameInput.value = existingPin ? (existingPin.title || '') : '';
+    }
+
+    if (createBuildingPinModal) {
+        window.history.pushState({ pwa: true }, '');
+        createBuildingPinModal.classList.remove('hidden');
+        setTimeout(() => {
+            buildingPinNameInput?.focus();
+            if (existingPin && buildingPinNameInput) {
+                buildingPinNameInput.select();
+            }
+        }, 120);
+    }
+}
+
+function closeCreateBuildingPinModal() {
+    if (createBuildingPinModal) createBuildingPinModal.classList.add('hidden');
+    editingBuildingPinTarget = null;
+    pendingMapPinLat = null;
+    pendingMapPinLng = null;
+}
+
+if (btnCancelBuildingPin) btnCancelBuildingPin.onclick = closeCreateBuildingPinModal;
+if (btnCloseBuildingPinTop) btnCloseBuildingPinTop.onclick = closeCreateBuildingPinModal;
+
+if (buildingPinNameInput) {
+    buildingPinNameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            saveBuildingMapPin();
+        }
+    });
+}
+
+async function saveBuildingMapPin() {
+    if (pendingMapPinLat === null || pendingMapPinLng === null) return;
+    const buildingName = (buildingPinNameInput?.value || '').trim();
+    if (!buildingName) {
+        alert('請輸入社區或大樓名稱（例如：龍鳳呈祥、幸福社區）！');
+        buildingPinNameInput?.focus();
+        return;
+    }
+    if (!navigator.onLine) {
+        alert('⚠️ 目前無網路連線，請確認網路狀態後再同步社區大樓標記！');
+        return;
+    }
+
+    const isEditing = Boolean(editingBuildingPinTarget && editingBuildingPinTarget.id);
+    const pinId = isEditing
+        ? editingBuildingPinTarget.id
+        : ('bldg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7));
+    const authorName = (fleetUserName || localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '熱心隊員').trim();
+    const now = Date.now();
+
+    const pinData = {
+        id: pinId,
+        pinType: 'building',
+        lat: Number(pendingMapPinLat.toFixed(6)),
+        lng: Number(pendingMapPinLng.toFixed(6)),
+        title: buildingName,
+        photo: '',
+        author: isEditing ? (editingBuildingPinTarget.author || authorName) : authorName,
+        createdAt: isEditing ? (editingBuildingPinTarget.createdAt || now) : now,
+        updatedAt: now
+    };
+
+    const origBtnHtml = btnSaveBuildingPin ? btnSaveBuildingPin.innerHTML : '';
+    if (btnSaveBuildingPin) {
+        btnSaveBuildingPin.disabled = true;
+        btnSaveBuildingPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步至全車隊地圖...';
+    }
+
+    try {
+        const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pinData)
+        }, 5000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        upsertPinMarkerOnMap(pinId, pinData);
+        closeCreateBuildingPinModal();
+        fetchAndRenderSharedMapPins();
+    } catch (err) {
+        console.error('上傳社區大樓標記失敗:', err);
+        alert('❌ 儲存社區大樓標記失敗（網路不穩或 5 秒連線逾時），請稍後再試！');
+    } finally {
+        if (btnSaveBuildingPin) {
+            btnSaveBuildingPin.disabled = false;
+            btnSaveBuildingPin.innerHTML = origBtnHtml;
+        }
+    }
+}
+
+if (btnSaveBuildingPin) btnSaveBuildingPin.onclick = saveBuildingMapPin;
+
 function openCreateMapPinModal(lat, lng) {
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     pendingMapPinLat = lat;
@@ -8689,6 +8993,7 @@ async function saveNewSharedMapPin() {
 
     const pinData = {
         id: pinId,
+        pinType: 'dirty',
         lat: Number(pendingMapPinLat.toFixed(6)),
         lng: Number(pendingMapPinLng.toFixed(6)),
         title: titleVal,
@@ -8730,17 +9035,47 @@ if (btnSaveMapPin) btnSaveMapPin.onclick = saveNewSharedMapPin;
 function openViewMapPinModal(pin) {
     if (!pin) return;
     activeViewingMapPin = pin;
+    const isBuilding = pin.pinType === 'building';
 
-    if (viewMapPinTitleText) viewMapPinTitleText.textContent = pin.title || '現場注意事項';
+    if (viewMapPinModalCard) {
+        viewMapPinModalCard.classList.toggle('border-orange-500', isBuilding);
+        viewMapPinModalCard.classList.toggle('border-blue-500', !isBuilding);
+    }
+    if (viewMapPinCategoryBadge) {
+        if (isBuilding) {
+            viewMapPinCategoryBadge.className = 'bg-orange-100 text-orange-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5';
+            viewMapPinCategoryBadge.innerHTML = '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓標記';
+        } else {
+            viewMapPinCategoryBadge.className = 'bg-blue-100 text-blue-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5';
+            viewMapPinCategoryBadge.innerHTML = '<i class="fa-solid fa-location-dot text-blue-600"></i> 全車隊共享現場地標';
+        }
+    }
+
+    if (viewMapPinTitleText) viewMapPinTitleText.textContent = pin.title || (isBuilding ? '社區大樓' : '現場注意事項');
     if (viewMapPinAuthorText) viewMapPinAuthorText.textContent = pin.author || '熱心隊員';
-    if (viewMapPinTimeText) viewMapPinTimeText.textContent = formatPinCreatedAt(pin.createdAt);
+    if (viewMapPinTimeText) viewMapPinTimeText.textContent = formatPinCreatedAt(pin.updatedAt || pin.createdAt);
 
-    if (pin.photo) {
+    if (!isBuilding && pin.photo) {
         if (viewMapPinPhotoImg) viewMapPinPhotoImg.src = pin.photo;
         if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.remove('hidden');
     } else {
         if (viewMapPinPhotoImg) viewMapPinPhotoImg.src = '';
         if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.add('hidden');
+    }
+
+    if (btnEditMapPinTitle) {
+        if (isBuilding) {
+            btnEditMapPinTitle.classList.remove('hidden');
+            btnEditMapPinTitle.innerHTML = '✏️ 修改社區大樓名稱';
+        } else {
+            btnEditMapPinTitle.classList.add('hidden');
+        }
+    }
+
+    if (btnDeleteMapPin) {
+        btnDeleteMapPin.innerHTML = isBuilding
+            ? '🗑️ 刪除社區大樓標記'
+            : '🗑️ 已清理／移除地標';
     }
 
     syncDistanceGuideButtonUI(pin);
@@ -8759,21 +9094,34 @@ function closeViewMapPinModal() {
 if (btnCloseViewMapPin) btnCloseViewMapPin.onclick = closeViewMapPinModal;
 if (btnCloseViewMapPinTop) btnCloseViewMapPinTop.onclick = closeViewMapPinModal;
 
+if (btnEditMapPinTitle) {
+    btnEditMapPinTitle.onclick = () => {
+        if (!activeViewingMapPin) return;
+        const targetPin = { ...activeViewingMapPin };
+        closeViewMapPinModal();
+        openCreateBuildingPinModal(Number(targetPin.lat), Number(targetPin.lng), targetPin);
+    };
+}
+
 if (btnDeleteMapPin) {
     btnDeleteMapPin.onclick = async () => {
         if (!activeViewingMapPin || !activeViewingMapPin.id) return;
         const pinId = activeViewingMapPin.id;
-        const pinTitle = activeViewingMapPin.title || '此地標';
+        const isBuilding = activeViewingMapPin.pinType === 'building';
+        const pinTitle = activeViewingMapPin.title || (isBuilding ? '此社區大樓' : '此地標');
 
-        if (!confirm(`確定「${pinTitle}」已清理完畢，要從全車隊地圖同步移除嗎？`)) return;
+        const confirmMsg = isBuilding
+            ? `確定要將社區大樓「${pinTitle}」從全車隊地圖同步移除嗎？`
+            : `確定「${pinTitle}」已清理完畢，要從全車隊地圖同步移除嗎？`;
+        if (!confirm(confirmMsg)) return;
         if (!navigator.onLine) {
-            alert('⚠️ 目前無網路連線，無法同步移除雲端地標！');
+            alert('⚠️ 目前無網路連線，無法同步移除雲端標記！');
             return;
         }
 
         const origHtml = btnDeleteMapPin.innerHTML;
         btnDeleteMapPin.disabled = true;
-        btnDeleteMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步銷案...';
+        btnDeleteMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步移除...';
 
         try {
             const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
@@ -8792,7 +9140,7 @@ if (btnDeleteMapPin) {
             fetchAndRenderSharedMapPins();
         } catch (err) {
             console.error('刪除共享地標失敗:', err);
-            alert('❌ 移除地標失敗（網路不穩或連線逾時），請稍後再試！');
+            alert('❌ 移除標記失敗（網路不穩或連線逾時），請稍後再試！');
         } finally {
             btnDeleteMapPin.disabled = false;
             btnDeleteMapPin.innerHTML = origHtml;
@@ -8801,21 +9149,26 @@ if (btnDeleteMapPin) {
 }
 
 function createSharedPinMarkerElement(pin) {
+    const isBuilding = pin.pinType === 'building';
     const wrapper = document.createElement('div');
     wrapper.className = 'shared-pin-wrapper';
 
     const labelEl = document.createElement('div');
-    labelEl.className = 'shared-pin-label';
-    labelEl.textContent = pin.title || '現場地標';
+    labelEl.className = isBuilding ? 'shared-pin-label is-building' : 'shared-pin-label';
+    labelEl.textContent = isBuilding
+        ? `🏢 ${pin.title || '社區大樓'}`
+        : (pin.title || '現場地標');
     wrapper.appendChild(labelEl);
 
     const teardrop = document.createElement('div');
-    teardrop.className = 'shared-pin-teardrop';
+    teardrop.className = isBuilding ? 'shared-pin-teardrop is-building' : 'shared-pin-teardrop';
 
     const inner = document.createElement('div');
     inner.className = 'shared-pin-inner';
 
-    if (pin.photo) {
+    if (isBuilding) {
+        inner.innerHTML = '<i class="fa-solid fa-building text-white text-sm"></i>';
+    } else if (pin.photo) {
         const img = document.createElement('img');
         img.src = pin.photo;
         img.alt = pin.title || '地標縮圖';
@@ -8845,7 +9198,7 @@ function upsertPinMarkerOnMap(pinId, pinData) {
     if (isNaN(lat) || isNaN(lng)) return;
 
     const normalizedPin = { ...pinData, id: pinId, lat, lng };
-    const signature = `${normalizedPin.title || ''}|${Boolean(normalizedPin.photo)}|${(normalizedPin.photo || '').length}`;
+    const signature = `${normalizedPin.pinType || 'dirty'}|${normalizedPin.title || ''}|${Boolean(normalizedPin.photo)}|${(normalizedPin.photo || '').length}`;
 
     if (pinsLayerGroup[pinId]) {
         pinsLayerGroup[pinId].marker.setLngLat([lng, lat]);
@@ -8919,12 +9272,13 @@ async function fetchAndRenderSharedMapPins() {
     }
 }
 
-// 綁定長按 1.5 秒（1500ms）防誤觸與桌面右鍵新增地標互動
+// 綁定長按 2 秒（2000ms）防誤觸與桌面長按／右鍵新增地標互動（彈出 ⚠️ 標記髒亂點 ／ 🏢 標記社區大樓 二選一選單）
 (function setupMapLongPressForPins() {
     let longPressTimer = null;
     let startClientX = 0;
     let startClientY = 0;
     let pendingLngLat = null;
+    const LONG_PRESS_DURATION_MS = 2000;
 
     function clearLongPressTimer() {
         if (longPressTimer !== null) {
@@ -8933,17 +9287,21 @@ async function fetchAndRenderSharedMapPins() {
         }
     }
 
+    function isIgnoredMarkerTarget(targetEl) {
+        return Boolean(
+            targetEl &&
+            targetEl.closest &&
+            targetEl.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker, .pin-s, .pin-e, .furniture-pin-wrapper, .furniture-popup-wrapper, .callout-box-marker, .callout-anchor-dot')
+        );
+    }
+
     const canvasContainer = map.getCanvasContainer();
 
     canvasContainer.addEventListener('touchstart', (e) => {
         clearLongPressTimer();
-        if (isEditingMode || isManualDrawingMode) return;
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
         if (!e.touches || e.touches.length !== 1) return;
-
-        const targetEl = e.target;
-        if (targetEl && targetEl.closest && targetEl.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker, .pin-s, .pin-e')) {
-            return;
-        }
+        if (isIgnoredMarkerTarget(e.target)) return;
 
         const touch = e.touches[0];
         startClientX = touch.clientX;
@@ -8956,10 +9314,10 @@ async function fetchAndRenderSharedMapPins() {
 
         longPressTimer = setTimeout(() => {
             longPressTimer = null;
-            if (isEditingMode || isManualDrawingMode || !pendingLngLat) return;
+            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || !pendingLngLat) return;
             try { navigator.vibrate?.(50); } catch (err) {}
-            openCreateMapPinModal(pendingLngLat.lat, pendingLngLat.lng);
-        }, 1500);
+            openLongPressPinTypeModal(pendingLngLat.lat, pendingLngLat.lng);
+        }, LONG_PRESS_DURATION_MS);
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
@@ -8978,6 +9336,35 @@ async function fetchAndRenderSharedMapPins() {
     canvasContainer.addEventListener('touchend', clearLongPressTimer, { passive: true });
     canvasContainer.addEventListener('touchcancel', clearLongPressTimer, { passive: true });
 
+    // 桌面滑鼠左鍵長按 2 秒支援
+    canvasContainer.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        clearLongPressTimer();
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
+        if (isIgnoredMarkerTarget(e.target)) return;
+
+        startClientX = e.clientX;
+        startClientY = e.clientY;
+        const rect = canvasContainer.getBoundingClientRect();
+        pendingLngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+
+        longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || !pendingLngLat) return;
+            openLongPressPinTypeModal(pendingLngLat.lat, pendingLngLat.lng);
+        }, LONG_PRESS_DURATION_MS);
+    });
+
+    canvasContainer.addEventListener('mousemove', (e) => {
+        if (longPressTimer === null) return;
+        const moveDist = Math.hypot(e.clientX - startClientX, e.clientY - startClientY);
+        if (moveDist > 10) {
+            clearLongPressTimer();
+        }
+    });
+
+    canvasContainer.addEventListener('mouseup', clearLongPressTimer);
+
     ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach(evtName => {
         map.on(evtName, clearLongPressTimer);
     });
@@ -8985,15 +9372,15 @@ async function fetchAndRenderSharedMapPins() {
     // 桌面端支援右鍵 contextmenu 觸發
     map.on('contextmenu', (e) => {
         clearLongPressTimer();
-        if (isEditingMode || isManualDrawingMode) return;
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
         const origTarget = e.originalEvent?.target;
-        if (origTarget && origTarget.closest && origTarget.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker')) {
+        if (isIgnoredMarkerTarget(origTarget)) {
             return;
         }
         if (e.originalEvent) e.originalEvent.preventDefault();
         try { navigator.vibrate?.(50); } catch (err) {}
         if (e.lngLat) {
-            openCreateMapPinModal(e.lngLat.lat, e.lngLat.lng);
+            openLongPressPinTypeModal(e.lngLat.lat, e.lngLat.lng);
         }
     });
 })();
@@ -9263,6 +9650,10 @@ async function openAdminSettingsPanel() {
     const modal = document.getElementById('adminSettingsModal');
     if (!modal) return;
 
+    if (typeof syncAdminFurnitureEntryButtonUI === 'function') {
+        syncAdminFurnitureEntryButtonUI();
+    }
+
     // 先以目前本機有效設定立即渲染，再從 Firebase 拉取最新雲端設定覆蓋
     populateAdminSettingsForm(systemNavConfig);
     modal.classList.remove('hidden');
@@ -9373,6 +9764,8 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
         const viewAlertModal = document.getElementById('viewAlertModal');
         const photoLightboxModal = document.getElementById('photoLightboxModal');
         const uploadConflictModal = document.getElementById('uploadConflictModal');
+        const longPressPinTypeModal = document.getElementById('longPressPinTypeModal');
+        const createBuildingPinModal = document.getElementById('createBuildingPinModal');
         const createMapPinModal = document.getElementById('createMapPinModal');
         const viewMapPinModal = document.getElementById('viewMapPinModal');
         const quickNavAlertModal = document.getElementById('quickNavAlertModal');
@@ -9402,8 +9795,14 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
         else if (viewMapPinModal && !viewMapPinModal.classList.contains('hidden')) {
             document.getElementById('btnCloseViewMapPin').click();
         }
+        else if (createBuildingPinModal && !createBuildingPinModal.classList.contains('hidden')) {
+            document.getElementById('btnCancelBuildingPin').click();
+        }
         else if (createMapPinModal && !createMapPinModal.classList.contains('hidden')) {
             document.getElementById('btnCancelCreateMapPin').click();
+        }
+        else if (longPressPinTypeModal && !longPressPinTypeModal.classList.contains('hidden')) {
+            document.getElementById('btnCancelLongPressPinType').click();
         }
         else if (viewAlertModal && !viewAlertModal.classList.contains('hidden')) {
             document.getElementById('btnCloseViewAlert').click();
@@ -9460,3 +9859,1580 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
         };
     }
 })();
+
+// ==========================================
+// 🛋️ 11. 家具模式（3 組大型家具協作 ＋ 純木頭垃圾車支援火紅標記系統 v3.24）
+// - 僅限管理員模式／管理員選單內觸發切換（一般使用者主畫面不顯示，保持介面乾淨不誤觸）
+// - 3 組獨立顏色：第 1 組 (group1 紫色 #9333ea)、第 2 組 (group2 藍色 #2563eb)、第 3 組 (group3 青色 #0d9488)
+// - 免費 OSM Nominatim 地址／地標搜尋（400ms Debounce，優先偏向新北市鶯歌區範圍）
+// - 多支定位針連續插針（1, 2, 3...），支援拖曳微調、單支刪除、撤銷上一支、清空
+// - 全插完再串：🤖 自動沿路串 (OSRM) 與 ✍️ 手動拉線串（靠近目標針 25m 內自動吸附）
+// - Firebase 即時同步當日路徑：furniture_collab/{YYYY-MM-DD}/groups/{groupId}
+// - 🔥 需垃圾車支援（純木頭家具）：火紅色標記＋螢幕左上角即時提醒徽章（點擊依序飛往定位）
+// ==========================================
+let isFurnitureModeActive = false;
+window.isFurnitureModeActive = false;
+
+const FURNITURE_GROUP_STORAGE_KEY = 'yingge_furniture_active_group';
+const FURNITURE_SHOW_OTHERS_STORAGE_KEY = 'yingge_furniture_show_others';
+
+const FURNITURE_GROUPS_CONFIG = {
+    group1: { id: 'group1', name: '第 1 組', shortLabel: '1組', color: '#9333ea', badgeBg: 'bg-purple-600' },
+    group2: { id: 'group2', name: '第 2 組', shortLabel: '2組', color: '#2563eb', badgeBg: 'bg-blue-600' },
+    group3: { id: 'group3', name: '第 3 組', shortLabel: '3組', color: '#0d9488', badgeBg: 'bg-teal-600' }
+};
+
+function getTodayDateString() {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+let currentFurnitureDateStr = getTodayDateString();
+let activeFurnitureGroupId = localStorage.getItem(FURNITURE_GROUP_STORAGE_KEY) || 'group1';
+if (!FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId]) {
+    activeFurnitureGroupId = 'group1';
+}
+
+let showOtherFurnitureGroups = localStorage.getItem(FURNITURE_SHOW_OTHERS_STORAGE_KEY) !== 'false';
+
+// 當日 3 組完整資料結構：{ group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }, group2: ..., group3: ... }
+let furnitureGroupsData = {
+    group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
+    group2: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
+    group3: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }
+};
+
+// 記錄本組是否有尚未發布到雲端的本地編輯（避免背景輪詢覆蓋正在插針中的草稿）
+let isLocalFurnitureGroupDirty = false;
+let furnitureDomMarkers = [];
+let activeFurniturePopupMarker = null;
+let furnitureSearchPreviewMarker = null;
+let lastSelectedSearchCandidate = null;
+let furnitureSearchDebounceTimer = null;
+
+// 手動拉線串聯狀態
+let isFurnitureManualConnecting = false;
+let furnitureManualTargetPinIdx = 1; // 目前準備連向的目標針索引 (0-indexed: 由 0 號針連往 1 號針)
+let furnitureManualConnectedCoords = []; // 已完成吸附的累積座標
+let furnitureManualSegmentDraft = []; // 當前正在拉向下一支針的草稿座標
+let isFurnitureDrawingStroke = false;
+
+// 左上角火紅提醒輪播索引
+let woodSupportAlertCycleIdx = 0;
+
+// 記錄切換進家具模式前的一般收運介面與路線圖層快照，以便切回時 100% 完整還原
+let normalModeRestoreSnapshot = null;
+
+function getLocalFurnitureStorageKey(dateStr, groupId) {
+    return `yingge_furniture_local_${dateStr}_${groupId}`;
+}
+
+function saveLocalFurnitureGroupBackup(groupId = activeFurnitureGroupId) {
+    try {
+        const gData = furnitureGroupsData[groupId];
+        if (!gData) return;
+        localStorage.setItem(
+            getLocalFurnitureStorageKey(currentFurnitureDateStr, groupId),
+            JSON.stringify(gData)
+        );
+    } catch (e) {}
+}
+
+function loadLocalFurnitureGroupBackup(groupId) {
+    try {
+        const raw = localStorage.getItem(getLocalFurnitureStorageKey(currentFurnitureDateStr, groupId));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+            return normalizeFurnitureGroupPayload(parsed);
+        }
+    } catch (e) {}
+    return null;
+}
+
+function normalizeFurnitureGroupPayload(raw) {
+    const pins = Array.isArray(raw?.pins)
+        ? raw.pins
+            .filter(p => p && !isNaN(Number(p.lng)) && !isNaN(Number(p.lat)))
+            .map((p, idx) => ({
+                id: String(p.id || `fpin_${Date.now()}_${idx}`),
+                lng: Number(Number(p.lng).toFixed(6)),
+                lat: Number(Number(p.lat).toFixed(6)),
+                label: String(p.label || `點位 #${idx + 1}`),
+                note: String(p.note || ''),
+                needsWoodTruckSupport: Boolean(p.needsWoodTruckSupport),
+                collected: Boolean(p.collected),
+                updatedAt: Number(p.updatedAt) || Date.now()
+            }))
+        : [];
+
+    const routeCoords = Array.isArray(raw?.routeCoords)
+        ? raw.routeCoords
+            .filter(c => Array.isArray(c) && c.length >= 2 && !isNaN(Number(c[0])) && !isNaN(Number(c[1])))
+            .map(c => [Number(Number(c[0]).toFixed(6)), Number(Number(c[1]).toFixed(6))])
+        : [];
+
+    let distKm = 0;
+    for (let i = 1; i < routeCoords.length; i++) {
+        distKm += getDistanceKm(routeCoords[i - 1][0], routeCoords[i - 1][1], routeCoords[i][0], routeCoords[i][1]);
+    }
+
+    return {
+        pins,
+        routeCoords,
+        distanceKm: distKm.toFixed(2),
+        updatedAt: Number(raw?.updatedAt) || 0,
+        author: String(raw?.author || '')
+    };
+}
+
+function computeCoordsDistanceKm(coords) {
+    if (!Array.isArray(coords) || coords.length < 2) return '0.00';
+    let km = 0;
+    for (let i = 1; i < coords.length; i++) {
+        km += getDistanceKm(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]);
+    }
+    return km.toFixed(2);
+}
+
+function setFurniturePrompt(text, styleType = 'default') {
+    const banner = document.getElementById('furniturePromptBanner');
+    if (!banner) return;
+    banner.textContent = text;
+    if (styleType === 'manual') {
+        banner.className = 'bg-orange-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-orange-300';
+    } else if (styleType === 'success') {
+        banner.className = 'bg-emerald-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-emerald-300';
+    } else if (styleType === 'fire') {
+        banner.className = 'bg-red-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-yellow-300';
+    } else {
+        banner.className = 'bg-amber-700/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-amber-300';
+    }
+}
+
+function clearFurnitureDomMarkers() {
+    closeFurniturePinPopup();
+    furnitureDomMarkers.forEach(m => {
+        try { m.remove(); } catch (e) {}
+    });
+    furnitureDomMarkers = [];
+}
+
+function closeFurniturePinPopup() {
+    if (activeFurniturePopupMarker) {
+        try { activeFurniturePopupMarker.remove(); } catch (e) {}
+        activeFurniturePopupMarker = null;
+    }
+}
+
+function clearFurnitureSearchPreviewMarker() {
+    if (furnitureSearchPreviewMarker) {
+        try { furnitureSearchPreviewMarker.remove(); } catch (e) {}
+        furnitureSearchPreviewMarker = null;
+    }
+}
+
+// 收集當日所有未處理的「🔥 需垃圾車支援（純木頭）」點位（跨 3 組）
+function getActiveWoodSupportPinsList() {
+    const list = [];
+    ['group1', 'group2', 'group3'].forEach(gId => {
+        const gCfg = FURNITURE_GROUPS_CONFIG[gId];
+        const gData = furnitureGroupsData[gId];
+        if (!gData || !Array.isArray(gData.pins)) return;
+        gData.pins.forEach((pin, idx) => {
+            if (pin && pin.needsWoodTruckSupport && !pin.collected) {
+                list.push({
+                    groupId: gId,
+                    groupName: gCfg.name,
+                    groupShort: gCfg.shortLabel,
+                    pinIndex: idx,
+                    pinNumber: idx + 1,
+                    pin
+                });
+            }
+        });
+    });
+    return list;
+}
+
+// 更新螢幕左上角「🔥 需垃圾車支援：N 處」火紅色提醒徽章（無論在一般收運模式或家具模式皆即時提醒支援垃圾車司機！）
+function updateWoodSupportTopLeftAlertUI() {
+    const alertBtn = document.getElementById('furnitureWoodSupportAlertBtn');
+    const titleEl = document.getElementById('furnitureWoodSupportAlertText');
+    const subEl = document.getElementById('furnitureWoodSupportSubText');
+    if (!alertBtn || !titleEl) return;
+
+    const supportList = getActiveWoodSupportPinsList();
+    if (supportList.length === 0) {
+        alertBtn.classList.add('hidden');
+        return;
+    }
+
+    alertBtn.classList.remove('hidden');
+    titleEl.textContent = `需垃圾車支援：${supportList.length} 處`;
+    const previewItem = supportList[woodSupportAlertCycleIdx % supportList.length];
+    if (subEl && previewItem) {
+        const shortAddr = (previewItem.pin.label || '').replace(/^新北市鶯歌區/, '').slice(0, 12);
+        subEl.textContent = `${previewItem.groupShort}#${previewItem.pinNumber} ${shortAddr || '純木頭'} · 點擊飛往`;
+    }
+}
+
+// 點擊左上角火紅色提醒徽章：依序飛往各個「🔥 需垃圾車支援（純木頭）」點位並自動打開操作卡片
+document.getElementById('furnitureWoodSupportAlertBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const supportList = getActiveWoodSupportPinsList();
+    if (supportList.length === 0) return;
+
+    const target = supportList[woodSupportAlertCycleIdx % supportList.length];
+    woodSupportAlertCycleIdx = (woodSupportAlertCycleIdx + 1) % supportList.length;
+    updateWoodSupportTopLeftAlertUI();
+
+    setCameraFollow(false);
+    map.flyTo({
+        center: [target.pin.lng, target.pin.lat],
+        zoom: Math.max(map.getZoom(), 17.5),
+        duration: 650
+    });
+
+    // 確保在地圖上渲染該火紅點位並彈出支援收運操作卡
+    renderAllFurnitureMapElements();
+    setTimeout(() => {
+        openFurniturePinActionPopup(target.groupId, target.pinIndex);
+    }, 300);
+});
+
+// 更新家具模式面板上的按鈕、組別膠囊、針數與距離統計
+function updateFurniturePanelUI() {
+    const curGroupData = furnitureGroupsData[activeFurnitureGroupId] || { pins: [], routeCoords: [], distanceKm: '0.00' };
+    const pinsCount = curGroupData.pins.length;
+    curGroupData.distanceKm = computeCoordsDistanceKm(curGroupData.routeCoords);
+
+    // 1. 組別按鈕高亮
+    document.querySelectorAll('.furniture-group-btn').forEach(btn => {
+        const gId = btn.getAttribute('data-group');
+        const cfg = FURNITURE_GROUPS_CONFIG[gId];
+        if (!cfg) return;
+        if (gId === activeFurnitureGroupId) {
+            btn.className = `furniture-group-btn ${cfg.badgeBg} text-white font-black text-xs py-1.5 px-2 rounded-xl shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1`;
+            btn.innerHTML = `<span class="w-2 h-2 rounded-full bg-white inline-block"></span>${cfg.name}`;
+        } else {
+            const dotColor = gId === 'group1' ? 'bg-purple-600' : (gId === 'group2' ? 'bg-blue-600' : 'bg-teal-600');
+            btn.className = 'furniture-group-btn text-gray-600 hover:bg-white/70 font-black text-xs py-1.5 px-2 rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1';
+            btn.innerHTML = `<span class="w-2 h-2 rounded-full ${dotColor} inline-block"></span>${cfg.name}`;
+        }
+    });
+
+    // 2. 顯示他組路線開關
+    const toggleOthersBtn = document.getElementById('btnToggleOtherFurnitureGroups');
+    const toggleOthersLabel = document.getElementById('otherFurnitureGroupsLabel');
+    if (toggleOthersBtn && toggleOthersLabel) {
+        if (showOtherFurnitureGroups) {
+            toggleOthersBtn.className = 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold text-[11px] px-2.5 py-2 rounded-2xl active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 shadow-sm';
+            toggleOthersBtn.innerHTML = `<i class="fa-solid fa-eye text-emerald-600"></i><span id="otherFurnitureGroupsLabel">顯示他組:開</span>`;
+        } else {
+            toggleOthersBtn.className = 'bg-gray-100 hover:bg-gray-200 text-gray-500 border border-gray-300 font-extrabold text-[11px] px-2.5 py-2 rounded-2xl active:scale-95 transition-all whitespace-nowrap flex items-center gap-1';
+            toggleOthersBtn.innerHTML = `<i class="fa-solid fa-eye-slash text-gray-400"></i><span id="otherFurnitureGroupsLabel">顯示他組:關</span>`;
+        }
+    }
+
+    // 3. 左下角插針統計小膠囊（📍 0 支針 ｜ 0.00 km）與各邊角按鈕啟用狀態
+    const pinCountBadge = document.getElementById('furniturePinCountBadge');
+    const distBadge = document.getElementById('furnitureRouteDistBadge');
+    if (pinCountBadge) pinCountBadge.textContent = `📍 ${pinsCount} 支針`;
+    if (distBadge) distBadge.textContent = `${curGroupData.distanceKm} km`;
+
+    const undoBtn = document.getElementById('btnFurnitureUndoPin');
+    const clearBtn = document.getElementById('btnFurnitureClearPins');
+    const autoOsrmBtn = document.getElementById('btnFurnitureAutoOsrmConnect');
+    const manualConnectBtn = document.getElementById('btnFurnitureManualConnect');
+    const manualConnectText = document.getElementById('furnitureManualConnectBtnText');
+
+    if (undoBtn) undoBtn.disabled = (pinsCount === 0);
+    if (clearBtn) clearBtn.disabled = (pinsCount === 0 && curGroupData.routeCoords.length === 0);
+    if (autoOsrmBtn) autoOsrmBtn.disabled = (pinsCount < 2);
+    if (manualConnectBtn) {
+        manualConnectBtn.disabled = (pinsCount < 2);
+        if (isFurnitureManualConnecting) {
+            manualConnectBtn.className = 'bg-amber-500/95 hover:bg-amber-600 backdrop-blur text-white font-black py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-amber-200 active:scale-95 transition-all flex items-center gap-1.5 ring-2 ring-amber-300 whitespace-nowrap';
+            if (manualConnectText) manualConnectText.textContent = `✅ 完成手拉 (#${Math.min(furnitureManualTargetPinIdx + 1, pinsCount)})`;
+        } else {
+            manualConnectBtn.className = 'bg-orange-600/95 hover:bg-orange-700 backdrop-blur text-white font-extrabold py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-orange-300/80 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-45 whitespace-nowrap';
+            if (manualConnectText) manualConnectText.textContent = '✍️ 手動拉線串';
+        }
+    }
+
+    updateWoodSupportTopLeftAlertUI();
+}
+
+// 渲染地圖上的家具路線圖層與所有組別定位針（加上防呆：切換底圖或切換模式皆完整重繪）
+function renderAllFurnitureMapElements() {
+    if (!map) return;
+    ensureCustomRouteSourcesAndLayers();
+
+    // 若不在家具模式下：隱藏家具路線與一般家具針，但保留全隊未處理的「🔥 需垃圾車支援（純木頭）」火紅標記供垃圾車司機隨時查看！
+    clearFurnitureDomMarkers();
+
+    if (!isFurnitureModeActive) {
+        cachedFurnitureOtherRoutesGeoJSON = emptyGeoJSON();
+        cachedFurnitureOwnRouteGeoJSON = emptyGeoJSON();
+        cachedFurnitureManualDraftGeoJSON = emptyGeoJSON();
+        try {
+            map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON);
+            map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON);
+            map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON);
+        } catch (e) {}
+
+        // 在一般收運模式下，仍把當日「未處理的火紅純木頭支援點」顯示在地圖上，方便 2 台垃圾車司機邊收運邊支援
+        const activeSupportPins = getActiveWoodSupportPinsList();
+        activeSupportPins.forEach(item => {
+            createFurniturePinDomMarker(item.groupId, item.pin, item.pinIndex, false);
+        });
+        updateWoodSupportTopLeftAlertUI();
+        return;
+    }
+
+    // 1. 建構其他 2 組的路線 GeoJSON Features（當 showOtherFurnitureGroups 為開時顯示）
+    const otherFeatures = [];
+    if (showOtherFurnitureGroups) {
+        ['group1', 'group2', 'group3'].forEach(gId => {
+            if (gId === activeFurnitureGroupId) return;
+            const gCfg = FURNITURE_GROUPS_CONFIG[gId];
+            const gData = furnitureGroupsData[gId];
+            if (gData && Array.isArray(gData.routeCoords) && gData.routeCoords.length >= 2) {
+                otherFeatures.push({
+                    type: 'Feature',
+                    properties: {
+                        groupId: gId,
+                        groupName: gCfg.name,
+                        color: gCfg.color
+                    },
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: gData.routeCoords
+                    }
+                });
+            }
+        });
+    }
+    cachedFurnitureOtherRoutesGeoJSON = { type: 'FeatureCollection', features: otherFeatures };
+
+    // 2. 建構目前所選組別的主路線 GeoJSON Feature
+    const ownCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
+    const ownData = furnitureGroupsData[activeFurnitureGroupId];
+    const ownFeatures = [];
+    if (ownData && Array.isArray(ownData.routeCoords) && ownData.routeCoords.length >= 2) {
+        ownFeatures.push({
+            type: 'Feature',
+            properties: {
+                groupId: activeFurnitureGroupId,
+                groupName: ownCfg.name,
+                color: ownCfg.color
+            },
+            geometry: {
+                type: 'LineString',
+                coordinates: ownData.routeCoords
+            }
+        });
+    }
+    cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: ownFeatures };
+
+    // 3. 手動拉線串聯草稿圖層
+    const draftCoords = isFurnitureManualConnecting && furnitureManualSegmentDraft.length >= 2
+        ? furnitureManualSegmentDraft
+        : [];
+    cachedFurnitureManualDraftGeoJSON = draftCoords.length >= 2
+        ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: draftCoords } }] }
+        : emptyGeoJSON();
+
+    try {
+        map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON);
+        map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON);
+        map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON);
+    } catch (e) {}
+
+    // 4. 渲染其他 2 組的定位針（若 showOtherFurnitureGroups 為開，或是該針為火紅需垃圾車支援點，一律顯示）
+    ['group1', 'group2', 'group3'].forEach(gId => {
+        if (gId === activeFurnitureGroupId) return;
+        const gData = furnitureGroupsData[gId];
+        if (!gData || !Array.isArray(gData.pins)) return;
+        gData.pins.forEach((pin, idx) => {
+            const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
+            if (!showOtherFurnitureGroups && !isUrgentWood) return;
+            createFurniturePinDomMarker(gId, pin, idx, false);
+        });
+    });
+
+    // 5. 渲染本組的所有定位針（可拖曳微調座標）
+    if (ownData && Array.isArray(ownData.pins)) {
+        ownData.pins.forEach((pin, idx) => {
+            createFurniturePinDomMarker(activeFurnitureGroupId, pin, idx, true);
+        });
+    }
+
+    updateFurniturePanelUI();
+}
+
+function createFurniturePinDomMarker(groupId, pin, pinIdx, isOwnEditableGroup) {
+    const gCfg = FURNITURE_GROUPS_CONFIG[groupId] || FURNITURE_GROUPS_CONFIG.group1;
+    const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
+    const isCollected = Boolean(pin.collected);
+    const pinNumber = pinIdx + 1;
+
+    // 外層 wrapper 嚴禁設 CSS transform
+    const wrapperEl = document.createElement('div');
+    wrapperEl.className = `furniture-pin-wrapper ${isUrgentWood ? 'is-wood-support' : ''} ${!isOwnEditableGroup ? 'is-other-group' : ''}`;
+
+    const pillEl = document.createElement('div');
+    pillEl.className = `furniture-pin-pill group-${groupId} ${isUrgentWood ? 'is-wood-support' : ''} ${isCollected ? 'is-collected' : ''}`;
+
+    let statusPrefix = '';
+    if (isUrgentWood) statusPrefix = '🔥 ';
+    else if (isCollected) statusPrefix = '✅ ';
+
+    const groupTag = (!isOwnEditableGroup || isUrgentWood) ? `${gCfg.shortLabel}` : '';
+    const shortLabel = (pin.label || '').replace(/^新北市鶯歌區/, '').trim();
+    const displayAddr = shortLabel && !shortLabel.startsWith('點位')
+        ? ` · ${Array.from(shortLabel).slice(0, 6).join('')}`
+        : '';
+
+    pillEl.innerHTML = `
+        <span>${statusPrefix}${groupTag ? `${groupTag}-` : ''}#${pinNumber}</span>
+        ${isUrgentWood ? '<span class="bg-yellow-300 text-red-900 text-[9px] font-black px-1 py-0.2 rounded">純木頭支援</span>' : (displayAddr ? `<span class="text-[10px] opacity-90">${displayAddr}</span>` : '')}
+    `;
+
+    const arrowEl = document.createElement('div');
+    arrowEl.className = `furniture-pin-arrow ${isUrgentWood ? 'is-wood-support' : ''}`;
+
+    wrapperEl.appendChild(pillEl);
+    wrapperEl.appendChild(arrowEl);
+
+    wrapperEl.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // 若正在「手動拉線串」模式且點擊本組目標針，直接吸附連接到該針！
+        if (isFurnitureModeActive && isFurnitureManualConnecting && isOwnEditableGroup) {
+            handleManualConnectSnapToPin(pinIdx);
+            return;
+        }
+        openFurniturePinActionPopup(groupId, pinIdx);
+    });
+
+    const canDrag = Boolean(isFurnitureModeActive && isOwnEditableGroup && !isFurnitureManualConnecting);
+    const marker = new maplibregl.Marker({
+        element: wrapperEl,
+        anchor: 'bottom',
+        offset: [0, -4],
+        draggable: canDrag,
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    })
+        .setLngLat([Number(pin.lng), Number(pin.lat)])
+        .addTo(map);
+
+    if (canDrag) {
+        marker.on('dragend', () => {
+            const pos = marker.getLngLat();
+            pin.lng = Number(pos.lng.toFixed(6));
+            pin.lat = Number(pos.lat.toFixed(6));
+            pin.updatedAt = Date.now();
+            isLocalFurnitureGroupDirty = true;
+            saveLocalFurnitureGroupBackup(groupId);
+            renderAllFurnitureMapElements();
+            syncSingleFurnitureGroupToFirebase(groupId, false);
+        });
+    }
+
+    furnitureDomMarkers.push(marker);
+    return marker;
+}
+
+// 點擊任一組定位針彈出簡潔操作卡片：可切換「🔥 需垃圾車支援（純木頭）」或「✅ 已收運／解除支援」並即時同步 Firebase
+function openFurniturePinActionPopup(groupId, pinIdx) {
+    closeFurniturePinPopup();
+    const gCfg = FURNITURE_GROUPS_CONFIG[groupId];
+    const gData = furnitureGroupsData[groupId];
+    const pin = gData?.pins?.[pinIdx];
+    if (!gCfg || !pin) return;
+
+    const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
+    const isOwnGroup = (groupId === activeFurnitureGroupId);
+    const pinNumber = pinIdx + 1;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'furniture-popup-wrapper';
+    wrapper.addEventListener('click', (e) => e.stopPropagation());
+    wrapper.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+    const card = document.createElement('div');
+    card.className = `furniture-popup-card ${isUrgentWood ? 'is-wood-support' : ''}`;
+
+    const headerRow = document.createElement('div');
+    headerRow.className = 'flex items-center justify-between gap-2 pb-1.5 border-b border-gray-100';
+    headerRow.innerHTML = `
+        <div class="flex items-center gap-1.5 min-w-0">
+            <span class="${gCfg.badgeBg} text-white text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">${gCfg.name} #${pinNumber}</span>
+            ${isUrgentWood ? '<span class="bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap">🔥 待垃圾車支援</span>' : (pin.collected ? '<span class="bg-emerald-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap">✅ 已收運</span>' : '')}
+        </div>
+    `;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'w-5 h-5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 text-[11px] font-black flex items-center justify-center';
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => closeFurniturePinPopup();
+    headerRow.appendChild(closeBtn);
+    card.appendChild(headerRow);
+
+    // 地址或備註顯示與快捷備註輸入
+    const addrDiv = document.createElement('div');
+    addrDiv.className = 'text-xs font-extrabold text-gray-800 mt-1.5 break-words leading-snug';
+    addrDiv.textContent = pin.label || `大型家具點位 #${pinNumber}`;
+    card.appendChild(addrDiv);
+
+    const noteInput = document.createElement('input');
+    noteInput.type = 'text';
+    noteInput.value = pin.note || '';
+    noteInput.placeholder = '備註（如：純木衣櫃3件、巷口電線桿旁）...';
+    noteInput.className = 'mt-1.5 w-full bg-gray-50 border border-gray-200 focus:border-amber-500 rounded-xl px-2.5 py-1.5 text-xs font-bold text-gray-800 outline-none';
+    noteInput.addEventListener('change', async () => {
+        pin.note = noteInput.value.trim();
+        pin.updatedAt = Date.now();
+        saveLocalFurnitureGroupBackup(groupId);
+        await syncSingleFurnitureGroupToFirebase(groupId, false);
+    });
+    card.appendChild(noteInput);
+
+    // 核心支援狀態切換按鈕列
+    const actionsCol = document.createElement('div');
+    actionsCol.className = 'flex flex-col gap-1.5 mt-2.5 pt-2 border-t border-gray-100';
+
+    // 按鈕 1：🔥 需垃圾車支援（純木頭）
+    const woodBtn = document.createElement('button');
+    woodBtn.type = 'button';
+    if (isUrgentWood) {
+        woodBtn.className = 'w-full bg-red-100 hover:bg-red-200 text-red-800 border-2 border-red-500 font-black py-2 px-2.5 rounded-xl text-xs active:scale-95 transition-all flex items-center justify-center gap-1';
+        woodBtn.innerHTML = '<span>🔥 已標記需垃圾車支援（點擊取消）</span>';
+    } else {
+        woodBtn.className = 'w-full bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white font-black py-2 px-2.5 rounded-xl text-xs shadow-md active:scale-95 transition-all flex items-center justify-center gap-1';
+        woodBtn.innerHTML = '<span>🔥 需垃圾車支援（純木頭）</span>';
+    }
+    woodBtn.onclick = async () => {
+        pin.note = noteInput.value.trim();
+        if (isUrgentWood) {
+            pin.needsWoodTruckSupport = false;
+        } else {
+            pin.needsWoodTruckSupport = true;
+            pin.collected = false;
+        }
+        pin.updatedAt = Date.now();
+        vibrate([35, 25, 35]);
+        closeFurniturePinPopup();
+        saveLocalFurnitureGroupBackup(groupId);
+        renderAllFurnitureMapElements();
+        await syncSingleFurnitureGroupToFirebase(groupId, true);
+    };
+    actionsCol.appendChild(woodBtn);
+
+    // 按鈕 2：✅ 已收運／解除支援
+    const collectedBtn = document.createElement('button');
+    collectedBtn.type = 'button';
+    collectedBtn.className = 'w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2 px-2.5 rounded-xl text-xs shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1';
+    collectedBtn.innerHTML = isUrgentWood
+        ? '<span>✅ 垃圾車已收運／解除火紅支援</span>'
+        : (pin.collected ? '<span>↩️ 恢復為待收運狀態</span>' : '<span>✅ 標記已收運完成</span>');
+    collectedBtn.onclick = async () => {
+        pin.note = noteInput.value.trim();
+        if (isUrgentWood) {
+            pin.needsWoodTruckSupport = false;
+            pin.collected = true;
+        } else {
+            pin.collected = !pin.collected;
+            if (pin.collected) pin.needsWoodTruckSupport = false;
+        }
+        pin.updatedAt = Date.now();
+        vibrate(30);
+        closeFurniturePinPopup();
+        saveLocalFurnitureGroupBackup(groupId);
+        renderAllFurnitureMapElements();
+        await syncSingleFurnitureGroupToFirebase(groupId, true);
+    };
+    actionsCol.appendChild(collectedBtn);
+
+    // 底部列：Google 導航 ＋（本組可刪除此針）
+    const bottomRow = document.createElement('div');
+    bottomRow.className = 'flex items-center gap-1.5 mt-0.5';
+
+    const gNavBtn = document.createElement('button');
+    gNavBtn.type = 'button';
+    gNavBtn.className = 'flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-extrabold py-1.5 px-2 rounded-xl text-[11px] active:scale-95 flex items-center justify-center gap-1';
+    gNavBtn.innerHTML = '<span>🧭 Google 導航</span>';
+    gNavBtn.onclick = () => {
+        const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${pin.lat},${pin.lng}&travelmode=driving`;
+        window.location.href = navUrl;
+    };
+    bottomRow.appendChild(gNavBtn);
+
+    if (isFurnitureModeActive && isOwnGroup) {
+        const delPinBtn = document.createElement('button');
+        delPinBtn.type = 'button';
+        delPinBtn.className = 'bg-gray-100 hover:bg-red-50 text-red-600 border border-gray-200 font-extrabold py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 flex items-center justify-center gap-1';
+        delPinBtn.innerHTML = '<span>🗑️ 刪針</span>';
+        delPinBtn.onclick = () => {
+            gData.pins.splice(pinIdx, 1);
+            if (gData.pins.length < 2) {
+                gData.routeCoords = [];
+                gData.distanceKm = '0.00';
+            }
+            isLocalFurnitureGroupDirty = true;
+            closeFurniturePinPopup();
+            saveLocalFurnitureGroupBackup(groupId);
+            renderAllFurnitureMapElements();
+            syncSingleFurnitureGroupToFirebase(groupId, false);
+        };
+        bottomRow.appendChild(delPinBtn);
+    }
+
+    actionsCol.appendChild(bottomRow);
+    card.appendChild(actionsCol);
+
+    const arrow = document.createElement('div');
+    arrow.className = 'alert-popup-arrow';
+    wrapper.appendChild(card);
+    wrapper.appendChild(arrow);
+
+    activeFurniturePopupMarker = new maplibregl.Marker({
+        element: wrapper,
+        anchor: 'bottom',
+        offset: [0, -34],
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    })
+        .setLngLat([Number(pin.lng), Number(pin.lat)])
+        .addTo(map);
+}
+
+// 新增定位針至目前組別
+function addFurniturePinToActiveGroup(lng, lat, labelText = '') {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData) return;
+    const cleanLng = Number(Number(lng).toFixed(6));
+    const cleanLat = Number(Number(lat).toFixed(6));
+    const nextNum = gData.pins.length + 1;
+
+    gData.pins.push({
+        id: `fpin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        lng: cleanLng,
+        lat: cleanLat,
+        label: labelText ? String(labelText).trim() : `家具點位 #${nextNum}`,
+        note: '',
+        needsWoodTruckSupport: false,
+        collected: false,
+        updatedAt: Date.now()
+    });
+    gData.updatedAt = Date.now();
+    isLocalFurnitureGroupDirty = true;
+    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    vibrate(25);
+    renderAllFurnitureMapElements();
+    syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+}
+
+// 家具模式下點擊地圖：直接插針（或手動拉線串聯模式下點擊加點／吸附目標針）
+function handleFurnitureMapClick(e) {
+    if (!isFurnitureModeActive || !e?.lngLat) return;
+    const clickLng = Number(e.lngLat.lng.toFixed(6));
+    const clickLat = Number(e.lngLat.lat.toFixed(6));
+
+    // 若處於「✍️ 手動拉線串」模式：點擊地圖可逐點拉線，靠近目標針 <= 25m 自動吸附！
+    if (isFurnitureManualConnecting) {
+        handleFurnitureManualClickPoint(clickLng, clickLat);
+        return;
+    }
+
+    addFurniturePinToActiveGroup(clickLng, clickLat, '');
+}
+
+// ==========================================
+// 🔍 免費 OSM Nominatim 地址／地標搜尋（400ms Debounce，優先偏向新北市鶯歌區範圍）
+// ==========================================
+// 新北市鶯歌區範圍 viewbox: left=121.30, top=24.99, right=121.39, bottom=24.92
+const YINGGE_VIEWBOX = '121.30,24.99,121.39,24.92';
+
+async function searchYinggeAddressNominatim(rawQuery) {
+    const q = String(rawQuery || '').trim();
+    if (!q) return [];
+
+    // 若使用者未輸入縣市區名，自動組合「新北市鶯歌區」優先查詢，若無結果再查原關鍵字
+    const hasDistrictKeyword = /鶯歌|三峽|樹林|桃園|八德|新北/.test(q);
+    const primaryQuery = hasDistrictKeyword ? q : `新北市鶯歌區 ${q}`;
+    const urlPrimary = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=tw&limit=5&viewbox=${YINGGE_VIEWBOX}&bounded=0&q=${encodeURIComponent(primaryQuery)}`;
+
+    try {
+        const res = await fetchWithTimeout(urlPrimary, {
+            headers: { 'Accept-Language': 'zh-TW,zh;q=0.9' }
+        }, 4500);
+        if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list) && list.length > 0) {
+                return list;
+            }
+        }
+    } catch (e) {}
+
+    if (!hasDistrictKeyword) {
+        try {
+            const urlFallback = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=tw&limit=5&viewbox=${YINGGE_VIEWBOX}&bounded=0&q=${encodeURIComponent(q)}`;
+            const res2 = await fetchWithTimeout(urlFallback, {
+                headers: { 'Accept-Language': 'zh-TW,zh;q=0.9' }
+            }, 4500);
+            if (res2.ok) {
+                const list2 = await res2.json();
+                if (Array.isArray(list2)) return list2;
+            }
+        } catch (e) {}
+    }
+    return [];
+}
+
+function formatNominatimDisplayTitle(item) {
+    if (!item) return '未知地點';
+    const addr = item.address || {};
+    const road = addr.road || addr.pedestrian || addr.suburb || addr.neighbourhood || '';
+    const houseNum = addr.house_number || '';
+    const amenity = item.name || addr.amenity || addr.building || addr.shop || '';
+    const district = addr.city_district || addr.town || addr.county || '';
+    let built = `${district}${road}${houseNum}`;
+    if (amenity && !built.includes(amenity)) {
+        built = built ? `${amenity}（${built}）` : amenity;
+    }
+    if (!built) {
+        built = String(item.display_name || '').split(',').slice(0, 3).join(' ');
+    }
+    return built.trim();
+}
+
+function showFurnitureSearchPreviewPin(lng, lat, label) {
+    clearFurnitureSearchPreviewMarker();
+    const el = document.createElement('div');
+    el.className = 'furniture-pin-wrapper';
+    el.innerHTML = `
+        <div class="bg-amber-500 text-white text-xs font-black px-3 py-1 rounded-full shadow-xl border-2 border-white flex items-center gap-1">
+            <span>🔍 ${Array.from(label).slice(0, 12).join('')}</span>
+        </div>
+        <div class="furniture-pin-arrow"></div>
+    `;
+    furnitureSearchPreviewMarker = new maplibregl.Marker({
+        element: el,
+        anchor: 'bottom',
+        offset: [0, -4],
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    })
+        .setLngLat([lng, lat])
+        .addTo(map);
+}
+
+(function setupFurnitureAddressSearchUI() {
+    const inputEl = document.getElementById('furnitureAddressSearchInput');
+    const clearBtn = document.getElementById('btnClearFurnitureSearch');
+    const resultsPanel = document.getElementById('furnitureSearchResultsPanel');
+    const quickPinBtn = document.getElementById('btnQuickDropSearchPin');
+    if (!inputEl || !resultsPanel) return;
+
+    function renderSearchResults(items, queryText) {
+        resultsPanel.innerHTML = '';
+        if (!Array.isArray(items) || items.length === 0) {
+            resultsPanel.innerHTML = `
+                <div class="p-3 text-xs font-bold text-gray-500 text-center">
+                    找不到「${queryText}」相關地址，可直接移動地圖點擊插針
+                </div>
+            `;
+            resultsPanel.classList.remove('hidden');
+            return;
+        }
+
+        items.forEach(item => {
+            const lng = Number(parseFloat(item.lon).toFixed(6));
+            const lat = Number(parseFloat(item.lat).toFixed(6));
+            if (isNaN(lng) || isNaN(lat)) return;
+            const title = formatNominatimDisplayTitle(item);
+            const fullSub = String(item.display_name || '');
+
+            const row = document.createElement('div');
+            row.className = 'p-2.5 hover:bg-amber-50 flex items-center justify-between gap-2 cursor-pointer transition-colors';
+            row.innerHTML = `
+                <div class="min-w-0 flex-1">
+                    <div class="text-xs font-black text-gray-900 truncate">📍 ${title}</div>
+                    <div class="text-[10px] font-bold text-gray-400 truncate">${fullSub}</div>
+                </div>
+                <button type="button" class="bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-xl shadow-sm active:scale-95 whitespace-nowrap flex-shrink-0">
+                    📍 插針
+                </button>
+            `;
+
+            // 點選整列：飛往該地址並顯示「📍 插針」按鈕
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                lastSelectedSearchCandidate = { lng, lat, label: title };
+                inputEl.value = title;
+                resultsPanel.classList.add('hidden');
+                quickPinBtn?.classList.remove('hidden');
+                setCameraFollow(false);
+                map.flyTo({ center: [lng, lat], zoom: 18, duration: 550 });
+                showFurnitureSearchPreviewPin(lng, lat, title);
+                setFurniturePrompt(`🔍 已定位至「${title}」，點擊右側「📍 插針」即可加入點位`, 'default');
+            });
+
+            // 點選列右側「📍 插針」按鈕：飛往並立即插針
+            const directPinBtn = row.querySelector('button');
+            directPinBtn?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resultsPanel.classList.add('hidden');
+                clearFurnitureSearchPreviewMarker();
+                quickPinBtn?.classList.add('hidden');
+                inputEl.value = '';
+                clearBtn?.classList.add('hidden');
+                setCameraFollow(false);
+                map.flyTo({ center: [lng, lat], zoom: 17.5, duration: 500 });
+                addFurniturePinToActiveGroup(lng, lat, title);
+            });
+
+            resultsPanel.appendChild(row);
+        });
+
+        resultsPanel.classList.remove('hidden');
+    }
+
+    inputEl.addEventListener('input', () => {
+        const val = inputEl.value.trim();
+        if (val.length > 0) {
+            clearBtn?.classList.remove('hidden');
+        } else {
+            clearBtn?.classList.add('hidden');
+            resultsPanel.classList.add('hidden');
+            quickPinBtn?.classList.add('hidden');
+            clearFurnitureSearchPreviewMarker();
+            return;
+        }
+
+        if (furnitureSearchDebounceTimer) {
+            clearTimeout(furnitureSearchDebounceTimer);
+        }
+        // 400ms Debounce 防抖動
+        furnitureSearchDebounceTimer = setTimeout(async () => {
+            const q = inputEl.value.trim();
+            if (q.length < 2) return;
+            resultsPanel.innerHTML = `<div class="p-3 text-xs font-bold text-amber-700 text-center"><i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在搜尋鶯歌地址「${q}」...</div>`;
+            resultsPanel.classList.remove('hidden');
+            const results = await searchYinggeAddressNominatim(q);
+            if (inputEl.value.trim() !== q) return;
+            renderSearchResults(results, q);
+        }, 400);
+    });
+
+    clearBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        inputEl.value = '';
+        clearBtn.classList.add('hidden');
+        resultsPanel.classList.add('hidden');
+        quickPinBtn?.classList.add('hidden');
+        lastSelectedSearchCandidate = null;
+        clearFurnitureSearchPreviewMarker();
+    });
+
+    quickPinBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!lastSelectedSearchCandidate) return;
+        const { lng, lat, label } = lastSelectedSearchCandidate;
+        clearFurnitureSearchPreviewMarker();
+        quickPinBtn.classList.add('hidden');
+        inputEl.value = '';
+        clearBtn?.classList.add('hidden');
+        lastSelectedSearchCandidate = null;
+        addFurniturePinToActiveGroup(lng, lat, label);
+    });
+
+    // 點擊外部自動收合搜尋結果清單
+    document.addEventListener('pointerdown', (e) => {
+        if (resultsPanel.classList.contains('hidden')) return;
+        if (!resultsPanel.contains(e.target) && e.target !== inputEl) {
+            resultsPanel.classList.add('hidden');
+        }
+    });
+})();
+
+// ==========================================
+// 🤖 串聯方式 1：自動沿路串（OSRM 依序將 1 -> 2 -> 3... 串成實際道路軌跡，失敗自動 fallback 直線）
+// ==========================================
+let isFurnitureOsrmBusy = false;
+document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click', async () => {
+    if (isFurnitureOsrmBusy) return;
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData || !Array.isArray(gData.pins) || gData.pins.length < 2) return;
+
+    if (isFurnitureManualConnecting) {
+        stopFurnitureManualConnectMode(false);
+    }
+
+    isFurnitureOsrmBusy = true;
+    const btn = document.getElementById('btnFurnitureAutoOsrmConnect');
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
+    }
+    setFurniturePrompt(`🤖 正在依序計算 1 ➔ ${gData.pins.length} 號針的 OSRM 最佳道路軌跡...`, 'default');
+
+    try {
+        const combinedCoords = [[gData.pins[0].lng, gData.pins[0].lat]];
+        let fallbackCount = 0;
+
+        for (let i = 0; i < gData.pins.length - 1; i++) {
+            const pA = gData.pins[i];
+            const pB = gData.pins[i + 1];
+            const { coords, usedOsrm } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat);
+            if (!usedOsrm) fallbackCount++;
+            const densified = densifyRoadCoordinates(coords, 8);
+            for (let k = 1; k < densified.length; k++) {
+                combinedCoords.push(densified[k]);
+            }
+        }
+
+        gData.routeCoords = combinedCoords;
+        gData.distanceKm = computeCoordsDistanceKm(combinedCoords);
+        gData.updatedAt = Date.now();
+        isLocalFurnitureGroupDirty = true;
+        saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+        vibrate([40, 25, 40]);
+
+        renderAllFurnitureMapElements();
+        syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+    } finally {
+        isFurnitureOsrmBusy = false;
+        if (btn) {
+            btn.innerHTML = origHtml;
+            btn.disabled = (gData.pins.length < 2);
+        }
+    }
+});
+
+// ==========================================
+// ✍️ 串聯方式 2：手動拉線串（依序從 1 號針手繪或點連向 2、3… 號針，靠近目標針 25m 內自動吸附）
+// ==========================================
+function startFurnitureManualConnectMode() {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData || !Array.isArray(gData.pins) || gData.pins.length < 2) return;
+
+    isFurnitureManualConnecting = true;
+    furnitureManualTargetPinIdx = 1;
+    const p0 = gData.pins[0];
+    furnitureManualConnectedCoords = [[p0.lng, p0.lat]];
+    furnitureManualSegmentDraft = [[p0.lng, p0.lat]];
+    isFurnitureDrawingStroke = false;
+
+    gData.routeCoords = [...furnitureManualConnectedCoords];
+    setFurniturePrompt(
+        `✍️ 手動拉線串：請從 #1 號針單指拉線（或點選路面）連向 #2 號針（靠近 25 公尺內自動吸附）`,
+        'manual'
+    );
+    renderAllFurnitureMapElements();
+}
+
+function stopFurnitureManualConnectMode(commitDraft = true) {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (commitDraft && gData && furnitureManualConnectedCoords.length >= 2) {
+        gData.routeCoords = [...furnitureManualConnectedCoords];
+        gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
+        gData.updatedAt = Date.now();
+        isLocalFurnitureGroupDirty = true;
+        saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+        syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+    }
+    isFurnitureManualConnecting = false;
+    isFurnitureDrawingStroke = false;
+    furnitureManualSegmentDraft = [];
+    try { map.dragPan.enable(); } catch (e) {}
+    renderAllFurnitureMapElements();
+}
+
+function handleManualConnectSnapToPin(targetIdx) {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData || !isFurnitureManualConnecting) return;
+    if (targetIdx < 1 || targetIdx >= gData.pins.length) return;
+
+    const targetPin = gData.pins[targetIdx];
+    const targetCoord = [targetPin.lng, targetPin.lat];
+    const segCoords = furnitureManualSegmentDraft.length >= 1
+        ? [...furnitureManualSegmentDraft, targetCoord]
+        : [furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1], targetCoord];
+
+    const densified = densifyRoadCoordinates(segCoords, 8);
+    for (let i = 1; i < densified.length; i++) {
+        furnitureManualConnectedCoords.push(densified[i]);
+    }
+
+    gData.routeCoords = [...furnitureManualConnectedCoords];
+    gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
+    gData.updatedAt = Date.now();
+    isLocalFurnitureGroupDirty = true;
+    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    vibrate(35);
+
+    if (targetIdx >= gData.pins.length - 1) {
+        // 已完成最後一支針的串聯！
+        stopFurnitureManualConnectMode(true);
+        setFurniturePrompt(
+            `🎉 已完成手動拉線串聯 1 ➔ ${gData.pins.length} 號針（總距離 ${gData.distanceKm} km）！請按「📤 發布同步今日路線」`,
+            'success'
+        );
+    } else {
+        furnitureManualTargetPinIdx = targetIdx + 1;
+        furnitureManualSegmentDraft = [targetCoord];
+        renderAllFurnitureMapElements();
+        setFurniturePrompt(
+            `✅ 已吸附 #${targetIdx + 1} 號針！請繼續拉線或點擊連向 #${furnitureManualTargetPinIdx + 1} 號針`,
+            'manual'
+        );
+    }
+}
+
+function handleFurnitureManualClickPoint(lng, lat) {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData || !isFurnitureManualConnecting) return;
+    const targetPin = gData.pins[furnitureManualTargetPinIdx];
+    if (!targetPin) return;
+
+    const distToTargetM = getDistanceKm(lng, lat, targetPin.lng, targetPin.lat) * 1000;
+    // 靠近目標針 25 公尺內自動吸附
+    if (distToTargetM <= 25) {
+        handleManualConnectSnapToPin(furnitureManualTargetPinIdx);
+        return;
+    }
+
+    furnitureManualSegmentDraft.push([lng, lat]);
+    furnitureManualConnectedCoords.push([lng, lat]);
+    gData.routeCoords = [...furnitureManualConnectedCoords];
+    gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
+    renderAllFurnitureMapElements();
+}
+
+// 支援在「手動拉線串」下直接單指從當前端點拖曳畫線連向下一支針（靠近目標針 25m 自動吸附）
+(function setupFurnitureManualFreehandGesture() {
+    const canvasContainer = map.getCanvasContainer();
+
+    function getLngLat(clientX, clientY) {
+        const rect = canvasContainer.getBoundingClientRect();
+        return map.unproject([clientX - rect.left, clientY - rect.top]);
+    }
+
+    function onStart(clientX, clientY, rawEv) {
+        if (!isFurnitureModeActive || !isFurnitureManualConnecting) return;
+        const targetEl = rawEv?.target;
+        if (targetEl && targetEl.closest && targetEl.closest('.furniture-pin-wrapper, .furniture-popup-wrapper')) return;
+        const gData = furnitureGroupsData[activeFurnitureGroupId];
+        if (!gData || furnitureManualConnectedCoords.length === 0) return;
+
+        const lngLat = getLngLat(clientX, clientY);
+        const lastAnchor = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
+        const distFromAnchorM = getDistanceKm(lngLat.lng, lngLat.lat, lastAnchor[0], lastAnchor[1]) * 1000;
+        // 僅在靠近當前拉線端點 55 公尺內按下時啟動單指畫線，否則保留地圖平移
+        if (distFromAnchorM > 55) return;
+
+        isFurnitureDrawingStroke = true;
+        furnitureManualSegmentDraft = [lastAnchor, [Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]];
+        try { map.dragPan.disable(); } catch (e) {}
+    }
+
+    function onMove(clientX, clientY) {
+        if (!isFurnitureModeActive || !isFurnitureManualConnecting || !isFurnitureDrawingStroke) return;
+        const gData = furnitureGroupsData[activeFurnitureGroupId];
+        const targetPin = gData?.pins?.[furnitureManualTargetPinIdx];
+        if (!targetPin) return;
+
+        const lngLat = getLngLat(clientX, clientY);
+        const curLng = Number(lngLat.lng.toFixed(6));
+        const curLat = Number(lngLat.lat.toFixed(6));
+
+        const [lastLng, lastLat] = furnitureManualSegmentDraft[furnitureManualSegmentDraft.length - 1];
+        if (getDistanceKm(lastLng, lastLat, curLng, curLat) * 1000 >= 4) {
+            furnitureManualSegmentDraft.push([curLng, curLat]);
+            renderAllFurnitureMapElements();
+        }
+
+        // 靠近目標針 25 公尺內自動吸附！
+        const distToTargetM = getDistanceKm(curLng, curLat, targetPin.lng, targetPin.lat) * 1000;
+        if (distToTargetM <= 25) {
+            isFurnitureDrawingStroke = false;
+            try { map.dragPan.enable(); } catch (e) {}
+            handleManualConnectSnapToPin(furnitureManualTargetPinIdx);
+        }
+    }
+
+    function onEnd() {
+        if (!isFurnitureDrawingStroke) return;
+        isFurnitureDrawingStroke = false;
+        try { map.dragPan.enable(); } catch (e) {}
+        if (furnitureManualSegmentDraft.length >= 2) {
+            for (let i = 1; i < furnitureManualSegmentDraft.length; i++) {
+                furnitureManualConnectedCoords.push(furnitureManualSegmentDraft[i]);
+            }
+            const lastPt = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
+            furnitureManualSegmentDraft = [lastPt];
+            const gData = furnitureGroupsData[activeFurnitureGroupId];
+            if (gData) {
+                gData.routeCoords = [...furnitureManualConnectedCoords];
+                gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
+            }
+            renderAllFurnitureMapElements();
+        }
+    }
+
+    canvasContainer.addEventListener('touchstart', (e) => {
+        if (!isFurnitureModeActive || !isFurnitureManualConnecting) return;
+        if (e.touches && e.touches.length >= 2) {
+            isFurnitureDrawingStroke = false;
+            try { map.dragPan.enable(); } catch (err) {}
+            return;
+        }
+        if (e.touches && e.touches.length === 1) {
+            onStart(e.touches[0].clientX, e.touches[0].clientY, e);
+        }
+    }, { passive: true });
+
+    canvasContainer.addEventListener('touchmove', (e) => {
+        if (!isFurnitureModeActive || !isFurnitureManualConnecting || !isFurnitureDrawingStroke) return;
+        if (e.touches && e.touches.length >= 2) {
+            isFurnitureDrawingStroke = false;
+            try { map.dragPan.enable(); } catch (err) {}
+            return;
+        }
+        if (e.touches && e.touches.length === 1) {
+            if (e.cancelable) e.preventDefault();
+            onMove(e.touches[0].clientX, e.touches[0].clientY);
+        }
+    }, { passive: false });
+
+    canvasContainer.addEventListener('touchend', () => onEnd(), { passive: true });
+    canvasContainer.addEventListener('mousedown', (e) => {
+        if (e.button === 0) onStart(e.clientX, e.clientY, e);
+    });
+    window.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    window.addEventListener('mouseup', () => onEnd());
+})();
+
+document.getElementById('btnFurnitureManualConnect')?.addEventListener('click', () => {
+    if (isFurnitureManualConnecting) {
+        stopFurnitureManualConnectMode(true);
+        setFurniturePrompt('✅ 已結束手動拉線串聯！可按「📤 發布同步今日路線」同步給全隊', 'success');
+    } else {
+        startFurnitureManualConnectMode();
+    }
+});
+
+// 撤銷上一支針與清空本組按鈕
+document.getElementById('btnFurnitureUndoPin')?.addEventListener('click', () => {
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData || gData.pins.length === 0) return;
+    if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(false);
+    gData.pins.pop();
+    if (gData.pins.length < 2) {
+        gData.routeCoords = [];
+        gData.distanceKm = '0.00';
+    }
+    gData.updatedAt = Date.now();
+    isLocalFurnitureGroupDirty = true;
+    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    vibrate(25);
+    renderAllFurnitureMapElements();
+    syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+});
+
+document.getElementById('btnFurnitureClearPins')?.addEventListener('click', async () => {
+    const gCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    if (!gData) return;
+    if (!confirm(`確定要清空【${gCfg.name}】今日的所有定位針與路線嗎？`)) return;
+    if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(false);
+    gData.pins = [];
+    gData.routeCoords = [];
+    gData.distanceKm = '0.00';
+    gData.updatedAt = Date.now();
+    isLocalFurnitureGroupDirty = false;
+    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    renderAllFurnitureMapElements();
+    await syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
+    setFurniturePrompt(`🗑️ 已清空${gCfg.name}今日定位針與路線並同步雲端`, 'default');
+});
+
+// 組別切換器與顯示他組路線開關
+document.querySelectorAll('.furniture-group-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const nextGroup = btn.getAttribute('data-group');
+        if (!nextGroup || !FURNITURE_GROUPS_CONFIG[nextGroup] || nextGroup === activeFurnitureGroupId) return;
+        if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(true);
+        activeFurnitureGroupId = nextGroup;
+        isLocalFurnitureGroupDirty = false;
+        try {
+            localStorage.setItem(FURNITURE_GROUP_STORAGE_KEY, activeFurnitureGroupId);
+        } catch (e) {}
+        const gCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
+        setFurniturePrompt(`🛋️ 已切換身分為【${gCfg.name}】，點擊地圖或搜尋地址即可為${gCfg.name}插針`, 'default');
+        renderAllFurnitureMapElements();
+    });
+});
+
+document.getElementById('btnToggleOtherFurnitureGroups')?.addEventListener('click', () => {
+    showOtherFurnitureGroups = !showOtherFurnitureGroups;
+    try {
+        localStorage.setItem(FURNITURE_SHOW_OTHERS_STORAGE_KEY, String(showOtherFurnitureGroups));
+    } catch (e) {}
+    renderAllFurnitureMapElements();
+});
+
+// ==========================================
+// ☁️ Firebase 當日家具協作雙向同步：furniture_collab/{YYYY-MM-DD}/groups/{groupId}
+// ==========================================
+function getFurnitureDayFirebaseUrl(dateStr = currentFurnitureDateStr) {
+    return `${FIREBASE_BASE_URL}/furniture_collab/${dateStr}/groups.json`;
+}
+
+function getFurnitureGroupFirebaseUrl(groupId, dateStr = currentFurnitureDateStr) {
+    return `${FIREBASE_BASE_URL}/furniture_collab/${dateStr}/groups/${groupId}.json`;
+}
+
+async function syncSingleFurnitureGroupToFirebase(groupId = activeFurnitureGroupId, showToast = true) {
+    const gCfg = FURNITURE_GROUPS_CONFIG[groupId];
+    const gData = furnitureGroupsData[groupId];
+    if (!gCfg || !gData) return false;
+
+    const publishBtn = document.getElementById('btnFurniturePublishCloud');
+    const publishText = document.getElementById('furniturePublishBtnText');
+    const origText = publishText ? publishText.textContent : '📤 發布同步今日路線';
+
+    if (showToast && publishText) {
+        publishText.textContent = '⏳ 雲端同步中...';
+        if (publishBtn) publishBtn.disabled = true;
+    }
+
+    const authorName = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || gCfg.name;
+    const payload = {
+        groupId,
+        groupName: gCfg.name,
+        author: authorName,
+        updatedAt: Date.now(),
+        distanceKm: computeCoordsDistanceKm(gData.routeCoords),
+        pins: gData.pins || [],
+        routeCoords: gData.routeCoords || []
+    };
+
+    try {
+        const res = await fetchWithTimeout(getFurnitureGroupFirebaseUrl(groupId), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }, 5000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        gData.updatedAt = payload.updatedAt;
+        gData.author = authorName;
+        if (groupId === activeFurnitureGroupId) {
+            isLocalFurnitureGroupDirty = false;
+        }
+        saveLocalFurnitureGroupBackup(groupId);
+        updateWoodSupportTopLeftAlertUI();
+
+        if (showToast) {
+            if (publishText) publishText.textContent = `✅ 已同步${gCfg.name}今日路線！`;
+            setFurniturePrompt(`☁️ ${gCfg.name}今日路線與定位針已同步至 Firebase 全車隊！`, 'success');
+            setTimeout(() => {
+                if (publishText) publishText.textContent = origText;
+                if (publishBtn) publishBtn.disabled = false;
+            }, 1400);
+        }
+        return true;
+    } catch (e) {
+        if (showToast) {
+            if (publishText) publishText.textContent = '⚠️ 同步失敗，已存本機';
+            setFurniturePrompt('⚠️ 網路訊號不佳，已先自動保存在本機，稍後可再按發布同步', 'fire');
+            setTimeout(() => {
+                if (publishText) publishText.textContent = origText;
+                if (publishBtn) publishBtn.disabled = false;
+            }, 1800);
+        }
+        return false;
+    }
+}
+
+document.getElementById('btnFurniturePublishCloud')?.addEventListener('click', async () => {
+    if (isFurnitureManualConnecting) {
+        stopFurnitureManualConnectMode(true);
+    }
+    const gData = furnitureGroupsData[activeFurnitureGroupId];
+    // 若使用者插了 >= 2 支針但還沒按串聯就直接按發布，自動幫他執行一次 OSRM 沿路串再發布！
+    if (gData && gData.pins.length >= 2 && (!Array.isArray(gData.routeCoords) || gData.routeCoords.length < 2)) {
+        document.getElementById('btnFurnitureAutoOsrmConnect')?.click();
+        setTimeout(() => {
+            syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
+        }, 1200);
+        return;
+    }
+    await syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
+});
+
+let isFetchingFurnitureCloud = false;
+async function fetchAndSyncTodayFurnitureCollab() {
+    if (isFetchingFurnitureCloud) return;
+    isFetchingFurnitureCloud = true;
+
+    // 跨日自動切換當日日期路徑
+    const todayStr = getTodayDateString();
+    if (todayStr !== currentFurnitureDateStr) {
+        currentFurnitureDateStr = todayStr;
+        furnitureGroupsData = {
+            group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
+            group2: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
+            group3: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }
+        };
+        isLocalFurnitureGroupDirty = false;
+    }
+
+    try {
+        const res = await fetchWithTimeout(getFurnitureDayFirebaseUrl(currentFurnitureDateStr), { cache: 'no-store' }, 5000);
+        if (!res.ok) return;
+        const cloudGroups = await res.json();
+
+        let hasAnyChange = false;
+        ['group1', 'group2', 'group3'].forEach(gId => {
+            // 若本組正在本地插針且尚未按發布，保留本組草稿不被覆蓋；其他兩組則隨時即時覆蓋更新
+            if (isFurnitureModeActive && gId === activeFurnitureGroupId && isLocalFurnitureGroupDirty) {
+                return;
+            }
+            const rawGroup = cloudGroups && cloudGroups[gId] ? cloudGroups[gId] : null;
+            if (rawGroup) {
+                const normalized = normalizeFurnitureGroupPayload(rawGroup);
+                const curUpdated = furnitureGroupsData[gId]?.updatedAt || 0;
+                if (normalized.updatedAt !== curUpdated || JSON.stringify(normalized.pins) !== JSON.stringify(furnitureGroupsData[gId]?.pins)) {
+                    furnitureGroupsData[gId] = normalized;
+                    saveLocalFurnitureGroupBackup(gId);
+                    hasAnyChange = true;
+                }
+            } else {
+                const localBackup = loadLocalFurnitureGroupBackup(gId);
+                if (localBackup && (furnitureGroupsData[gId]?.pins?.length || 0) === 0 && localBackup.pins.length > 0) {
+                    furnitureGroupsData[gId] = localBackup;
+                    hasAnyChange = true;
+                } else if (!localBackup && ((furnitureGroupsData[gId]?.pins?.length || 0) > 0 || (furnitureGroupsData[gId]?.routeCoords?.length || 0) > 0)) {
+                    furnitureGroupsData[gId] = { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' };
+                    hasAnyChange = true;
+                }
+            }
+        });
+
+        if (hasAnyChange) {
+            renderAllFurnitureMapElements();
+        } else {
+            updateWoodSupportTopLeftAlertUI();
+        }
+    } catch (e) {
+        // 離線時載入本機當日快取
+        ['group1', 'group2', 'group3'].forEach(gId => {
+            if ((furnitureGroupsData[gId]?.pins?.length || 0) === 0) {
+                const backup = loadLocalFurnitureGroupBackup(gId);
+                if (backup) furnitureGroupsData[gId] = backup;
+            }
+        });
+        updateWoodSupportTopLeftAlertUI();
+    } finally {
+        isFetchingFurnitureCloud = false;
+    }
+}
+
+// ==========================================
+// 🔀 管理員專區「🛋️ 家具模式」與「一般收運模式」嚴格隔離切換邏輯
+// ==========================================
+function syncAdminFurnitureEntryButtonUI() {
+    const adminLaunchBtn = document.getElementById('btnAdminLaunchFurnitureMode');
+    const adminBtnIcon = document.getElementById('adminFurnitureBtnIcon');
+    const adminBtnLabel = document.getElementById('adminFurnitureBtnLabel');
+    const cloudAdminLaunchBtn = document.getElementById('btnCloudAdminLaunchFurnitureMode');
+
+    if (isFurnitureModeActive) {
+        if (adminLaunchBtn) {
+            adminLaunchBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1.5';
+        }
+        if (adminBtnIcon) adminBtnIcon.textContent = '🚛';
+        if (adminBtnLabel) adminBtnLabel.textContent = '返回一般收運';
+        if (cloudAdminLaunchBtn) {
+            cloudAdminLaunchBtn.innerHTML = '<span>🚛 返回一般收運</span>';
+        }
+    } else {
+        if (adminLaunchBtn) {
+            adminLaunchBtn.className = 'bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1.5';
+        }
+        if (adminBtnIcon) adminBtnIcon.textContent = '🛋️';
+        if (adminBtnLabel) adminBtnLabel.textContent = '進入家具模式';
+        if (cloudAdminLaunchBtn) {
+            cloudAdminLaunchBtn.innerHTML = '<span>🛋️ 家具模式</span>';
+        }
+    }
+}
+
+function setFurnitureModeActive(enable) {
+    const furnitureUI = document.getElementById('furnitureModeUI');
+    const furnitureLeftConnectControls = document.getElementById('furnitureLeftConnectControls');
+    const topNavHeaderBar = document.getElementById('topNavHeaderBar');
+    const mainUI = document.getElementById('mainUI');
+    const routeDetailUI = document.getElementById('routeDetailUI');
+    const editRouteBar = document.getElementById('editRouteBar');
+    const playbackUI = document.getElementById('playbackUI');
+    const manualDrawUI = document.getElementById('manualDrawUI');
+    const manualDrawTopBanner = document.getElementById('manualDrawTopBanner');
+    const topBackBtn = document.getElementById('topBackBtn');
+    const appStatusTitle = document.getElementById('appStatusTitle');
+
+    if (enable) {
+        isFurnitureModeActive = true;
+        window.isFurnitureModeActive = true;
+
+        // 儲存一般收運模式當前顯示狀態與路線圖層快照
+        normalModeRestoreSnapshot = {
+            mainHidden: mainUI ? mainUI.classList.contains('hidden') : false,
+            detailHidden: routeDetailUI ? routeDetailUI.classList.contains('hidden') : true,
+            editHidden: editRouteBar ? editRouteBar.classList.contains('hidden') : true,
+            playbackHidden: playbackUI ? playbackUI.classList.contains('hidden') : true,
+            manualHidden: manualDrawUI ? manualDrawUI.classList.contains('hidden') : true,
+            manualBannerHidden: manualDrawTopBanner ? manualDrawTopBanner.classList.contains('hidden') : true,
+            topBackHidden: topBackBtn ? topBackBtn.classList.contains('hidden') : true,
+            statusTitle: appStatusTitle ? appStatusTitle.innerText : '鶯歌清運路線助手 Pro Max',
+            bgGeoJSON: cachedBgRouteGeoJSON,
+            silentGeoJSON: cachedSilentRouteGeoJSON,
+            musicGeoJSON: cachedMusicRouteGeoJSON,
+            calloutGeoJSON: cachedCalloutLinesGeoJSON
+        };
+
+        // 隱藏一般收運模式所有底部面板與一般路線圖層，避免畫面擁擠或誤觸
+        mainUI?.classList.add('hidden');
+        routeDetailUI?.classList.add('hidden');
+        editRouteBar?.classList.add('hidden');
+        playbackUI?.classList.add('hidden');
+        manualDrawUI?.classList.add('hidden');
+        manualDrawTopBanner?.classList.add('hidden');
+        topBackBtn?.classList.add('hidden');
+
+        // 暫時清空一般收運路線圖層與一般路線標記（快照已保存，切回時完整還原）
+        clearDomMarkers();
+        cachedBgRouteGeoJSON = emptyGeoJSON();
+        cachedSilentRouteGeoJSON = emptyGeoJSON();
+        cachedMusicRouteGeoJSON = emptyGeoJSON();
+        cachedCalloutLinesGeoJSON = emptyGeoJSON();
+        try {
+            map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+            map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
+            map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+            map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON);
+        } catch (e) {}
+
+        if (appStatusTitle) {
+            appStatusTitle.innerText = '🛋️ 家具模式';
+        }
+        if (topNavHeaderBar) {
+            topNavHeaderBar.classList.remove('top-6');
+            topNavHeaderBar.classList.add('top-14');
+        }
+
+        furnitureUI?.classList.remove('hidden');
+        furnitureLeftConnectControls?.classList.remove('hidden');
+        syncAdminFurnitureEntryButtonUI();
+        fetchAndSyncTodayFurnitureCollab();
+        renderAllFurnitureMapElements();
+    } else {
+        if (isFurnitureManualConnecting) {
+            stopFurnitureManualConnectMode(true);
+        }
+        clearFurnitureSearchPreviewMarker();
+        closeFurniturePinPopup();
+
+        isFurnitureModeActive = false;
+        window.isFurnitureModeActive = false;
+
+        furnitureUI?.classList.add('hidden');
+        furnitureLeftConnectControls?.classList.add('hidden');
+        if (topNavHeaderBar) {
+            topNavHeaderBar.classList.remove('top-14');
+            topNavHeaderBar.classList.add('top-6');
+        }
+        syncAdminFurnitureEntryButtonUI();
+
+        // 完整還原一般收運模式的面板與路線圖層
+        if (normalModeRestoreSnapshot) {
+            if (mainUI) mainUI.classList.toggle('hidden', normalModeRestoreSnapshot.mainHidden);
+            if (routeDetailUI) routeDetailUI.classList.toggle('hidden', normalModeRestoreSnapshot.detailHidden);
+            if (editRouteBar) editRouteBar.classList.toggle('hidden', normalModeRestoreSnapshot.editHidden);
+            if (playbackUI) playbackUI.classList.toggle('hidden', normalModeRestoreSnapshot.playbackHidden);
+            if (manualDrawUI) manualDrawUI.classList.toggle('hidden', normalModeRestoreSnapshot.manualHidden);
+            if (manualDrawTopBanner) manualDrawTopBanner.classList.toggle('hidden', normalModeRestoreSnapshot.manualBannerHidden);
+            if (topBackBtn) topBackBtn.classList.toggle('hidden', normalModeRestoreSnapshot.topBackHidden);
+            if (appStatusTitle) appStatusTitle.innerText = normalModeRestoreSnapshot.statusTitle;
+
+            cachedBgRouteGeoJSON = normalModeRestoreSnapshot.bgGeoJSON || emptyGeoJSON();
+            cachedSilentRouteGeoJSON = normalModeRestoreSnapshot.silentGeoJSON || emptyGeoJSON();
+            cachedMusicRouteGeoJSON = normalModeRestoreSnapshot.musicGeoJSON || emptyGeoJSON();
+            cachedCalloutLinesGeoJSON = normalModeRestoreSnapshot.calloutGeoJSON || emptyGeoJSON();
+            try {
+                map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+                map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
+                map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+                map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON);
+            } catch (e) {}
+
+            // 若切進家具模式前正處於某條路線的預覽或編輯狀態，自動重繪該路線的標記點
+            if (!normalModeRestoreSnapshot.editHidden && isEditingMode) {
+                const activeRoute = getActiveWorkingRoute();
+                if (activeRoute) {
+                    renderEditableRouteMarkers(activeRoute);
+                    renderPathEditNodes(activeRoute);
+                }
+            } else if (!normalModeRestoreSnapshot.detailHidden && selectedRouteIdx >= 0 && savedRoutes[selectedRouteIdx]) {
+                renderRouteMarkers(savedRoutes[selectedRouteIdx]);
+            }
+        } else {
+            mainUI?.classList.remove('hidden');
+            if (appStatusTitle) appStatusTitle.innerText = '鶯歌清運路線助手 Pro Max';
+        }
+
+        renderAllFurnitureMapElements();
+    }
+}
+
+document.getElementById('btnAdminLaunchFurnitureMode')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('adminSettingsModal')?.classList.add('hidden');
+    setFurnitureModeActive(!isFurnitureModeActive);
+});
+
+document.getElementById('btnCloudAdminLaunchFurnitureMode')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('cloudRoutesModal')?.classList.add('hidden');
+    document.getElementById('historyModal')?.classList.add('hidden');
+    setFurnitureModeActive(!isFurnitureModeActive);
+});
+
+document.getElementById('btnExitFurnitureMode')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setFurnitureModeActive(false);
+});
+
+// 啟動時載入當日本機備份並每 6 秒從 Firebase 同步當日 3 組家具路線與「🔥 需垃圾車支援（純木頭）」火紅標記
+(function initFurnitureCollabSystem() {
+    ['group1', 'group2', 'group3'].forEach(gId => {
+        const localData = loadLocalFurnitureGroupBackup(gId);
+        if (localData) {
+            furnitureGroupsData[gId] = localData;
+        }
+    });
+    updateFurniturePanelUI();
+    fetchAndSyncTodayFurnitureCollab();
+    setInterval(fetchAndSyncTodayFurnitureCollab, 6000);
+})();
+

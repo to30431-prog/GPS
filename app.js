@@ -1,7 +1,15 @@
 // ==========================================
-// 🔑 雲端路線庫管理員密碼設定（可於此處輕鬆修改）
+// 🔑 雲端路線庫管理員密碼與全域版本常數設定
 // ==========================================
+const APP_VERSION = 'v3.22';
+window.APP_VERSION = APP_VERSION;
 const ADMIN_PASSWORD = '5201314';
+
+// 確保畫面上所有版本號膠囊同步顯示為 v3.22
+const appVersionBadgeEl = document.getElementById('appVersionBadge');
+if (appVersionBadgeEl) {
+    appVersionBadgeEl.textContent = APP_VERSION;
+}
 
 // ==========================================
 // 🛡️ 行車弱訊號防凍結保護：5 秒超時中斷 Fetch 封裝
@@ -689,6 +697,7 @@ const PURE_CHINESE_TEXT_FIELD = [
 let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
 
 const map = new maplibregl.Map({
     container: 'map',
@@ -824,6 +833,12 @@ function getDynamicZoomBySpeed(speedKmh) {
 // ==========================================
 function ensureCustomRouteSourcesAndLayers() {
     if (!map) return;
+    try {
+        const currentStyle = map.getStyle();
+        if (!currentStyle) return;
+    } catch (e) {
+        return;
+    }
 
     try {
         // 0. 在 OpenFreeMap (openmaptiles) 樣式上補齊放大時的門牌號碼圖層 (housenumber-label)
@@ -944,6 +959,41 @@ function ensureCustomRouteSourcesAndLayers() {
                 paint: {
                     'line-color': '#16a34a',
                     'line-width': 7
+                }
+            });
+        }
+
+        // 4. 📌 引線備忘框高對比引線圖層（含白色外框與主題顏色引線）
+        if (!map.getSource('callout-lines-source')) {
+            map.addSource('callout-lines-source', {
+                type: 'geojson',
+                data: cachedCalloutLinesGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('callout-lines-casing')) {
+            map.addLayer({
+                id: 'callout-lines-casing',
+                type: 'line',
+                source: 'callout-lines-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 6.5,
+                    'line-opacity': 0.92
+                }
+            });
+        }
+        if (!map.getLayer('callout-lines-layer')) {
+            map.addLayer({
+                id: 'callout-lines-layer',
+                type: 'line',
+                source: 'callout-lines-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#d97706'],
+                    'line-width': 3.5,
+                    'line-dasharray': [2, 1.2],
+                    'line-opacity': 0.98
                 }
             });
         }
@@ -1097,6 +1147,7 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
         map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON || emptyGeoJSON());
         map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
         map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
+        map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON || emptyGeoJSON());
         if (currentMapLayerPreset?.isVector) {
             fixSymbolTextAlignment();
         }
@@ -2009,6 +2060,12 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
 
 function clearDomMarkers() {
     closeActiveAlertPopup();
+    if (typeof clearPendingCalloutAnchor === 'function') {
+        clearPendingCalloutAnchor();
+    }
+    if (typeof updateCalloutLeaderLines === 'function') {
+        updateCalloutLeaderLines(null);
+    }
     domMarkers.forEach(m => {
         try { m.remove(); } catch (e) {}
     });
@@ -2439,6 +2496,8 @@ function renderRouteMarkers(route) {
     (route.points || []).forEach(p => {
         if (p.is_stop) addPinMarker([p.lng, p.lat], `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`);
     });
+
+    renderRouteCallouts(route, false);
 }
 
 function openRouteDetail(idx, skipFitBounds = false) {
@@ -2489,12 +2548,409 @@ document.getElementById('deleteRouteBtn').ontouchend = (e) => {
 };
 
 // ==========================================
-// 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 10步Undo）
+// 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 引線備忘框 ＋ 10步Undo）
 // ==========================================
-let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [];
+let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [], originalCalloutsBackup = [];
 let editStep = 0, editStartIndex = -1, tempMarkerA = null;
 let editSubMode = 'path', pathEditMarkers = [];
 let selectedEditNodeIdx = -1;
+
+// 📌 引線備忘框（Callout Annotation）暫存狀態
+let pendingCalloutAnchorLngLat = null;
+let pendingCalloutAnchorMarker = null;
+
+const CALLOUT_STYLE_THEMES = [
+    { id: 'yellow-black', label: '黃底黑字', lineColor: '#d97706' },
+    { id: 'red-white', label: '紅框白底', lineColor: '#dc2626' },
+    { id: 'blue-white', label: '藍框白底', lineColor: '#2563eb' }
+];
+
+function getCalloutThemeConfig(styleId) {
+    return CALLOUT_STYLE_THEMES.find(t => t.id === styleId) || CALLOUT_STYLE_THEMES[0];
+}
+
+function clearPendingCalloutAnchor() {
+    pendingCalloutAnchorLngLat = null;
+    if (pendingCalloutAnchorMarker) {
+        try { pendingCalloutAnchorMarker.remove(); } catch (e) {}
+        pendingCalloutAnchorMarker = null;
+    }
+}
+
+function updateCalloutLeaderLines(route) {
+    const callouts = Array.isArray(route?.callouts) ? route.callouts : [];
+    const features = [];
+    callouts.forEach(item => {
+        if (
+            !item ||
+            !Array.isArray(item.anchorLngLat) || item.anchorLngLat.length < 2 ||
+            !Array.isArray(item.boxLngLat) || item.boxLngLat.length < 2
+        ) {
+            return;
+        }
+        const aLng = Number(item.anchorLngLat[0]);
+        const aLat = Number(item.anchorLngLat[1]);
+        const bLng = Number(item.boxLngLat[0]);
+        const bLat = Number(item.boxLngLat[1]);
+        if (isNaN(aLng) || isNaN(aLat) || isNaN(bLng) || isNaN(bLat)) return;
+
+        const theme = getCalloutThemeConfig(item.style);
+        features.push({
+            type: 'Feature',
+            properties: {
+                id: item.id || '',
+                color: theme.lineColor
+            },
+            geometry: {
+                type: 'LineString',
+                coordinates: [
+                    [aLng, aLat],
+                    [bLng, bLat]
+                ]
+            }
+        });
+    });
+
+    cachedCalloutLinesGeoJSON = {
+        type: 'FeatureCollection',
+        features
+    };
+    if (!map) return;
+    try {
+        ensureCustomRouteSourcesAndLayers();
+        const src = map.getSource('callout-lines-source');
+        if (src && typeof src.setData === 'function') {
+            src.setData(cachedCalloutLinesGeoJSON);
+        }
+    } catch (e) {}
+}
+
+// 渲染路線的所有「📌 引線備忘框」（editable = true 為編輯模式可自由拖移/縮放/編輯/刪除；editable = false 為導航/重播/預覽唯讀鎖定模式）
+function renderRouteCallouts(route, editable = false, autoFocusCalloutId = null) {
+    if (!route) {
+        updateCalloutLeaderLines(null);
+        return;
+    }
+    if (!Array.isArray(route.callouts)) {
+        route.callouts = [];
+    }
+    updateCalloutLeaderLines(route);
+
+    route.callouts.forEach((callout, cIdx) => {
+        if (
+            !callout ||
+            !Array.isArray(callout.anchorLngLat) || callout.anchorLngLat.length < 2 ||
+            !Array.isArray(callout.boxLngLat) || callout.boxLngLat.length < 2
+        ) {
+            return;
+        }
+
+        const theme = getCalloutThemeConfig(callout.style);
+        const boxW = Math.min(Math.max(Number(callout.width) || 156, 105), 340);
+        const boxH = Math.min(Math.max(Number(callout.height) || 84, 52), 260);
+        callout.width = boxW;
+        callout.height = boxH;
+        callout.style = theme.id;
+
+        // 1. 錨點圓點 Marker（外層 .callout-anchor-marker 禁止設 transform）
+        const anchorWrapEl = document.createElement('div');
+        anchorWrapEl.className = 'callout-anchor-marker';
+        const anchorDotEl = document.createElement('div');
+        anchorDotEl.className = `callout-anchor-dot theme-${theme.id} ${editable ? 'is-editable' : ''}`;
+        anchorDotEl.title = editable ? '按住可拖曳調整引線錨點位置' : '';
+        anchorWrapEl.appendChild(anchorDotEl);
+
+        const anchorMarker = new maplibregl.Marker({
+            element: anchorWrapEl,
+            anchor: 'center',
+            draggable: Boolean(editable),
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
+            .setLngLat([Number(callout.anchorLngLat[0]), Number(callout.anchorLngLat[1])])
+            .addTo(map);
+
+        if (editable) {
+            anchorWrapEl.addEventListener('click', (ev) => ev.stopPropagation());
+            anchorMarker.on('dragstart', () => {
+                pushEditUndoSnapshot(route);
+            });
+            anchorMarker.on('drag', () => {
+                const pos = anchorMarker.getLngLat();
+                callout.anchorLngLat = [Number(pos.lng.toFixed(6)), Number(pos.lat.toFixed(6))];
+                updateCalloutLeaderLines(route);
+            });
+            anchorMarker.on('dragend', () => {
+                const pos = anchorMarker.getLngLat();
+                callout.anchorLngLat = [Number(pos.lng.toFixed(6)), Number(pos.lat.toFixed(6))];
+                updateCalloutLeaderLines(route);
+            });
+        }
+        domMarkers.push(anchorMarker);
+
+        // 2. 文字框本體 Marker（外層 .callout-box-marker 禁止設 transform）
+        const boxMarkerEl = document.createElement('div');
+        boxMarkerEl.className = 'callout-box-marker';
+        if (!editable) {
+            // 導航與重播模式下鎖定不可誤觸拖動，同時允許手指直接在上方滑動地圖
+            boxMarkerEl.style.pointerEvents = 'none';
+        }
+
+        const cardEl = document.createElement('div');
+        cardEl.className = `callout-box-card theme-${theme.id}`;
+        cardEl.style.width = `${boxW}px`;
+        cardEl.style.height = `${boxH}px`;
+
+        if (editable) {
+            boxMarkerEl.addEventListener('click', (ev) => ev.stopPropagation());
+
+            // 頂部拖曳與樣式工具列（✥ 引線備忘）
+            const headerEl = document.createElement('div');
+            headerEl.className = 'callout-box-header';
+            headerEl.title = '按住此處（或外框邊緣）拖曳移動文字框位置';
+
+            const dragLabel = document.createElement('span');
+            dragLabel.className = 'flex items-center gap-1 truncate select-none';
+            dragLabel.innerHTML = '<span class="text-xs leading-none">✥</span><span>引線備忘</span>';
+
+            const btnGroup = document.createElement('div');
+            btnGroup.className = 'flex items-center gap-1 flex-shrink-0';
+
+            // 樣式切換按鈕（黃底黑字 ➔ 紅框白底 ➔ 藍框白底）
+            const styleBtn = document.createElement('button');
+            styleBtn.type = 'button';
+            styleBtn.className = 'px-1.5 py-0.5 rounded bg-black/10 hover:bg-black/20 text-[10px] font-black leading-none active:scale-90 transition-transform';
+            styleBtn.textContent = theme.label;
+            styleBtn.title = '切換框線與底色樣式（黃底黑字／紅框白底／藍框白底）';
+            ['pointerdown', 'mousedown', 'touchstart'].forEach(evtName => {
+                styleBtn.addEventListener(evtName, (ev) => ev.stopPropagation(), { passive: true });
+            });
+            styleBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                pushEditUndoSnapshot(route);
+                const curIdx = CALLOUT_STYLE_THEMES.findIndex(t => t.id === callout.style);
+                const nextTheme = CALLOUT_STYLE_THEMES[(curIdx + 1) % CALLOUT_STYLE_THEMES.length];
+                callout.style = nextTheme.id;
+                cardEl.className = `callout-box-card theme-${nextTheme.id}`;
+                anchorDotEl.className = `callout-anchor-dot theme-${nextTheme.id} is-editable`;
+                styleBtn.textContent = nextTheme.label;
+                updateCalloutLeaderLines(route);
+            });
+
+            // 右上角刪除按鈕
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'w-4 h-4 rounded-full bg-red-600 hover:bg-red-700 text-white text-[10px] font-black flex items-center justify-center leading-none active:scale-90';
+            delBtn.innerHTML = '✕';
+            delBtn.title = '刪除此引線備忘框';
+            ['pointerdown', 'mousedown', 'touchstart'].forEach(evtName => {
+                delBtn.addEventListener(evtName, (ev) => ev.stopPropagation(), { passive: true });
+            });
+            delBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                pushEditUndoSnapshot(route);
+                route.callouts.splice(cIdx, 1);
+                vibrate(25);
+                renderEditableRouteMarkers(route);
+                const promptEl = document.getElementById('editPromptText');
+                if (promptEl && editSubMode === 'callout') {
+                    promptEl.innerText = '🗑️ 已刪除引線備忘框！可繼續點擊目標地點新增，或按「↩️ 上一步」復原';
+                }
+            });
+
+            btnGroup.appendChild(styleBtn);
+            btnGroup.appendChild(delBtn);
+            headerEl.appendChild(dragLabel);
+            headerEl.appendChild(btnGroup);
+            cardEl.appendChild(headerEl);
+
+            // 多行文字輸入框（解除事件攔截：pointer-events: auto、user-select: text，明確 stopPropagation + focus，絕不呼叫 preventDefault）
+            const textareaEl = document.createElement('textarea');
+            textareaEl.className = 'callout-box-textarea';
+            textareaEl.style.pointerEvents = 'auto';
+            textareaEl.style.userSelect = 'text';
+            textareaEl.style.webkitUserSelect = 'text';
+            textareaEl.placeholder = '輸入多行備忘細節...\n(如：巷窄倒車進入)';
+            textareaEl.value = callout.text || '';
+
+            let hasRecordedTextUndo = false;
+            const syncTextareaValue = () => {
+                if (!hasRecordedTextUndo) {
+                    pushEditUndoSnapshot(route);
+                    hasRecordedTextUndo = true;
+                }
+                callout.text = textareaEl.value;
+            };
+
+            textareaEl.oninput = syncTextareaValue;
+            textareaEl.onchange = syncTextareaValue;
+            textareaEl.addEventListener('input', syncTextareaValue);
+            textareaEl.addEventListener('change', syncTextareaValue);
+
+            textareaEl.addEventListener('focus', () => {
+                hasRecordedTextUndo = false;
+                boxMarkerEl.classList.add('is-editing-active');
+            });
+            textareaEl.addEventListener('blur', () => {
+                callout.text = textareaEl.value;
+                boxMarkerEl.classList.remove('is-editing-active');
+            });
+
+            // 點擊或觸控 <textarea> 時明確執行 e.stopPropagation() 與 textareaEl.focus()，絕不呼叫 e.preventDefault()
+            const handleTextareaActivate = (ev) => {
+                ev.stopPropagation();
+                if (document.activeElement !== textareaEl) {
+                    try { textareaEl.focus(); } catch (err) {}
+                }
+            };
+            textareaEl.addEventListener('pointerdown', handleTextareaActivate);
+            textareaEl.addEventListener('mousedown', handleTextareaActivate);
+            textareaEl.addEventListener('touchstart', handleTextareaActivate, { passive: true });
+            textareaEl.addEventListener('click', handleTextareaActivate);
+            textareaEl.addEventListener('dblclick', (ev) => ev.stopPropagation());
+            textareaEl.addEventListener('keydown', (ev) => ev.stopPropagation());
+            cardEl.appendChild(textareaEl);
+
+            // 右下角自由縮放手把 (Resize Handle)
+            const resizeHandleEl = document.createElement('div');
+            resizeHandleEl.className = 'callout-resize-handle';
+            resizeHandleEl.title = '按住右下角拖曳調整文字框寬度與高度';
+            cardEl.appendChild(resizeHandleEl);
+
+            boxMarkerEl.appendChild(cardEl);
+
+            const boxMarker = new maplibregl.Marker({
+                element: boxMarkerEl,
+                anchor: 'center',
+                draggable: false,
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            })
+                .setLngLat([Number(callout.boxLngLat[0]), Number(callout.boxLngLat[1])])
+                .addTo(map);
+
+            // --- 限制拖曳觸發區域：僅當按住頂部標題列（✥ 引線備忘）或外框邊緣 (cardEl border) 時才觸發拖曳移動文字框；點擊中間 <textarea> 一律為純文字輸入與選取模式 ---
+            const startBoxDrag = (ev) => {
+                if (ev.button !== undefined && ev.button !== 0) return;
+                const target = ev.target;
+                // 若點擊在 <textarea>、按鈕或右下角縮放手把上，一律不觸發拖曳
+                if (
+                    !target ||
+                    target === textareaEl ||
+                    textareaEl.contains(target) ||
+                    target === resizeHandleEl ||
+                    resizeHandleEl.contains(target) ||
+                    (target.closest && target.closest('textarea, button, .callout-resize-handle'))
+                ) {
+                    return;
+                }
+                // 僅允許頂部標題列 (headerEl) 或外框邊緣 (target === cardEl) 觸發拖曳
+                const isHeaderOrBorder = (target === cardEl || target === headerEl || headerEl.contains(target));
+                if (!isHeaderOrBorder) return;
+
+                ev.stopPropagation();
+                ev.preventDefault();
+                pushEditUndoSnapshot(route);
+                boxMarkerEl.classList.add('is-editing-active');
+                try { map.dragPan.disable(); } catch (err) {}
+
+                const startClientX = ev.clientX;
+                const startClientY = ev.clientY;
+                const startScreenPt = map.project([Number(callout.boxLngLat[0]), Number(callout.boxLngLat[1])]);
+
+                const onPointerMove = (moveEv) => {
+                    const dx = moveEv.clientX - startClientX;
+                    const dy = moveEv.clientY - startClientY;
+                    const nextLngLat = map.unproject([startScreenPt.x + dx, startScreenPt.y + dy]);
+                    callout.boxLngLat = [
+                        Number(nextLngLat.lng.toFixed(6)),
+                        Number(nextLngLat.lat.toFixed(6))
+                    ];
+                    boxMarker.setLngLat(callout.boxLngLat);
+                    updateCalloutLeaderLines(route);
+                };
+
+                const onPointerUp = () => {
+                    window.removeEventListener('pointermove', onPointerMove);
+                    window.removeEventListener('pointerup', onPointerUp);
+                    window.removeEventListener('pointercancel', onPointerUp);
+                    boxMarkerEl.classList.remove('is-editing-active');
+                    try { map.dragPan.enable(); } catch (err) {}
+                    ensureEditorMapZoomEnabled();
+                };
+
+                window.addEventListener('pointermove', onPointerMove);
+                window.addEventListener('pointerup', onPointerUp);
+                window.addEventListener('pointercancel', onPointerUp);
+            };
+
+            cardEl.addEventListener('pointerdown', startBoxDrag);
+
+            // --- 拖曳右下角縮放手把 (Resize Handle) 自由調整文字框 width 與 height ---
+            resizeHandleEl.addEventListener('pointerdown', (ev) => {
+                if (ev.button !== undefined && ev.button !== 0) return;
+                ev.stopPropagation();
+                ev.preventDefault();
+                pushEditUndoSnapshot(route);
+                boxMarkerEl.classList.add('is-editing-active');
+                try { map.dragPan.disable(); } catch (err) {}
+
+                const startX = ev.clientX;
+                const startY = ev.clientY;
+                const startW = Number(callout.width) || 156;
+                const startH = Number(callout.height) || 84;
+
+                const onResizeMove = (moveEv) => {
+                    const nextW = Math.round(Math.min(Math.max(startW + (moveEv.clientX - startX), 105), 340));
+                    const nextH = Math.round(Math.min(Math.max(startH + (moveEv.clientY - startY), 52), 260));
+                    callout.width = nextW;
+                    callout.height = nextH;
+                    cardEl.style.width = `${nextW}px`;
+                    cardEl.style.height = `${nextH}px`;
+                };
+
+                const onResizeUp = () => {
+                    window.removeEventListener('pointermove', onResizeMove);
+                    window.removeEventListener('pointerup', onResizeUp);
+                    window.removeEventListener('pointercancel', onResizeUp);
+                    boxMarkerEl.classList.remove('is-editing-active');
+                    try { map.dragPan.enable(); } catch (err) {}
+                    ensureEditorMapZoomEnabled();
+                };
+
+                window.addEventListener('pointermove', onResizeMove);
+                window.addEventListener('pointerup', onResizeUp);
+                window.addEventListener('pointercancel', onResizeUp);
+            });
+
+            domMarkers.push(boxMarker);
+
+            if (autoFocusCalloutId && callout.id === autoFocusCalloutId) {
+                setTimeout(() => {
+                    try { textareaEl.focus(); } catch (e) {}
+                }, 60);
+            }
+        } else {
+            // 導航／重播／預覽唯讀模式（鎖定不可誤觸拖動或縮放）
+            const textDiv = document.createElement('div');
+            textDiv.className = 'callout-box-readonly-text';
+            textDiv.textContent = (callout.text && callout.text.trim()) ? callout.text : '📌 備忘提醒';
+            cardEl.appendChild(textDiv);
+            boxMarkerEl.appendChild(cardEl);
+
+            const boxMarker = new maplibregl.Marker({
+                element: boxMarkerEl,
+                anchor: 'center',
+                draggable: false,
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            })
+                .setLngLat([Number(callout.boxLngLat[0]), Number(callout.boxLngLat[1])])
+                .addTo(map);
+            domMarkers.push(boxMarker);
+        }
+    });
+}
 
 // 🔍 管理員待審路線「審核預覽／直接微調」專用暫存狀態（不寫入本機 savedRoutes，微調後可直接一鍵核准發布正式版）
 let isReviewingPendingMode = false;
@@ -2521,6 +2977,7 @@ let freehandDraftCoords = [];
 const modeMarkerBtn = document.getElementById('modeMarkerBtn');
 const modePathBtn = document.getElementById('modePathBtn');
 const modeFreehandBtn = document.getElementById('modeFreehandBtn');
+const modeCalloutBtn = document.getElementById('modeCalloutBtn');
 const btnUndoFreehand = document.getElementById('btnUndoFreehand');
 const undoStepCountBadge = document.getElementById('undoStepCountBadge');
 const editorLiveDistText = document.getElementById('editorLiveDistText');
@@ -2612,6 +3069,7 @@ function pushEditUndoSnapshot(route) {
     freehandUndoStack.push({
         points: JSON.parse(JSON.stringify(route.points)),
         events: JSON.parse(JSON.stringify(route.events || [])),
+        callouts: JSON.parse(JSON.stringify(route.callouts || [])),
         selectedEditNodeIdx,
         freehandSpliceStartIdx
     });
@@ -3334,19 +3792,23 @@ function setEditSubMode(mode) {
     ensureEditorMapZoomEnabled();
     try { map.dragPan.enable(); } catch (e) {}
 
-    const inactiveClass = "text-gray-600 hover:bg-white/70 font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
+    const inactiveClass = "text-gray-600 hover:bg-white/70 font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
     if (modePathBtn) modePathBtn.className = (mode === 'path')
-        ? "bg-emerald-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-emerald-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeFreehandBtn) modeFreehandBtn.className = (mode === 'freehand')
-        ? "bg-orange-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-orange-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeMarkerBtn) modeMarkerBtn.className = (mode === 'marker')
-        ? "bg-blue-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-blue-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+    if (modeCalloutBtn) modeCalloutBtn.className = (mode === 'callout')
+        ? "bg-rose-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
 
     const promptEl = document.getElementById('editPromptText');
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    clearPendingCalloutAnchor();
     editStep = 0;
     cancelActiveFreehandStroke(true);
 
@@ -3375,6 +3837,14 @@ function setEditSubMode(mode) {
             promptEl.className = "bg-blue-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
             promptEl.innerText = "📍 請點擊地圖軌跡，選擇音樂開關區段『起點 (A點)』或新增語音提醒/站牌";
         }
+    } else if (mode === 'callout') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        clearPathEditMarkers();
+        if (promptEl) {
+            promptEl.className = "bg-rose-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "📌 請先點擊地圖上的目標地點（錨點），再點擊旁邊空位放置文字框";
+        }
     }
     updateUndoFreehandBtnUI();
     if (route) updateEditorLiveStatsUI(route);
@@ -3383,6 +3853,7 @@ function setEditSubMode(mode) {
 if (modeMarkerBtn) modeMarkerBtn.onclick = () => setEditSubMode('marker');
 if (modePathBtn) modePathBtn.onclick = () => setEditSubMode('path');
 if (modeFreehandBtn) modeFreehandBtn.onclick = () => setEditSubMode('freehand');
+if (modeCalloutBtn) modeCalloutBtn.onclick = () => setEditSubMode('callout');
 
 if (btnUndoFreehand) {
     btnUndoFreehand.onclick = () => {
@@ -3392,6 +3863,8 @@ if (btnUndoFreehand) {
         const prevState = freehandUndoStack.pop();
         route.points = prevState.points;
         route.events = prevState.events;
+        route.callouts = Array.isArray(prevState.callouts) ? prevState.callouts : [];
+        clearPendingCalloutAnchor();
         selectedEditNodeIdx = (prevState.selectedEditNodeIdx !== undefined && prevState.selectedEditNodeIdx < route.points.length)
             ? prevState.selectedEditNodeIdx
             : -1;
@@ -3426,7 +3899,7 @@ if (btnUndoFreehand) {
         ensureEditorMapZoomEnabled();
 
         const targetEl = rawEvent?.target;
-        if (targetEl && targetEl.closest && targetEl.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker')) {
+        if (targetEl && targetEl.closest && targetEl.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .callout-box-marker, .callout-anchor-marker')) {
             return;
         }
 
@@ -3701,8 +4174,10 @@ document.getElementById('editRouteBtn').onclick = () => {
     freehandUndoStack = [];
     freehandSpliceStartIdx = -1;
     freehandDraftCoords = [];
+    if (!Array.isArray(route.callouts)) route.callouts = [];
     originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
     originalPointsBackup = JSON.parse(JSON.stringify(route.points || [])); 
+    originalCalloutsBackup = JSON.parse(JSON.stringify(route.callouts || []));
 
     document.getElementById('routeDetailUI').classList.add('hidden');
     document.getElementById('editRouteBar').classList.remove('hidden');
@@ -3713,7 +4188,7 @@ document.getElementById('editRouteBtn').onclick = () => {
     renderEditableRouteMarkers(route);
 };
 
-function renderEditableRouteMarkers(route) {
+function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
     clearDomMarkers();
     const pts = route.points;
     if (!pts || pts.length === 0) return;
@@ -3809,6 +4284,8 @@ function renderEditableRouteMarkers(route) {
             domMarkers.push(m);
         }
     });
+
+    renderRouteCallouts(route, true, autoFocusCalloutId);
 }
 
 // ==========================================
@@ -4262,7 +4739,7 @@ async function handleManualDrawMapClick(e) {
 
 map.on('click', (e) => {
     const origTarget = e.originalEvent?.target;
-    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker')) {
         return;
     }
     // 點擊地圖空白處自動收合已展開的警示氣泡卡片
@@ -4278,11 +4755,84 @@ map.on('click', (e) => {
     const route = getActiveWorkingRoute();
     if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
 
-    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker')) {
         return;
     }
 
-    if (editSubMode === 'marker') {
+    if (editSubMode === 'callout') {
+        const clickLng = Number(e.lngLat.lng.toFixed(6));
+        const clickLat = Number(e.lngLat.lat.toFixed(6));
+        const promptEl = document.getElementById('editPromptText');
+
+        // 第一步（錨點）：點擊路線或路口設定 anchorLngLat（若點擊處距離路線節點 < 18m 則自動貼齊路線節點）
+        if (!pendingCalloutAnchorLngLat) {
+            let anchorLng = clickLng;
+            let anchorLat = clickLat;
+            let minSnapM = Infinity;
+            let bestPt = null;
+            for (let i = 0; i < route.points.length; i++) {
+                const dM = getDistanceKm(clickLng, clickLat, route.points[i].lng, route.points[i].lat) * 1000;
+                if (dM < minSnapM) {
+                    minSnapM = dM;
+                    bestPt = route.points[i];
+                }
+            }
+            if (bestPt && minSnapM <= 18) {
+                anchorLng = Number(bestPt.lng.toFixed(6));
+                anchorLat = Number(bestPt.lat.toFixed(6));
+            }
+
+            clearPendingCalloutAnchor();
+            pendingCalloutAnchorLngLat = [anchorLng, anchorLat];
+
+            const wrapEl = document.createElement('div');
+            wrapEl.className = 'callout-anchor-marker';
+            const dotEl = document.createElement('div');
+            dotEl.className = 'callout-anchor-dot is-pending';
+            wrapEl.appendChild(dotEl);
+
+            pendingCalloutAnchorMarker = new maplibregl.Marker({
+                element: wrapEl,
+                anchor: 'center',
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            })
+                .setLngLat(pendingCalloutAnchorLngLat)
+                .addTo(map);
+
+            vibrate(25);
+            if (promptEl) {
+                promptEl.innerText = "📌 已設定錨點！現在請點擊旁邊空曠處放置備忘文字框";
+            }
+            return;
+        }
+
+        // 第二步（拉線與文字框）：點擊旁邊空曠處設定 boxLngLat，自動繪製高對比引線並建立可編輯文字框
+        const anchorCoords = [...pendingCalloutAnchorLngLat];
+        clearPendingCalloutAnchor();
+
+        pushEditUndoSnapshot(route);
+        if (!Array.isArray(route.callouts)) {
+            route.callouts = [];
+        }
+        const newCalloutId = 'callout_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        route.callouts.push({
+            id: newCalloutId,
+            anchorLngLat: anchorCoords,
+            boxLngLat: [clickLng, clickLat],
+            text: '',
+            width: 162,
+            height: 88,
+            style: 'yellow-black'
+        });
+
+        vibrate([30, 20, 30]);
+        renderEditableRouteMarkers(route, newCalloutId);
+        if (promptEl) {
+            promptEl.innerText = "✅ 已放置引線備忘框！可直接輸入多行文字、按住標題列拖移或拉右下角調整大小（點地圖可新增下一個）";
+        }
+        return;
+    } else if (editSubMode === 'marker') {
         let minDist = Infinity, closestIdx = -1;
         route.points.forEach((p, idx) => {
             let d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
@@ -4438,6 +4988,7 @@ document.getElementById('saveEditBtn').onclick = () => {
     isEditingMode = false;
     selectedEditNodeIdx = -1;
     clearPathEditMarkers();
+    clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
     updateUndoFreehandBtnUI();
@@ -4449,6 +5000,9 @@ document.getElementById('saveEditBtn').onclick = () => {
 
     const editedRoute = savedRoutes[selectedRouteIdx];
     if (editedRoute && Array.isArray(editedRoute.points) && editedRoute.points.length >= 2) {
+        if (!Array.isArray(editedRoute.callouts)) {
+            editedRoute.callouts = [];
+        }
         // 自動重新計算總距離 (km) 與各語音標記點的對應路徑索引
         syncRouteMarkersAndIndicesAfterSpline(editedRoute, null, true);
 
@@ -4478,6 +5032,7 @@ document.getElementById('cancelEditBtn').onclick = () => {
     isEditingMode = false;
     selectedEditNodeIdx = -1;
     clearPathEditMarkers();
+    clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
     updateUndoFreehandBtnUI();
@@ -4489,6 +5044,7 @@ document.getElementById('cancelEditBtn').onclick = () => {
     
     savedRoutes[selectedRouteIdx].events = originalEventsBackup;
     savedRoutes[selectedRouteIdx].points = originalPointsBackup;
+    savedRoutes[selectedRouteIdx].callouts = originalCalloutsBackup;
     syncRouteMarkersAndIndicesAfterSpline(savedRoutes[selectedRouteIdx]);
     
     document.getElementById('topBackBtn').classList.remove('hidden');
@@ -6366,7 +6922,8 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             uploadAction: uploadAction,
             targetFirebaseKey: conflictRoute ? conflictRoute.firebaseKey : null,
             points: r.points || [],
-            events: r.events || []
+            events: r.events || [],
+            callouts: Array.isArray(r.callouts) ? r.callouts : []
         };
 
         if (publishDirectlyAsAdmin) {
@@ -6595,7 +7152,8 @@ function previewPendingRoute(pendingIdx) {
         distance: pr.distance || '0.00',
         timeStr: pr.timeStr || '0m 0s',
         points: JSON.parse(JSON.stringify(pr.points || [])),
-        events: JSON.parse(JSON.stringify(pr.events || []))
+        events: JSON.parse(JSON.stringify(pr.events || [])),
+        callouts: JSON.parse(JSON.stringify(pr.callouts || []))
     };
 
     // 確保距離、方位角與標記索引同步
@@ -6617,6 +7175,7 @@ function previewPendingRoute(pendingIdx) {
     freehandDraftCoords = [];
     originalEventsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.events || []));
     originalPointsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.points || []));
+    originalCalloutsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.callouts || []));
 
     // 切換編輯面板為「待審微調審核模式」專屬 UI
     if (pendingReviewBanner) pendingReviewBanner.classList.remove('hidden');
@@ -6657,6 +7216,7 @@ function exitPendingReviewMode(reopenCloudPendingModal = true) {
     selectedEditNodeIdx = -1;
 
     clearPathEditMarkers();
+    clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
     updateUndoFreehandBtnUI();
@@ -7027,7 +7587,8 @@ function cloneCloudRouteForLocal(cr, existingLocal = null) {
         distance: cr.distance || existingLocal?.distance || '0.00',
         timeStr: cr.timeStr || existingLocal?.timeStr || '0m 0s',
         points: JSON.parse(JSON.stringify(cr.points || [])),
-        events: JSON.parse(JSON.stringify(cr.events || []))
+        events: JSON.parse(JSON.stringify(cr.events || [])),
+        callouts: JSON.parse(JSON.stringify(cr.callouts || []))
     };
 }
 

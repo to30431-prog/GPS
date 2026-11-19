@@ -304,3 +304,188 @@ input[type=range]::-webkit-slider-runnable-track {
     flex-shrink: 0;
     animation: voiceDotPulse 1.2s infinite ease-in-out;
 }
+
+/* 📌 引線備忘框（Callout Annotation）：
+   1. 最外層 .callout-anchor-marker 與 .callout-box-marker 為傳給 MapLibre Marker 的容器（anchor: 'center'），
+      嚴禁在外層設定任何 CSS transform 或負 margin，避免覆寫 MapLibre translate3d 經緯度定位！
+   2. 內層 .callout-box-card 支援黃底黑字／紅框白底／藍框白底三種高對比樣式，編輯模式下支援直接拖移與右下角縮放手把調整寬高。 */
+.callout-anchor-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 28;
+    pointer-events: auto;
+}
+.callout-anchor-dot {
+    width: 15px;
+    height: 15px;
+    border-radius: 999px;
+    border: 3px solid #ffffff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    transition: transform 0.15s ease-out;
+}
+.callout-anchor-dot.theme-yellow-black {
+    background: #d97706;
+}
+.callout-anchor-dot.theme-red-white {
+    background: #dc2626;
+}
+.callout-anchor-dot.theme-blue-white {
+    background: #2563eb;
+}
+.callout-anchor-dot.is-editable {
+    cursor: grab;
+    width: 18px;
+    height: 18px;
+}
+.callout-anchor-dot.is-editable:active {
+    cursor: grabbing;
+    transform: scale(1.2);
+}
+.callout-anchor-dot.is-pending {
+    width: 20px;
+    height: 20px;
+    background: #e11d48;
+    animation: voiceDotPulse 1s infinite ease-in-out;
+}
+
+.callout-box-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 32;
+    pointer-events: auto;
+    box-sizing: border-box;
+}
+.callout-box-marker.is-editing-active {
+    z-index: 45;
+}
+.callout-box-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    box-sizing: border-box;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grab;
+}
+.callout-box-card:active {
+    cursor: grabbing;
+}
+.callout-box-card.theme-yellow-black {
+    background: #fef08a;
+    color: #111827;
+    border: 2.5px solid #b45309;
+}
+.callout-box-card.theme-red-white {
+    background: #ffffff;
+    color: #991b1b;
+    border: 2.5px solid #dc2626;
+}
+.callout-box-card.theme-blue-white {
+    background: #ffffff;
+    color: #1e3a8a;
+    border: 2.5px solid #2563eb;
+}
+
+.callout-box-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 3px 6px;
+    font-size: 10px;
+    font-weight: 900;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+    cursor: grab;
+    touch-action: none;
+    flex-shrink: 0;
+}
+.callout-box-header:active {
+    cursor: grabbing;
+}
+.theme-yellow-black .callout-box-header {
+    background: rgba(217, 119, 6, 0.18);
+    color: #78350f;
+}
+.theme-red-white .callout-box-header {
+    background: #fef2f2;
+    color: #991b1b;
+}
+.theme-blue-white .callout-box-header {
+    background: #eff6ff;
+    color: #1e3a8a;
+}
+
+.callout-box-textarea {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 36px;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+    padding: 5px 8px 12px 8px;
+    box-sizing: border-box;
+    font-family: inherit;
+    pointer-events: auto !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    touch-action: auto !important;
+    cursor: text !important;
+}
+.callout-box-textarea::placeholder {
+    color: rgba(0, 0, 0, 0.42);
+    font-weight: 700;
+}
+
+.callout-box-readonly-text {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    padding: 6px 8px;
+    box-sizing: border-box;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    overflow-y: auto;
+}
+
+.callout-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 18px;
+    height: 18px;
+    cursor: nwse-resize;
+    touch-action: none;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    padding: 2px;
+    box-sizing: border-box;
+    z-index: 5;
+    border-top-left-radius: 6px;
+    background: rgba(0, 0, 0, 0.12);
+}
+.callout-resize-handle::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-right: 2.5px solid currentColor;
+    border-bottom: 2.5px solid currentColor;
+    opacity: 0.75;
+}
+

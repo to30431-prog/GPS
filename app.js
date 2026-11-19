@@ -554,28 +554,31 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量／圖磚旋轉地圖（支援 6 種免費免 Key 圖層隨時切換、localStorage 記憶偏好，並強制所有文字永遠與螢幕水平直立 viewport） ---
+// --- 1. 初始化 MapLibre GL 向量／圖磚旋轉地圖（預設採用 Google 地圖，支援 6 種免費免 Key 圖層隨時切換、localStorage 記憶偏好，向量圖層強制路名永遠水平 viewport） ---
 const MAP_LAYER_STORAGE_KEY = 'selectedMapLayer';
 
-function buildNlscRasterStyle(tileUrl, layerTitle) {
+function buildRasterMapStyle(tileUrl, layerTitle, attributionText = '© Google', maxZoom = 19) {
+    const sourceDef = {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 256,
+        attribution: attributionText
+    };
+    if (typeof maxZoom === 'number') {
+        sourceDef.maxzoom = maxZoom;
+    }
     return {
         version: 8,
         name: layerTitle,
         glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
         sources: {
-            'nlsc-raster-tiles': {
-                type: 'raster',
-                tiles: [tileUrl],
-                tileSize: 256,
-                maxzoom: 19,
-                attribution: '© 內政部國土測繪中心 NLSC'
-            }
+            'custom-raster-tiles': sourceDef
         },
         layers: [
             {
-                id: 'nlsc-raster-base-layer',
+                id: 'custom-raster-base-layer',
                 type: 'raster',
-                source: 'nlsc-raster-tiles',
+                source: 'custom-raster-tiles',
                 minzoom: 0,
                 maxzoom: 22
             }
@@ -585,10 +588,55 @@ function buildNlscRasterStyle(tileUrl, layerTitle) {
 
 const MAP_LAYER_PRESETS = [
     {
+        id: 'google_roadmap',
+        name: 'Google 地圖（預設）',
+        shortName: 'Google 地圖',
+        desc: 'Google 標準街道地圖',
+        icon: '🗺️',
+        isVector: false,
+        pureChineseOverride: false,
+        getStyle: () => buildRasterMapStyle(
+            'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
+            'Google 地圖（預設）',
+            '© Google',
+            20
+        )
+    },
+    {
+        id: 'google_hybrid',
+        name: 'Google 衛星混合',
+        shortName: 'Google 衛星',
+        desc: 'Google 衛星實景＋道路門牌標記',
+        icon: '🛰️',
+        isVector: false,
+        pureChineseOverride: false,
+        getStyle: () => buildRasterMapStyle(
+            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+            'Google 衛星混合',
+            '© Google',
+            20
+        )
+    },
+    {
+        id: 'nlsc_emap',
+        name: '門牌詳細（國土測繪）',
+        shortName: '門牌詳細',
+        desc: '內政部國土測繪通用電子地圖',
+        icon: '🏠',
+        isVector: false,
+        pureChineseOverride: false,
+        getStyle: () => buildRasterMapStyle(
+            'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
+            '門牌詳細（國土測繪）',
+            '© 內政部國土測繪中心 NLSC',
+            19
+        )
+    },
+    {
         id: 'voyager',
-        name: '清爽彩色（推薦）',
-        shortName: '清爽彩色',
-        desc: 'Carto Voyager 清爽彩色向量',
+        name: '清爽向量（路名轉正）',
+        shortName: '清爽向量',
+        desc: 'Carto Voyager 向量（路名永遠水平）',
         icon: '🌤️',
         isVector: true,
         pureChineseOverride: false,
@@ -596,9 +644,9 @@ const MAP_LAYER_PRESETS = [
     },
     {
         id: 'positron',
-        name: '極簡灰白',
+        name: '極簡灰白（路名轉正）',
         shortName: '極簡灰白',
-        desc: 'OpenFreeMap 極簡灰白向量',
+        desc: 'OpenFreeMap 極簡向量（路名永遠水平）',
         icon: '⚪',
         isVector: true,
         pureChineseOverride: true,
@@ -606,49 +654,13 @@ const MAP_LAYER_PRESETS = [
     },
     {
         id: 'liberty',
-        name: '標準立體',
+        name: '標準立體（路名轉正）',
         shortName: '標準立體',
-        desc: 'OpenFreeMap 標準立體向量',
+        desc: 'OpenFreeMap 立體向量（路名永遠水平）',
         icon: '🏙️',
         isVector: true,
         pureChineseOverride: true,
         getStyle: () => 'https://tiles.openfreemap.org/styles/liberty'
-    },
-    {
-        id: 'bright',
-        name: '雙語路牌',
-        shortName: '雙語路牌',
-        desc: 'OpenFreeMap 中英雙語路牌',
-        icon: '🪧',
-        isVector: true,
-        pureChineseOverride: false,
-        getStyle: () => 'https://tiles.openfreemap.org/styles/bright'
-    },
-    {
-        id: 'nlsc_emap',
-        name: '門牌詳細（國土測繪）',
-        shortName: '門牌詳細',
-        desc: '內政部臺灣通用電子地圖',
-        icon: '🏠',
-        isVector: false,
-        pureChineseOverride: false,
-        getStyle: () => buildNlscRasterStyle(
-            'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
-            '門牌詳細（國土測繪）'
-        )
-    },
-    {
-        id: 'nlsc_photo2',
-        name: '衛星實景（國土測繪）',
-        shortName: '衛星實景',
-        desc: '內政部正射影像航照圖',
-        icon: '🛰️',
-        isVector: false,
-        pureChineseOverride: false,
-        getStyle: () => buildNlscRasterStyle(
-            'https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}',
-            '衛星實景（國土測繪）'
-        )
     }
 ];
 
@@ -660,7 +672,7 @@ function getSavedMapLayerPreset() {
             if (found) return found;
         }
     } catch (e) {}
-    return MAP_LAYER_PRESETS[0]; // 預設：清爽彩色（推薦）
+    return MAP_LAYER_PRESETS[0]; // 未設定時一律預設載入 Google 地圖
 }
 
 let currentMapLayerPreset = getSavedMapLayerPreset();

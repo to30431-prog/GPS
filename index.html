@@ -325,6 +325,20 @@
 
         <!-- 統一編輯主卡片 -->
         <div class="bg-white/95 backdrop-blur rounded-3xl p-3 shadow-2xl pointer-events-auto w-full max-w-md flex flex-col gap-2.5 border border-gray-200">
+            <!-- 🔍 管理員待審路線審核模式專屬橫幅（預設隱藏，進入審核預覽／微調時顯示） -->
+            <div id="pendingReviewBanner" class="hidden bg-amber-50 border-2 border-amber-400 rounded-2xl px-3 py-2 flex items-center justify-between gap-2">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="bg-amber-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">🔍 待審微調模式</span>
+                        <span id="pendingReviewRouteTitle" class="text-xs font-black text-amber-950 truncate">路線名稱</span>
+                    </div>
+                    <div id="pendingReviewMetaText" class="text-[11px] font-bold text-amber-800 mt-0.5 truncate">投稿者：隊員 · 可直接微調後一鍵核准發布</div>
+                </div>
+                <button id="btnExitPendingReview" type="button" class="bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 font-extrabold text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 transition-all whitespace-nowrap flex-shrink-0">
+                    ↩️ 返回待審區
+                </button>
+            </div>
+
             <!-- 頂端列：模式切換膠囊 ＋ 醒目 Undo 按鈕 -->
             <div class="flex items-center gap-1.5">
                 <div class="bg-gray-100 p-1 rounded-2xl grid grid-cols-3 gap-1 flex-1 border border-gray-200">
@@ -380,13 +394,23 @@
                 </div>
             </div>
 
-            <!-- 底部儲存與取消按鈕 -->
-            <div class="flex gap-2 pt-0.5">
+            <!-- 底部儲存與取消按鈕（一般本機編輯模式） -->
+            <div id="normalEditActionRow" class="flex gap-2 pt-0.5">
                 <button id="saveEditBtn" type="button" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-extrabold py-2.5 rounded-2xl flex items-center justify-center gap-1.5 shadow-md active:scale-95 text-sm">
                     <i class="fa-solid fa-check"></i> 儲存並自動升版
                 </button>
                 <button id="cancelEditBtn" type="button" class="w-28 bg-gray-500 hover:bg-gray-600 text-white font-extrabold py-2.5 rounded-2xl flex items-center justify-center gap-1.5 shadow-md active:scale-95 text-sm">
                     <i class="fa-solid fa-xmark"></i> 取消
+                </button>
+            </div>
+
+            <!-- 底部審核動作按鈕（管理員審核待審路線模式專用：一鍵核准發布正式版 ＋ 駁回刪除） -->
+            <div id="pendingReviewActionRow" class="hidden flex gap-2 pt-0.5">
+                <button id="btnApproveAndPublishReview" type="button" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2.5 px-3 rounded-2xl flex items-center justify-center gap-1.5 shadow-md active:scale-95 text-xs sm:text-sm whitespace-nowrap">
+                    ✅ 核准並發布正式版
+                </button>
+                <button id="btnRejectAndDeleteReview" type="button" class="bg-red-50 hover:bg-red-100 text-red-600 border-2 border-red-200 font-extrabold py-2.5 px-3.5 rounded-2xl flex items-center justify-center gap-1 shadow-sm active:scale-95 text-xs sm:text-sm whitespace-nowrap">
+                    🗑️ 駁回刪除
                 </button>
             </div>
         </div>

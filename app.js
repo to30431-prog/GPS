@@ -1775,7 +1775,7 @@ function openAlertPopupCard(route, ev, eventIdx, pinEl) {
     activeAlertPopupMarker = new maplibregl.Marker({
         element: wrapper,
         anchor: 'bottom',
-        offset: [0, -18],
+        offset: [0, -40],
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     }).setLngLat([ev.lng, ev.lat]).addTo(map);
@@ -1788,26 +1788,39 @@ function formatCompactAlertShortText(rawNote) {
 }
 
 function createCompactAlertPinMarker(route, ev, eventIdx) {
+    // 外層 markerEl 作為傳給 new maplibregl.Marker({ element: markerEl }) 的根容器，
+    // 嚴禁在外層設定 CSS transform 或負 margin，避免干擾 MapLibre 的 translate3d 經緯度定位！
     const markerEl = document.createElement('div');
     markerEl.className = 'alert-compact-pin';
     markerEl.title = '點擊展開完整警示內容';
 
+    // 內層膠囊（⚠️ ＋ 前 5 字 ＋ 22x22 照片縮圖），點擊與 active 縮放效果皆寫在內層
+    const pillEl = document.createElement('div');
+    pillEl.className = 'alert-compact-pill';
+
     const iconSpan = document.createElement('span');
     iconSpan.className = 'text-xs leading-none flex-shrink-0';
     iconSpan.textContent = '⚠️';
-    markerEl.appendChild(iconSpan);
+    pillEl.appendChild(iconSpan);
 
     const textSpan = document.createElement('span');
     textSpan.textContent = formatCompactAlertShortText(ev.note);
-    markerEl.appendChild(textSpan);
+    pillEl.appendChild(textSpan);
 
     if (ev.photo) {
         const thumbImg = document.createElement('img');
         thumbImg.src = ev.photo;
         thumbImg.alt = '縮圖';
         thumbImg.className = 'alert-compact-thumb';
-        markerEl.appendChild(thumbImg);
+        pillEl.appendChild(thumbImg);
     }
+
+    // 正下方小橘色倒三角形指標，讓指標尖端精準對齊綠色路線上的觸發點 [ev.lng, ev.lat]
+    const arrowEl = document.createElement('div');
+    arrowEl.className = 'alert-compact-arrow';
+
+    markerEl.appendChild(pillEl);
+    markerEl.appendChild(arrowEl);
 
     markerEl.onclick = (e) => {
         e.stopPropagation();
@@ -1815,6 +1828,8 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
     };
     const m = new maplibregl.Marker({
         element: markerEl,
+        anchor: 'bottom',
+        offset: [0, -6],
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     }).setLngLat([ev.lng, ev.lat]).addTo(map);
@@ -1831,10 +1846,13 @@ function clearDomMarkers() {
 }
 
 function addPinMarker(lngLat, htmlContent) {
+    // 使用乾淨無 transform 的外層 el 傳給 MapLibre Marker，避免內層 .pin-s / .pin-e 的 rotate(-45deg) 與 MapLibre translate3d 衝突
     const el = document.createElement('div');
+    el.className = 'pin-se-wrapper';
     el.innerHTML = htmlContent;
     const m = new maplibregl.Marker({
-        element: el.firstElementChild,
+        element: el,
+        anchor: 'center',
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     }).setLngLat(lngLat).addTo(map);
@@ -2308,6 +2326,19 @@ let editStep = 0, editStartIndex = -1, tempMarkerA = null;
 let editSubMode = 'path', pathEditMarkers = [];
 let selectedEditNodeIdx = -1;
 
+// 🔍 管理員待審路線「審核預覽／直接微調」專用暫存狀態（不寫入本機 savedRoutes，微調後可直接一鍵核准發布正式版）
+let isReviewingPendingMode = false;
+let reviewingPendingId = null;
+let targetRouteId = null;
+let reviewingPendingRoute = null;
+
+function getActiveWorkingRoute() {
+    if (isReviewingPendingMode && reviewingPendingRoute) {
+        return reviewingPendingRoute;
+    }
+    return savedRoutes[selectedRouteIdx];
+}
+
 // ✍️ 手繪延伸／剪接狀態變數與 10 步復原堆疊
 const MAX_EDIT_UNDO_STEPS = 10;
 let freehandUndoStack = [];
@@ -2334,6 +2365,14 @@ const btnEditorZoomIn = document.getElementById('btnEditorZoomIn');
 const btnEditorZoomOut = document.getElementById('btnEditorZoomOut');
 const btnManualZoomIn = document.getElementById('btnManualZoomIn');
 const btnManualZoomOut = document.getElementById('btnManualZoomOut');
+const pendingReviewBanner = document.getElementById('pendingReviewBanner');
+const pendingReviewRouteTitle = document.getElementById('pendingReviewRouteTitle');
+const pendingReviewMetaText = document.getElementById('pendingReviewMetaText');
+const btnExitPendingReview = document.getElementById('btnExitPendingReview');
+const normalEditActionRow = document.getElementById('normalEditActionRow');
+const pendingReviewActionRow = document.getElementById('pendingReviewActionRow');
+const btnApproveAndPublishReview = document.getElementById('btnApproveAndPublishReview');
+const btnRejectAndDeleteReview = document.getElementById('btnRejectAndDeleteReview');
 
 function ensureEditorMapZoomEnabled() {
     try { map.touchZoomRotate.enable(); } catch (e) {}
@@ -2463,7 +2502,7 @@ function updateNodeTrimPanelUI(route) {
 if (btnCloseNodeTrimPanel) {
     btnCloseNodeTrimPanel.onclick = () => {
         selectedEditNodeIdx = -1;
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         updateNodeTrimPanelUI(route);
         if (route) renderPathEditNodes(route);
     };
@@ -2697,6 +2736,7 @@ function renderPathEditNodes(route) {
 
         const midMarker = new maplibregl.Marker({
             element: midEl,
+            anchor: 'center',
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         })
@@ -2728,6 +2768,7 @@ function renderPathEditNodes(route) {
 
         const m = new maplibregl.Marker({
             element: el,
+            anchor: 'center',
             draggable: true,
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
@@ -2823,7 +2864,7 @@ function renderFreehandSpliceNodes(route) {
         } else if (isHead || isTail) {
             el.className = 'w-5 h-5 bg-amber-400 border-[4px] border-orange-700 rounded-full shadow-lg cursor-pointer z-20';
         } else {
-            el.className = 'w-4 h-4 bg-white border-[4px] border-orange-500 hover:scale-125 rounded-full shadow cursor-pointer z-20 transition-transform';
+            el.className = 'w-4 h-4 bg-white border-[4px] border-orange-500 hover:border-amber-400 rounded-full shadow cursor-pointer z-20';
         }
         el.title = isSpliceStart
             ? `剪接/延伸起點 #${ptIdx + 1}（請畫線或點選地圖加點，再點擊另一舊節點完成剪接）`
@@ -2836,6 +2877,7 @@ function renderFreehandSpliceNodes(route) {
 
         const m = new maplibregl.Marker({
             element: el,
+            anchor: 'center',
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         })
@@ -2997,7 +3039,7 @@ function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
 // ==========================================
 if (btnDeleteSingleNode) {
     btnDeleteSingleNode.onclick = () => {
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         if (!isEditingMode || !route || !Array.isArray(route.points)) return;
         const pts = route.points;
         if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
@@ -3045,7 +3087,7 @@ if (btnDeleteSingleNode) {
 
 if (btnTrimBeforeNode) {
     btnTrimBeforeNode.onclick = () => {
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         if (!isEditingMode || !route || !Array.isArray(route.points)) return;
         const pts = route.points;
         if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
@@ -3082,7 +3124,7 @@ if (btnTrimBeforeNode) {
 
 if (btnTrimAfterNode) {
     btnTrimAfterNode.onclick = () => {
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         if (!isEditingMode || !route || !Array.isArray(route.points)) return;
         const pts = route.points;
         if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
@@ -3138,7 +3180,7 @@ function setEditSubMode(mode) {
     editStep = 0;
     cancelActiveFreehandStroke(true);
 
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActiveWorkingRoute();
 
     if (mode === 'path') {
         if (promptEl) {
@@ -3175,7 +3217,7 @@ if (modeFreehandBtn) modeFreehandBtn.onclick = () => setEditSubMode('freehand');
 if (btnUndoFreehand) {
     btnUndoFreehand.onclick = () => {
         if (!isEditingMode || freehandUndoStack.length === 0) return;
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         if (!route) return;
         const prevState = freehandUndoStack.pop();
         route.points = prevState.points;
@@ -3218,7 +3260,7 @@ if (btnUndoFreehand) {
             return;
         }
 
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         if (!route || !Array.isArray(route.points) || route.points.length < 2) return;
 
         const lngLat = getLngLatFromClientXY(clientX, clientY);
@@ -3305,7 +3347,7 @@ if (btnUndoFreehand) {
         try { map.dragPan.enable(); } catch (e) {}
         ensureEditorMapZoomEnabled();
 
-        const route = savedRoutes[selectedRouteIdx];
+        const route = getActiveWorkingRoute();
         const promptEl = document.getElementById('editPromptText');
         if (!route || !Array.isArray(route.points) || route.points.length < 2 || freehandStrokeCoords.length < 2) {
             updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
@@ -3475,6 +3517,14 @@ document.getElementById('editRouteBtn').onclick = () => {
     const route = savedRoutes[selectedRouteIdx];
     if (!route) return;
 
+    isReviewingPendingMode = false;
+    reviewingPendingId = null;
+    targetRouteId = null;
+    reviewingPendingRoute = null;
+    if (pendingReviewBanner) pendingReviewBanner.classList.add('hidden');
+    if (pendingReviewActionRow) pendingReviewActionRow.classList.add('hidden');
+    if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
+
     isEditingMode = true;
     editStep = 0;
     selectedEditNodeIdx = -1;
@@ -3513,6 +3563,7 @@ function renderEditableRouteMarkers(route) {
         markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
         const m = new maplibregl.Marker({
             element: markerEl,
+            anchor: 'center',
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         }).setLngLat([ev.lng, ev.lat]).addTo(map);
@@ -3527,6 +3578,7 @@ function renderEditableRouteMarkers(route) {
             
             const m = new maplibregl.Marker({
                 element: markerEl,
+                anchor: 'center',
                 draggable: true,
                 rotationAlignment: 'viewport',
                 pitchAlignment: 'viewport'
@@ -4053,7 +4105,7 @@ map.on('click', (e) => {
         return;
     }
     if (!isEditingMode) return;
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActiveWorkingRoute();
     if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
 
     if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper')) {
@@ -4076,6 +4128,7 @@ map.on('click', (e) => {
             el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 選擇位置中...</div>`;
             tempMarkerA = new maplibregl.Marker({
                 element: el,
+                anchor: 'center',
                 rotationAlignment: 'viewport',
                 pitchAlignment: 'viewport'
             }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
@@ -4333,6 +4386,14 @@ function backToMain() {
         window.tacticalTimer = null;
     }
     isEditingMode = false;
+    isReviewingPendingMode = false;
+    reviewingPendingId = null;
+    targetRouteId = null;
+    reviewingPendingRoute = null;
+    if (pendingReviewBanner) pendingReviewBanner.classList.add('hidden');
+    if (pendingReviewActionRow) pendingReviewActionRow.classList.add('hidden');
+    if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
+    document.getElementById('editRouteBar')?.classList.add('hidden');
     selectedEditNodeIdx = -1;
     clearPathEditMarkers();
     cancelActiveFreehandStroke(true);
@@ -4373,6 +4434,10 @@ function backToMain() {
 }
 
 document.getElementById('topBackBtn').onclick = (e) => {
+    if (isReviewingPendingMode) {
+        exitPendingReviewMode(true);
+        return;
+    }
     if (!document.getElementById('playbackUI').classList.contains('hidden')) {
         stopSmoothPlayback(); 
         VoiceQueue.clear(); 
@@ -5926,31 +5991,43 @@ async function fetchRawFirebaseList(url) {
         .filter(item => item && item.name && Array.isArray(item.points) && item.points.length >= 2);
 }
 
-async function publishRouteToSharedDB(payload, overwriteMode) {
+async function publishRouteToSharedDB(payload, overwriteMode = true) {
+    if (!isAdminUnlocked) {
+        throw new Error('PERMISSION_DENIED_ADMIN_REQUIRED');
+    }
+
     const sharedList = await fetchRawFirebaseList(FIREBASE_ROUTES_URL);
+    const cleanTargetName = (payload.name || '').replace(/^\[待審預覽\]\s*/, '').trim();
     const targetMatches = sharedList.filter(item =>
         (payload.routeId && item.routeId && item.routeId === payload.routeId) ||
-        ((item.name || '').trim().toLowerCase() === (payload.name || '').trim().toLowerCase())
+        (payload.targetRouteId && item.routeId && item.routeId === payload.targetRouteId) ||
+        ((item.name || '').trim().toLowerCase() === cleanTargetName.toLowerCase())
     );
 
     const nowTs = Date.now();
-    const cleanPayload = { ...payload };
+    const nowIso = new Date(nowTs).toISOString();
+    const uploadedAtText = new Date(nowTs).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const cleanPayload = { ...payload, name: cleanTargetName };
     delete cleanPayload.firebaseKey;
     delete cleanPayload.uploadAction;
     delete cleanPayload.targetFirebaseKey;
+    delete cleanPayload.targetRouteId;
+    delete cleanPayload.isPendingPreview;
 
     if (overwriteMode && targetMatches.length > 0) {
         const primaryMatch = targetMatches[0];
         const primaryKey = primaryMatch.firebaseKey;
         const maxExistingCloudVer = targetMatches.reduce((maxV, item) => Math.max(maxV, getRouteVersion(item)), 1);
-        const requestedVer = parseInt(cleanPayload.routeVersion, 10);
-        const nextVer = (!isNaN(requestedVer) && requestedVer > maxExistingCloudVer)
-            ? requestedVer
-            : (maxExistingCloudVer + 1);
+        // 雲端已存在同名或同 routeId 路線：自動將 routeVersion 在雲端現有版本基礎上 + 1
+        const nextVer = maxExistingCloudVer + 1;
 
-        cleanPayload.routeId = primaryMatch.routeId || cleanPayload.routeId;
+        cleanPayload.routeId = primaryMatch.routeId || payload.targetRouteId || cleanPayload.routeId || generateRouteId();
         cleanPayload.routeVersion = nextVer;
         cleanPayload.updatedAt = nowTs;
+        cleanPayload.uploadedAt = nowIso;
+        cleanPayload.uploadedAtText = uploadedAtText;
+        cleanPayload.date = uploadedAtText;
 
         const putRes = await fetchWithTimeout(`${FIREBASE_BASE_URL}/shared_routes/${primaryKey}.json`, {
             method: 'PUT',
@@ -5966,8 +6043,12 @@ async function publishRouteToSharedDB(payload, overwriteMode) {
             } catch (e) {}
         }
     } else {
+        cleanPayload.routeId = payload.targetRouteId || cleanPayload.routeId || generateRouteId();
         cleanPayload.routeVersion = getRouteVersion(cleanPayload);
-        cleanPayload.updatedAt = cleanPayload.updatedAt || nowTs;
+        cleanPayload.updatedAt = nowTs;
+        cleanPayload.uploadedAt = cleanPayload.uploadedAt || nowIso;
+        cleanPayload.uploadedAtText = cleanPayload.uploadedAtText || uploadedAtText;
+        cleanPayload.date = cleanPayload.date || uploadedAtText;
 
         const postRes = await fetchWithTimeout(FIREBASE_ROUTES_URL, {
             method: 'POST',
@@ -5977,25 +6058,14 @@ async function publishRouteToSharedDB(payload, overwriteMode) {
         if (!postRes.ok) throw new Error(`POST HTTP ${postRes.status}`);
     }
 
-    // 同步更新本機該路線的版本號與 updatedAt，確保上傳者本機版本與雲端一致
-    let localMutated = false;
-    savedRoutes.forEach(local => {
-        if (local.isPendingPreview) return;
-        const idMatch = local.routeId && cleanPayload.routeId && local.routeId === cleanPayload.routeId;
-        const nameMatch = (local.name || '').trim().toLowerCase() === (cleanPayload.name || '').trim().toLowerCase();
-        if (idMatch || nameMatch) {
-            local.routeId = cleanPayload.routeId;
-            local.routeVersion = cleanPayload.routeVersion;
-            local.updatedAt = cleanPayload.updatedAt;
-            local.uploadedAt = cleanPayload.uploadedAt;
-            local.uploadedAtText = cleanPayload.uploadedAtText;
-            localMutated = true;
+    // 同步將本機 localStorage / localforage 中對應的路線原地更新為剛發布的最新版本（不重複新增）
+    for (let i = savedRoutes.length - 1; i >= 0; i--) {
+        if (savedRoutes[i]?.isPendingPreview) {
+            savedRoutes.splice(i, 1);
         }
-    });
-    if (localMutated) {
-        await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-        try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
     }
+    upsertLocalRouteFromCloud(cleanPayload);
+    await persistSavedRoutesToStorage();
 
     await checkCloudRouteUpdatesInBackground(false);
     return cleanPayload;
@@ -6077,18 +6147,9 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             }
         }
 
-        // 2. 判斷是否具有管理員權限（已解鎖管理員，或於提示框輸入管理員密碼）
-        let publishDirectlyAsAdmin = isAdminUnlocked;
-        if (!publishDirectlyAsAdmin) {
-            const pwdInput = prompt('【一般隊員請直接按「確定」】送交至待審核區；\n🔑 若您是管理員，請輸入管理員密碼直接上架正式庫：', '');
-            if (pwdInput === null) return; // 按取消則中止上傳
-            if (pwdInput.trim() === ADMIN_PASSWORD) {
-                publishDirectlyAsAdmin = true;
-                setAdminModeUI(true);
-            } else if (pwdInput.trim() !== '') {
-                alert('⚠️ 管理員密碼不正確，將以一般隊員身分提交至「待審核區」。');
-            }
-        }
+        // 2. 嚴格權限隔離：非管理員（!isAdminUnlocked）點擊上傳時，一律寫入 pending_routes；
+        // 僅在開啟管理員權限（isAdminUnlocked === true）下，才可直接覆蓋 shared_routes。
+        const publishDirectlyAsAdmin = Boolean(isAdminUnlocked);
 
         if (btnEl) {
             btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上傳中...';
@@ -6099,6 +6160,7 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
         const uploadedAtText = new Date(nowTs).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         const payload = {
             routeId: finalRouteId,
+            targetRouteId: conflictRoute ? (conflictRoute.routeId || finalRouteId) : finalRouteId,
             id: r.id || nowTs,
             originId: r.originId || r.id || nowTs,
             name: finalRouteName,
@@ -6116,26 +6178,25 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             events: r.events || []
         };
 
-        r.routeVersion = nextRouteVersion;
-        r.updatedAt = nowTs;
-        r.uploadedAt = nowIso;
-        r.uploadedAtText = uploadedAtText;
-        await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-        try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
-        renderHistoryList();
-
         if (publishDirectlyAsAdmin) {
             const published = await publishRouteToSharedDB(payload, uploadAction === 'overwrite');
             renderHistoryList();
             alert(`✅ 管理員直通上架成功！\n路線【${finalRouteName}】(v${published.routeVersion}) 已${uploadAction === 'overwrite' ? '覆蓋更新至' : '新增至'}正式雲端路線庫。`);
         } else {
+            // 一般隊員上傳至 pending_routes：不提前竄改本機正式版號，待管理員審核通過後再同步升級
+            r.updatedAt = nowTs;
+            r.uploadedAt = nowIso;
+            r.uploadedAtText = uploadedAtText;
+            await persistSavedRoutesToStorage();
+            renderHistoryList();
+
             const res = await fetchWithTimeout(FIREBASE_PENDING_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }, 5000);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            alert(`✅ 已提交至待審核區，待管理員確認後上架！\n\n路線名稱：${finalRouteName} (目標版本 v${nextRouteVersion})\n分享隊員：${finalAuthor}\n提交模式：${uploadAction === 'overwrite' ? '🔄 覆蓋更新原路線' : '🆕 新增路線'}`);
+            alert(`✅ 已提交至待審核區（pending_routes），待管理員審核確認後發布正式版！\n\n路線名稱：${finalRouteName} (目標版本 v${nextRouteVersion})\n分享隊員：${finalAuthor}\n提交模式：${uploadAction === 'overwrite' ? '🔄 覆蓋更新原路線' : '🆕 新增路線'}`);
         }
     } catch (err) {
         console.error('上傳雲端失敗:', err);
@@ -6181,7 +6242,7 @@ adminToggleBtn.onclick = () => {
         if (pwd.trim() === ADMIN_PASSWORD) {
             setAdminModeUI(true);
             fetchCloudRoutes();
-            alert('✅ 管理員模式已解鎖！\n您現在可切換檢視「待審核投稿區」核准/退回路線，或直接刪除正式庫路線。');
+            alert('✅ 管理員模式已解鎖！\n您現在可切換檢視「待審核投稿區」進行「🔍 審核預覽／微調」、一鍵核准發布或駁回刪除。');
         } else {
             alert('❌ 管理員密碼錯誤！');
         }
@@ -6274,77 +6335,301 @@ async function approvePendingRoute(pendingIdx, btnEl) {
     const pr = cachedPendingRoutes[pendingIdx];
     if (!pr || !isAdminUnlocked) return;
 
-    const cleanName = (pr.name || '').replace(/^\[待審預覽\]\s*/, '');
-    const isOverwrite = pr.uploadAction === 'overwrite';
-    const modeText = isOverwrite ? '【覆蓋更新】正式庫舊版路線' : '【新增上架】至正式路線庫';
+    const cleanName = (pr.name || '').replace(/^\[待審預覽\]\s*/, '').trim();
+    const matchingShared = cachedCloudRoutes.find(item =>
+        (pr.routeId && item.routeId && item.routeId === pr.routeId) ||
+        (pr.targetRouteId && item.routeId && item.routeId === pr.targetRouteId) ||
+        ((item.name || '').trim().toLowerCase() === cleanName.toLowerCase())
+    );
+    const isOverwrite = Boolean(matchingShared || pr.uploadAction === 'overwrite');
+    const resolvedTargetId = matchingShared?.routeId || pr.targetRouteId || pr.routeId || generateRouteId();
+    const modeText = isOverwrite ? '【原地覆蓋升版】正式庫路線' : '【新增發布】至正式路線庫';
     if (!confirm(`確定要核准【${pr.author || '隊員'}】投稿的路線「${cleanName}」並${modeText}嗎？`)) return;
 
     if (btnEl) {
         btnEl.disabled = true;
-        btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 核准中';
+        btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 發布中';
     }
 
     try {
-        const payloadToPublish = { ...pr, name: cleanName };
-        await publishRouteToSharedDB(payloadToPublish, isOverwrite);
+        const payloadToPublish = {
+            ...pr,
+            name: cleanName,
+            routeId: resolvedTargetId,
+            targetRouteId: resolvedTargetId
+        };
+        const published = await publishRouteToSharedDB(payloadToPublish, true);
         const delRes = await fetchWithTimeout(`${FIREBASE_BASE_URL}/pending_routes/${pr.firebaseKey}.json`, { method: 'DELETE' }, 5000);
         if (!delRes.ok) throw new Error(`DELETE pending HTTP ${delRes.status}`);
 
-        alert(`✅ 已核准上架路線【${cleanName}】！`);
+        showNavAlert('✅', `已核准並發布「${cleanName}」(v${published.routeVersion})，並自動清除待審紀錄！`, 'bg-emerald-600');
         await fetchCloudRoutes();
     } catch (err) {
         console.error('核准失敗:', err);
         alert('❌ 核准上架失敗（網路不穩或逾時），請檢查網路連線後再試！');
         if (btnEl) {
             btnEl.disabled = false;
-            btnEl.innerHTML = '✅ 核准上架';
+            btnEl.innerHTML = '✅ 直接核准';
         }
     }
 }
 
+// 🔍 1. 新增「審核預覽／直接微調」入口：
+// 點擊後直接在地圖載入該筆待審路線並進入「審核模式」（記錄 reviewingPendingId 與 targetRouteId），
+// 嚴禁將它重複新增到本機 savedRoutes 清單，並直接使用現有路線編輯器（拖曳微調／手繪延伸剪接／標記編輯）進行二次修改
 function previewPendingRoute(pendingIdx) {
     const pr = cachedPendingRoutes[pendingIdx];
-    if (!pr || !isAdminUnlocked) return;
+    if (!pr || !isAdminUnlocked) {
+        alert('⚠️ 僅限管理員權限可進入待審路線審核微調模式！');
+        return;
+    }
 
-    const cleanBaseName = (pr.name || '未命名路線').replace(/^\[待審預覽\]\s*/, '');
-    const previewName = `[待審預覽] ${cleanBaseName}`;
-    const previewRouteId = `preview_${pr.firebaseKey || pr.routeId || Date.now()}`;
+    const cleanBaseName = (pr.name || '未命名路線').replace(/^\[待審預覽\]\s*/, '').trim();
+    const matchingOfficial = cachedCloudRoutes.find(item =>
+        (pr.routeId && item.routeId && item.routeId === pr.routeId) ||
+        (pr.targetRouteId && item.routeId && item.routeId === pr.targetRouteId) ||
+        ((item.name || '').trim().toLowerCase() === cleanBaseName.toLowerCase())
+    );
 
-    const previewRouteObj = {
-        routeId: previewRouteId,
-        id: Date.now(),
-        originId: pr.originId || pr.id || Date.now(),
-        name: previewName,
+    reviewingPendingId = pr.firebaseKey;
+    targetRouteId = matchingOfficial?.routeId || pr.targetRouteId || pr.routeId || generateRouteId();
+    isReviewingPendingMode = true;
+
+    reviewingPendingRoute = {
+        ...JSON.parse(JSON.stringify(pr)),
+        name: cleanBaseName,
+        routeId: targetRouteId,
+        targetRouteId: targetRouteId,
         author: pr.author || '熱心隊員',
-        date: pr.date || pr.uploadedAtText || new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-        uploadedAt: pr.uploadedAt || '',
-        uploadedAtText: pr.uploadedAtText || '',
         distance: pr.distance || '0.00',
         timeStr: pr.timeStr || '0m 0s',
-        isPendingPreview: true,
         points: JSON.parse(JSON.stringify(pr.points || [])),
         events: JSON.parse(JSON.stringify(pr.events || []))
     };
 
-    const existingPreviewIdx = savedRoutes.findIndex(r => r.routeId === previewRouteId || r.name === previewName);
-    if (existingPreviewIdx !== -1) {
-        savedRoutes.splice(existingPreviewIdx, 1);
-    }
-    savedRoutes.unshift(previewRouteObj);
+    // 確保距離、方位角與標記索引同步
+    syncRouteMarkersAndIndicesAfterSpline(reviewingPendingRoute, null, false);
 
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+    // 關閉雲端彈窗與主畫面面板，直接進入地圖審核編輯器
+    cloudRoutesModal.classList.add('hidden');
+    historyModal.classList.add('hidden');
+    document.getElementById('mainUI').classList.add('hidden');
+    document.getElementById('routeDetailUI').classList.add('hidden');
+    document.getElementById('playbackUI').classList.add('hidden');
+    document.getElementById('topBackBtn').classList.remove('hidden');
+
+    isEditingMode = true;
+    editStep = 0;
+    selectedEditNodeIdx = -1;
+    freehandUndoStack = [];
+    freehandSpliceStartIdx = -1;
+    freehandDraftCoords = [];
+    originalEventsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.events || []));
+    originalPointsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.points || []));
+
+    // 切換編輯面板為「待審微調審核模式」專屬 UI
+    if (pendingReviewBanner) pendingReviewBanner.classList.remove('hidden');
+    if (pendingReviewRouteTitle) {
+        const nextVerHint = matchingOfficial ? `覆蓋升版 ➔ v${getRouteVersion(matchingOfficial) + 1}` : '全新路線 v1';
+        pendingReviewRouteTitle.textContent = `${cleanBaseName}（${nextVerHint}）`;
+    }
+    if (pendingReviewMetaText) {
+        pendingReviewMetaText.textContent = `投稿隊員：${reviewingPendingRoute.author} · 可直接微調路線/標記後一鍵核准發布`;
+    }
+    if (normalEditActionRow) normalEditActionRow.classList.add('hidden');
+    if (pendingReviewActionRow) pendingReviewActionRow.classList.remove('hidden');
+
+    document.getElementById('editRouteBar').classList.remove('hidden');
+    document.getElementById('appStatusTitle').innerText = `🔍 審核微調：${cleanBaseName}`;
+
+    map.getSource('bg-route')?.setData(emptyGeoJSON());
+    updateRouteLayers(reviewingPendingRoute.points);
+    ensureEditorMapZoomEnabled();
+    setEditSubMode('path');
+    renderEditableRouteMarkers(reviewingPendingRoute);
+
+    if (Array.isArray(reviewingPendingRoute.points) && reviewingPendingRoute.points.length >= 2) {
+        const bounds = new maplibregl.LngLatBounds();
+        reviewingPendingRoute.points.forEach(p => bounds.extend([p.lng, p.lat]));
+        map.fitBounds(bounds, { padding: { top: 90, bottom: 300, left: 50, right: 50 }, bearing: 0, duration: 500 });
+    }
+
+    showNavAlert('🔍', `已載入待審路線「${cleanBaseName}」，可直接微調後按底部「✅ 核准並發布正式版」`, 'bg-amber-600');
+}
+
+function exitPendingReviewMode(reopenCloudPendingModal = true) {
+    isEditingMode = false;
+    isReviewingPendingMode = false;
+    reviewingPendingId = null;
+    targetRouteId = null;
+    reviewingPendingRoute = null;
+    selectedEditNodeIdx = -1;
+
+    clearPathEditMarkers();
+    cancelActiveFreehandStroke(true);
+    freehandUndoStack = [];
+    updateUndoFreehandBtnUI();
+    updateNodeTrimPanelUI(null);
+    if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    try { map.dragPan.enable(); } catch (e) {}
+    ensureEditorMapZoomEnabled();
+
+    if (pendingReviewBanner) pendingReviewBanner.classList.add('hidden');
+    if (pendingReviewActionRow) pendingReviewActionRow.classList.add('hidden');
+    if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
+    document.getElementById('editRouteBar').classList.add('hidden');
+    document.getElementById('topBackBtn').classList.add('hidden');
+    document.getElementById('mainUI').classList.remove('hidden');
+    document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
+
+    clearDomMarkers();
+    updateRouteLayers([]);
+    map.getSource('bg-route')?.setData(emptyGeoJSON());
+
+    if (reopenCloudPendingModal) {
+        currentCloudTab = 'pending';
+        updateCloudTabButtons();
+        cloudRoutesModal.classList.remove('hidden');
+        fetchCloudRoutes();
+    }
+}
+
+if (btnExitPendingReview) {
+    btnExitPendingReview.onclick = () => {
+        exitPendingReviewMode(true);
+    };
+}
+
+// ✅ 2. 「✅ 核准並發布正式版」一鍵自動化（免改名 ＋ 自動升版寫入 shared_routes ＋ 自動刪除 pending_routes ＋ 同步原地更新本機 localStorage）
+async function approveAndPublishReviewedPendingRoute() {
+    if (!isAdminUnlocked || !isReviewingPendingMode || !reviewingPendingRoute || !reviewingPendingId) {
+        alert('⚠️ 僅限管理員在審核模式下執行核准發布！');
+        return;
+    }
+
+    if (!navigator.onLine) {
+        alert('⚠️ 目前無網路連線，請確認網路狀態後再核准發布！');
+        return;
+    }
+
+    if (!Array.isArray(reviewingPendingRoute.points) || reviewingPendingRoute.points.length < 2) {
+        alert('⚠️ 路線軌跡點不足 2 點，無法發布！');
+        return;
+    }
+
+    // 1. 取得當前畫面上的最終路線資料（包含管理員剛剛順手做的所有微調、修剪、手繪與標記修改）
+    syncRouteMarkersAndIndicesAfterSpline(reviewingPendingRoute, null, true);
+
+    const cleanName = (reviewingPendingRoute.name || '未命名路線').replace(/^\[待審預覽\]\s*/, '').trim();
+    const pendingKeyToDelete = reviewingPendingId;
+    const finalTargetRouteId = targetRouteId || reviewingPendingRoute.routeId || generateRouteId();
+
+    const originalBtnHtml = btnApproveAndPublishReview ? btnApproveAndPublishReview.innerHTML : '✅ 核准並發布正式版';
+    if (btnApproveAndPublishReview) {
+        btnApproveAndPublishReview.disabled = true;
+        btnApproveAndPublishReview.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在核准並發布...';
+    }
+    if (btnRejectAndDeleteReview) btnRejectAndDeleteReview.disabled = true;
+
+    try {
+        // 2. 免修改路線名稱，直接以原路線的 routeId (targetRouteId) 寫入 Firebase shared_routes
+        // 若已存在同 routeId 或同名路線則原地覆蓋並自動將 routeVersion + 1 與更新 updatedAt；若為全新路線則建立新 ID
+        const payloadToPublish = {
+            ...reviewingPendingRoute,
+            name: cleanName,
+            routeId: finalTargetRouteId,
+            targetRouteId: finalTargetRouteId
+        };
+
+        const published = await publishRouteToSharedDB(payloadToPublish, true);
+
+        // 3. 寫入成功後，自動呼叫 Firebase 刪除 pending_routes/${reviewingPendingId}，將該筆待審紀錄從待審區移除
+        const delRes = await fetchWithTimeout(`${FIREBASE_BASE_URL}/pending_routes/${pendingKeyToDelete}.json`, {
+            method: 'DELETE'
+        }, 5000);
+        if (!delRes.ok) throw new Error(`DELETE pending HTTP ${delRes.status}`);
+
+        // 4. publishRouteToSharedDB 已同步透過 upsertLocalRouteFromCloud + persistSavedRoutesToStorage 將管理員本機 localStorage 對應路線原地更新為剛發布的最新版本
         renderHistoryList();
-        renderCloudRoutesList();
-        alert('已匯入本機清單，請關閉雲端視窗後點擊該路線進行地圖預覽');
-    });
+
+        exitPendingReviewMode(true);
+        showNavAlert('✅', `已核准發布「${published.name}」正式版 (v${published.routeVersion})，並自動清除待審紀錄與同步更新本機！`, 'bg-emerald-600');
+    } catch (err) {
+        console.error('審核核准並發布失敗:', err);
+        alert('❌ 核准並發布正式版失敗（網路不穩或連線逾時），請檢查網路後再試！');
+    } finally {
+        if (btnApproveAndPublishReview) {
+            btnApproveAndPublishReview.disabled = false;
+            btnApproveAndPublishReview.innerHTML = originalBtnHtml;
+        }
+        if (btnRejectAndDeleteReview) btnRejectAndDeleteReview.disabled = false;
+    }
+}
+
+// 🗑️ 審核模式底部「🗑️ 駁回刪除」按鈕
+async function rejectReviewedPendingRoute() {
+    if (!isAdminUnlocked || !isReviewingPendingMode || !reviewingPendingRoute || !reviewingPendingId) {
+        return;
+    }
+
+    const cleanName = (reviewingPendingRoute.name || '未命名路線').replace(/^\[待審預覽\]\s*/, '').trim();
+    if (!confirm(`確定要駁回並從待審區永久刪除【${reviewingPendingRoute.author || '隊員'}】投稿的路線「${cleanName}」嗎？`)) {
+        return;
+    }
+
+    const pendingKeyToDelete = reviewingPendingId;
+    const originalBtnHtml = btnRejectAndDeleteReview ? btnRejectAndDeleteReview.innerHTML : '🗑️ 駁回刪除';
+    if (btnRejectAndDeleteReview) {
+        btnRejectAndDeleteReview.disabled = true;
+        btnRejectAndDeleteReview.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 刪除中';
+    }
+    if (btnApproveAndPublishReview) btnApproveAndPublishReview.disabled = true;
+
+    try {
+        const res = await fetchWithTimeout(`${FIREBASE_BASE_URL}/pending_routes/${pendingKeyToDelete}.json`, {
+            method: 'DELETE'
+        }, 5000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        // 清除本機若曾殘留的舊版待審預覽項目
+        let removedLegacyPreview = false;
+        for (let i = savedRoutes.length - 1; i >= 0; i--) {
+            if (savedRoutes[i]?.isPendingPreview) {
+                savedRoutes.splice(i, 1);
+                removedLegacyPreview = true;
+            }
+        }
+        if (removedLegacyPreview) {
+            await persistSavedRoutesToStorage();
+            renderHistoryList();
+        }
+
+        exitPendingReviewMode(true);
+        showNavAlert('🗑️', `已駁回並刪除待審路線「${cleanName}」`, 'bg-rose-600');
+    } catch (err) {
+        console.error('駁回刪除待審路線失敗:', err);
+        alert('❌ 駁回刪除失敗（網路不穩或逾時），請檢查網路連線後再試！');
+    } finally {
+        if (btnRejectAndDeleteReview) {
+            btnRejectAndDeleteReview.disabled = false;
+            btnRejectAndDeleteReview.innerHTML = originalBtnHtml;
+        }
+        if (btnApproveAndPublishReview) btnApproveAndPublishReview.disabled = false;
+    }
+}
+
+if (btnApproveAndPublishReview) {
+    btnApproveAndPublishReview.onclick = () => approveAndPublishReviewedPendingRoute();
+}
+if (btnRejectAndDeleteReview) {
+    btnRejectAndDeleteReview.onclick = () => rejectReviewedPendingRoute();
 }
 
 async function rejectPendingRoute(pendingIdx, btnEl) {
     const pr = cachedPendingRoutes[pendingIdx];
     if (!pr || !isAdminUnlocked) return;
 
-    if (!confirm(`確定要刪除/退回待審核路線【${pr.name}】（投稿者：${pr.author || '隊員'}）嗎？`)) return;
+    if (!confirm(`確定要駁回刪除待審核路線【${pr.name}】（投稿者：${pr.author || '隊員'}）嗎？`)) return;
 
     if (btnEl) {
         btnEl.disabled = true;
@@ -6354,14 +6639,14 @@ async function rejectPendingRoute(pendingIdx, btnEl) {
     try {
         const res = await fetchWithTimeout(`${FIREBASE_BASE_URL}/pending_routes/${pr.firebaseKey}.json`, { method: 'DELETE' }, 5000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        alert(`🗑️ 已刪除/退回待審核路線【${pr.name}】。`);
+        showNavAlert('🗑️', `已駁回刪除待審核路線【${pr.name}】`, 'bg-rose-600');
         await fetchCloudRoutes();
     } catch (err) {
         console.error('刪除待審核路線失敗:', err);
         alert('❌ 刪除失敗（網路不穩或逾時），請檢查網路連線後再試！');
         if (btnEl) {
             btnEl.disabled = false;
-            btnEl.innerHTML = '🗑️ 刪除/退回';
+            btnEl.innerHTML = '🗑️ 駁回刪除';
         }
     }
 }
@@ -6414,10 +6699,16 @@ function renderCloudRoutesList() {
             const stopsCount = (pr.points || []).filter(p => p.is_stop).length;
             const eventsCount = (pr.events || []).length;
             const timeDisplay = pr.uploadedAtText || pr.date || '未知時間';
-            const isOverwrite = pr.uploadAction === 'overwrite';
+            const cleanName = (pr.name || '').replace(/^\[待審預覽\]\s*/, '').trim();
+            const matchingOfficial = cachedCloudRoutes.find(item =>
+                (pr.routeId && item.routeId && item.routeId === pr.routeId) ||
+                (pr.targetRouteId && item.routeId && item.routeId === pr.targetRouteId) ||
+                ((item.name || '').trim().toLowerCase() === cleanName.toLowerCase())
+            );
+            const isOverwrite = Boolean(matchingOfficial || pr.uploadAction === 'overwrite');
             const actionBadge = isOverwrite
-                ? `<span class="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🔄 覆蓋更新原路線</span>`
-                : `<span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🆕 新增路線</span>`;
+                ? `<span class="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🔄 覆蓋升版${matchingOfficial ? ` (v${getRouteVersion(matchingOfficial)}➔v${getRouteVersion(matchingOfficial) + 1})` : ''}</span>`
+                : `<span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🆕 新增路線 (v1)</span>`;
 
             const card = document.createElement('div');
             card.className = "bg-white p-3.5 rounded-2xl shadow-sm border-2 border-amber-200 flex flex-col gap-2.5";
@@ -6425,7 +6716,7 @@ function renderCloudRoutesList() {
                 <div class="flex items-start justify-between gap-2">
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-1.5 flex-wrap">
-                            <span class="font-black text-gray-900 text-sm truncate">${pr.name}</span>
+                            <span class="font-black text-gray-900 text-sm truncate">${cleanName}</span>
                             <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
                                 <i class="fa-solid fa-user-ninja mr-0.5"></i>${pr.author || '熱心隊員'}
                             </span>
@@ -6440,14 +6731,14 @@ function renderCloudRoutesList() {
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 pt-1 border-t border-gray-100">
-                    <button type="button" class="preview-pending-btn flex-1 bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
-                        📥 下載試看
+                    <button type="button" class="preview-pending-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-2.5 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
+                        🔍 審核預覽／微調
                     </button>
-                    <button type="button" class="approve-pending-btn flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
-                        ✅ 核准上架
+                    <button type="button" class="approve-pending-btn bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
+                        ✅ 直接核准
                     </button>
-                    <button type="button" class="reject-pending-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold px-3 py-2 rounded-xl text-xs active:scale-95 transition-all whitespace-nowrap">
-                        🗑️ 刪除/退回
+                    <button type="button" class="reject-pending-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold px-2.5 py-2 rounded-xl text-xs active:scale-95 transition-all whitespace-nowrap">
+                        🗑️ 駁回刪除
                     </button>
                 </div>
             `;

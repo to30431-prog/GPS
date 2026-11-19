@@ -28,7 +28,14 @@ html, body {
 .ui-layer { z-index: 10; pointer-events: none; }
 .pointer-events-auto { pointer-events: auto; }
 
-/* 起終點與音樂標記 */
+/* 起終點與音樂標記（外層 Marker 容器絕不設定 transform，旋轉寫在內層或獨立 wrapper 避免覆寫 MapLibre translate3d 定位） */
+.pin-se-wrapper {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
 .pin-s, .pin-e {
     width: 32px; height: 32px; border-radius: 50% 50% 50% 0;
     transform: rotate(-45deg); display: flex; align-items: center; justify-content: center;
@@ -46,8 +53,23 @@ html, body {
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
 
-/* ⚠️ 橘黃色語音／警示標記點：精簡文字（最多 5 字）＋ 22x22 內嵌照片縮圖小膠囊 ＋ 點擊展開 220px 自動換行完整氣泡卡片 */
+/* ⚠️ 橘黃色語音／警示標記點：
+   1. 最外層 .alert-compact-pin 為傳給 MapLibre Marker 的容器（anchor: 'bottom'），嚴禁設定任何 transform 或負 margin，避免覆寫 MapLibre 的 translate3d 經緯度定位！
+   2. 內層 .alert-compact-pill 為精簡文字（最多 5 字）＋ 22x22 照片縮圖膠囊，縮放動畫僅作用於內層。
+   3. 底部 .alert-compact-arrow 為小橘色倒三角形指標，尖端精準對齊綠色路線上的觸發座標 [lng, lat]。 */
 .alert-compact-pin {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    box-sizing: border-box;
+    z-index: 25;
+    pointer-events: auto;
+}
+.alert-compact-pin.is-active {
+    z-index: 35;
+}
+.alert-compact-pill {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -55,25 +77,32 @@ html, body {
     border-radius: 999px;
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     border: 2px solid #ffffff;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.38);
     color: #ffffff;
     font-size: 12px;
     font-weight: 800;
     line-height: 1.2;
     white-space: nowrap;
-    cursor: pointer;
-    position: relative;
     box-sizing: border-box;
+    transform-origin: bottom center;
     transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
-    z-index: 25;
 }
-.alert-compact-pin:active {
-    transform: scale(0.93);
+.alert-compact-pin:active .alert-compact-pill {
+    transform: scale(0.94);
 }
-.alert-compact-pin.is-active {
+.alert-compact-pin.is-active .alert-compact-pill {
     transform: scale(1.06);
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 3px 8px rgba(0, 0, 0, 0.45);
-    z-index: 35;
+}
+.alert-compact-arrow {
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 7px solid #d97706;
+    margin-top: -1px;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.28));
+    flex-shrink: 0;
 }
 .alert-compact-thumb {
     width: 22px;
@@ -168,7 +197,7 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 .nav-alert-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
 
-/* 📍 全車隊共享地圖地標：藍色水滴＋縮圖照片樣式 */
+/* 📍 全車隊共享地圖地標：藍色水滴＋縮圖照片樣式（外層禁止設定 transform） */
 .shared-pin-wrapper {
     display: flex;
     flex-direction: column;
@@ -177,10 +206,6 @@ input[type=range]::-webkit-slider-runnable-track {
     user-select: none;
     -webkit-user-select: none;
     filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.45));
-    transition: transform 0.15s ease-out;
-}
-.shared-pin-wrapper:active {
-    transform: scale(0.92);
 }
 .shared-pin-label {
     background: rgba(30, 58, 138, 0.92);

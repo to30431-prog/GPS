@@ -1627,7 +1627,183 @@ function evaluateVoiceMarkersWithProgress({
     });
 }
 
+let activeAlertPopupMarker = null;
+let activeAlertPopupKey = null;
+let activeAlertPinElement = null;
+
+function closeActiveAlertPopup() {
+    if (activeAlertPopupMarker) {
+        try { activeAlertPopupMarker.remove(); } catch (e) {}
+        activeAlertPopupMarker = null;
+    }
+    activeAlertPopupKey = null;
+    if (activeAlertPinElement) {
+        activeAlertPinElement.classList.remove('is-active');
+        activeAlertPinElement = null;
+    }
+}
+
+function refreshCurrentRouteMarkers(route) {
+    if (!route) return;
+    const detailEventsEl = document.getElementById('detailEvents');
+    if (detailEventsEl) {
+        detailEventsEl.innerText = `${(route.events || []).length} 處`;
+    }
+    if (isEditingMode) {
+        renderEditableRouteMarkers(route);
+    } else {
+        renderRouteMarkers(route);
+    }
+}
+
+function openAlertPopupCard(route, ev, eventIdx, pinEl) {
+    if (!route || !ev) return;
+    const key = `${eventIdx}_${ev.lng}_${ev.lat}`;
+    if (activeAlertPopupKey === key && activeAlertPopupMarker) {
+        closeActiveAlertPopup();
+        return;
+    }
+
+    closeActiveAlertPopup();
+    activeAlertPopupKey = key;
+    if (pinEl) {
+        pinEl.classList.add('is-active');
+        activeAlertPinElement = pinEl;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'alert-popup-wrapper';
+    wrapper.onclick = (e) => e.stopPropagation();
+
+    const card = document.createElement('div');
+    card.className = 'alert-popup-card';
+
+    // 頂部標題列與關閉按鈕
+    const headerRow = document.createElement('div');
+    headerRow.className = 'flex items-center justify-between gap-2 pb-1 border-b border-amber-100';
+    headerRow.innerHTML = `
+        <span class="text-[11px] font-black text-amber-700 flex items-center gap-1">
+            <i class="fa-solid fa-triangle-exclamation text-amber-500"></i> 警示提醒
+        </span>
+    `;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'w-5 h-5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center text-[11px] font-black active:scale-90';
+    closeBtn.innerHTML = '✕';
+    closeBtn.title = '收合';
+    closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        closeActiveAlertPopup();
+    };
+    headerRow.appendChild(closeBtn);
+    card.appendChild(headerRow);
+
+    // 完整警示文字（自動換行 max-width: 220px, white-space: normal, word-break: break-word）
+    const noteEl = document.createElement('div');
+    noteEl.className = 'alert-popup-note';
+    noteEl.textContent = ev.note || '注意路況';
+    card.appendChild(noteEl);
+
+    // 若附有實景照片，顯示縮圖供點擊放大
+    if (ev.photo) {
+        const photoBtn = document.createElement('button');
+        photoBtn.type = 'button';
+        photoBtn.className = 'w-full h-24 mb-2 rounded-xl overflow-hidden border border-amber-200 relative block active:scale-[0.98] transition-transform';
+        photoBtn.title = '點擊放大檢視照片';
+        const img = document.createElement('img');
+        img.src = ev.photo;
+        img.alt = '提醒照片';
+        img.className = 'w-full h-full object-cover';
+        const badge = document.createElement('span');
+        badge.className = 'absolute bottom-1 right-1 bg-black/70 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-md';
+        badge.innerHTML = '<i class="fa-solid fa-magnifying-glass-plus mr-0.5"></i>放大照片';
+        photoBtn.appendChild(img);
+        photoBtn.appendChild(badge);
+        photoBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (typeof window.openPhotoLightbox === 'function') {
+                window.openPhotoLightbox(ev.photo);
+            }
+        };
+        card.appendChild(photoBtn);
+    }
+
+    // 底部操作按鈕列（✏️ 編輯 / 🗑️ 刪除）
+    const actionRow = document.createElement('div');
+    actionRow.className = 'flex items-center gap-1.5 pt-1 border-t border-gray-100';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl py-1.5 px-2 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
+    editBtn.innerHTML = '<span>✏️ 編輯</span>';
+    editBtn.onclick = (e) => {
+        e.stopPropagation();
+        closeActiveAlertPopup();
+        openAlertModalForEdit(route, eventIdx);
+    };
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl py-1.5 px-2.5 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
+    delBtn.innerHTML = '<i class="fa-regular fa-trash-can"></i><span>刪除</span>';
+    delBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (!confirm(`確定要刪除【${ev.note || '提醒'}】這筆黃色提醒嗎？`)) return;
+        closeActiveAlertPopup();
+        if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+            pushEditUndoSnapshot(route);
+        }
+        if (Array.isArray(route.events) && eventIdx >= 0 && eventIdx < route.events.length) {
+            route.events.splice(eventIdx, 1);
+        }
+        if (!isEditingMode && typeof persistSavedRoutesToStorage === 'function') {
+            persistSavedRoutesToStorage();
+        }
+        refreshCurrentRouteMarkers(route);
+    };
+
+    actionRow.appendChild(editBtn);
+    actionRow.appendChild(delBtn);
+    card.appendChild(actionRow);
+
+    const arrow = document.createElement('div');
+    arrow.className = 'alert-popup-arrow';
+
+    wrapper.appendChild(card);
+    wrapper.appendChild(arrow);
+
+    activeAlertPopupMarker = new maplibregl.Marker({
+        element: wrapper,
+        anchor: 'bottom',
+        offset: [0, -18],
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    }).setLngLat([ev.lng, ev.lat]).addTo(map);
+}
+
+function createCompactAlertPinMarker(route, ev, eventIdx) {
+    const markerEl = document.createElement('div');
+    markerEl.className = 'alert-compact-pin';
+    markerEl.title = '點擊展開警示內容';
+    const camDotHtml = ev.photo
+        ? '<span class="alert-compact-cam-dot"><i class="fa-solid fa-camera"></i></span>'
+        : '';
+    markerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i>${camDotHtml}`;
+    markerEl.onclick = (e) => {
+        e.stopPropagation();
+        openAlertPopupCard(route, ev, eventIdx, markerEl);
+    };
+    const m = new maplibregl.Marker({
+        element: markerEl,
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    }).setLngLat([ev.lng, ev.lat]).addTo(map);
+    domMarkers.push(m);
+    return m;
+}
+
 function clearDomMarkers() {
+    closeActiveAlertPopup();
     domMarkers.forEach(m => {
         try { m.remove(); } catch (e) {}
     });
@@ -2042,26 +2218,13 @@ function renderRouteMarkers(route) {
     addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
     addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
     
-    (route.events || []).forEach(ev => {
+    (route.events || []).forEach((ev, idx) => {
         if (ev.type === 'on') {
             addPinMarker([ev.lng, ev.lat], `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`);
         } else if (ev.type === 'off') {
             addPinMarker([ev.lng, ev.lat], `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`);
         } else if (ev.type === 'alert') {
-            const markerEl = document.createElement('div');
-            markerEl.className = 'music-marker bg-amber-600 cursor-pointer active:scale-95';
-            const camBadge = ev.photo ? '<i class="fa-solid fa-camera ml-1 text-amber-200"></i>' : '';
-            markerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${ev.note || '提醒'}${camBadge}`;
-            markerEl.onclick = (e) => {
-                e.stopPropagation();
-                openViewAlertModal(ev);
-            };
-            const m = new maplibregl.Marker({
-                element: markerEl,
-                rotationAlignment: 'viewport',
-                pitchAlignment: 'viewport'
-            }).setLngLat([ev.lng, ev.lat]).addTo(map);
-            domMarkers.push(m);
+            createCompactAlertPinMarker(route, ev, idx);
         }
     });
 
@@ -3318,25 +3481,16 @@ function renderEditableRouteMarkers(route) {
     addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
 
     (route.events || []).forEach((ev, idx) => {
-        let badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
-        let iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
-        let text = ev.type === 'on' ? '開' : '關';
-        let isAlert = (ev.type === 'alert');
-        
-        if (isAlert) { badgeClass = 'bg-amber-600'; iconClass = 'fa-triangle-exclamation'; text = ev.note || '提醒'; }
-        const markerEl = document.createElement('div');
-        markerEl.className = `music-marker ${badgeClass} ${isAlert ? 'cursor-pointer active:scale-90' : ''}`;
-        
-        if (isAlert) {
-            const camBadge = ev.photo ? ' <i class="fa-solid fa-camera text-amber-200"></i>' : '';
-            markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}${camBadge} <i class="fa-solid fa-pen ml-1 opacity-80"></i>`;
-            markerEl.onclick = (e) => {
-                e.stopPropagation();
-                openAlertModalForEdit(route, idx);
-            };
-        } else {
-            markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+        if (ev.type === 'alert') {
+            createCompactAlertPinMarker(route, ev, idx);
+            return;
         }
+        const badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
+        const iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
+        const text = ev.type === 'on' ? '開' : '關';
+        const markerEl = document.createElement('div');
+        markerEl.className = `music-marker ${badgeClass}`;
+        markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
         const m = new maplibregl.Marker({
             element: markerEl,
             rotationAlignment: 'viewport',
@@ -3865,6 +4019,15 @@ async function handleManualDrawMapClick(e) {
 }
 
 map.on('click', (e) => {
+    const origTarget = e.originalEvent?.target;
+    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper')) {
+        return;
+    }
+    // 點擊地圖空白處自動收合已展開的警示氣泡卡片
+    if (activeAlertPopupMarker) {
+        closeActiveAlertPopup();
+    }
+
     if (isManualDrawingMode) {
         handleManualDrawMapClick(e);
         return;
@@ -3873,8 +4036,7 @@ map.on('click', (e) => {
     const route = savedRoutes[selectedRouteIdx];
     if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
 
-    const origTarget = e.originalEvent?.target;
-    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper')) {
         return;
     }
 
@@ -4418,9 +4580,16 @@ function finishAlertModalCleanup(route) {
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     editStep = 0;
     if (route) {
-        document.getElementById('editPromptText').innerText = "🛠️ 標記完成！請點擊地圖軌跡選擇下一個『目標點』";
-        updateRouteLayers(route.points);
-        renderEditableRouteMarkers(route);
+        if (isEditingMode) {
+            document.getElementById('editPromptText').innerText = "🛠️ 標記完成！請點擊地圖軌跡選擇下一個『目標點』";
+            updateRouteLayers(route.points);
+            renderEditableRouteMarkers(route);
+        } else {
+            if (typeof persistSavedRoutesToStorage === 'function') {
+                persistSavedRoutesToStorage();
+            }
+            refreshCurrentRouteMarkers(route);
+        }
     }
 }
 
@@ -4474,6 +4643,9 @@ function openAlertModalForEdit(route, eventIdx) {
             alert('請輸入提醒內容！');
             return;
         }
+        if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+            pushEditUndoSnapshot(route);
+        }
         ev.note = note;
         if (currentAlertPhotoBase64) {
             ev.photo = currentAlertPhotoBase64;
@@ -4485,6 +4657,9 @@ function openAlertModalForEdit(route, eventIdx) {
 
     btnDeleteAlert.onclick = () => {
         if (confirm(`確定要刪除【${ev.note || '提醒'}】這筆黃色提醒嗎？`)) {
+            if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+                pushEditUndoSnapshot(route);
+            }
             route.events.splice(eventIdx, 1);
             finishAlertModalCleanup(route);
         }

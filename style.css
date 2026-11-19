@@ -46,6 +46,92 @@ html, body {
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
 
+/* ⚠️ 橘黃色語音／警示標記點：預設 28px x 28px 精簡圓形圖示 ＋ 點擊展開 220px 自動換行完整氣泡卡片 */
+.alert-compact-pin {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    color: #ffffff;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    box-sizing: border-box;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+    z-index: 25;
+}
+.alert-compact-pin:active {
+    transform: scale(0.9);
+}
+.alert-compact-pin.is-active {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 3px 8px rgba(0, 0, 0, 0.45);
+    z-index: 35;
+}
+.alert-compact-cam-dot {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: #2563eb;
+    border: 1.5px solid #ffffff;
+    color: #ffffff;
+    font-size: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    pointer-events: none;
+}
+
+.alert-popup-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: auto;
+    z-index: 85;
+    filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28));
+}
+.alert-popup-card {
+    width: max-content;
+    min-width: 165px;
+    max-width: 220px;
+    background: #ffffff;
+    color: #1e293b;
+    border-radius: 16px;
+    border: 2px solid #f59e0b;
+    padding: 10px 11px;
+    box-sizing: border-box;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.alert-popup-note {
+    font-size: 13px;
+    font-weight: 800;
+    color: #111827;
+    line-height: 1.4;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    margin: 6px 0 8px 0;
+}
+.alert-popup-arrow {
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 9px solid #f59e0b;
+    margin-top: -1px;
+}
+
 /* 導航車頭圖示 (SVG 完美透明版) */
 .nav-puck {
     width: 42px; height: 70px;

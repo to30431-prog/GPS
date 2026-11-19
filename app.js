@@ -173,6 +173,9 @@ let lastValidGpsTime = 0;
 let lastRawGpsFixKey = '';
 let lastRawGpsFixWallTime = 0;
 let lastFilteredGpsResult = null;
+let lastRealGpsHeading = 0;
+let isReplaying = false;
+window.isReplaying = false;
 
 function processFilteredGpsPosition(pos) {
     if (!pos || !pos.coords) return null;
@@ -209,11 +212,13 @@ function processFilteredGpsPosition(pos) {
         lastValidGpsLat = rawLat;
         lastValidGpsLng = rawLng;
         lastValidGpsTime = now;
-        lastKnownLngLat = [rawLng, rawLat];
+        if (!isReplaying) {
+            lastKnownLngLat = [rawLng, rawLat];
+        }
         const firstRes = {
             lng: rawLng,
             lat: rawLat,
-            heading: currentHeading,
+            heading: lastRealGpsHeading,
             speedKmh: rawSpeed !== null ? (rawSpeed * 3.6) : 0,
             accuracy,
             isStationary: false,
@@ -241,13 +246,15 @@ function processFilteredGpsPosition(pos) {
         ? hardwareSpeedKmh
         : Math.min(impliedSpeedKmh, maxSpeedKmh);
 
-    // 3. 停車與低速防抖動鎖定：當車速 < minLockSpeedKmh (預設 4 km/h) 或位移 < 5m 時，鎖死最後車頭角度（currentHeading）
+    // 3. 停車與低速防抖動鎖定：當車速 < minLockSpeedKmh (預設 4 km/h) 或位移 < 5m 時，鎖死最後真實車頭角度（lastRealGpsHeading）
     if (distMeters < 5 || effectiveSpeedKmh < minLockSpeedKmh) {
-        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+        if (!isReplaying) {
+            lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
+        }
         const stationaryRes = {
             lng: lastValidGpsLng,
             lat: lastValidGpsLat,
-            heading: currentHeading,
+            heading: lastRealGpsHeading,
             speedKmh: effectiveSpeedKmh < minLockSpeedKmh ? 0 : effectiveSpeedKmh,
             accuracy,
             isStationary: true,
@@ -265,18 +272,24 @@ function processFilteredGpsPosition(pos) {
     const smoothedLat = Number((rawLat * 0.7 + lastValidGpsLat * 0.3).toFixed(6));
 
     // 5. 純用 GPS 前後有效座標計算真實移動方位角（Bearing），徹底停用電子羅盤
-    currentHeading = getBearing(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat);
+    const realBearing = getBearing(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat);
+    lastRealGpsHeading = realBearing;
 
     lastValidGpsLng = smoothedLng;
     lastValidGpsLat = smoothedLat;
     lastValidGpsTime = now;
-    lastKnownLngLat = [smoothedLng, smoothedLat];
+
+    // 重播期間嚴禁真實 GPS 覆寫重播中的車輛座標與車頭角
+    if (!isReplaying) {
+        currentHeading = realBearing;
+        lastKnownLngLat = [smoothedLng, smoothedLat];
+    }
 
     const movingSpeedKmh = Math.min(effectiveSpeedKmh, maxSpeedKmh);
     const movingRes = {
         lng: smoothedLng,
         lat: smoothedLat,
-        heading: currentHeading,
+        heading: realBearing,
         speedKmh: movingSpeedKmh,
         accuracy,
         isStationary: false,
@@ -305,26 +318,30 @@ function startIdleGPS() {
 
         checkAndApplyAutoDayNightMode(filtered.lat, filtered.lng);
 
+        if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
+            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
+        }
+
+        // 🛡️ 重播期間鎖定車輛控制權：當 isReplaying === true 時，嚴禁真實 GPS 更新黃色垃圾車 Marker 的座標與角度
+        if (isReplaying) return;
+
         if (!isPowerSaveMapPaused()) {
             const acc = Math.round(filtered.accuracy);
             const accEl = document.getElementById('accuracyText');
             if (accEl) accEl.innerText = `± ${acc} m`;
             if (vehicleMarker) {
-                smoothMoveVehicleMarker(lastKnownLngLat, filtered.heading, 750);
+                smoothMoveVehicleMarker([filtered.lng, filtered.lat], filtered.heading, 750);
             }
             if (!filtered.isStationary && isFollowingCamera) {
                 const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
                 map.easeTo({
-                    center: lastKnownLngLat,
+                    center: [filtered.lng, filtered.lat],
                     zoom: targetZoom,
                     bearing: isHeadingUpMode ? filtered.heading : map.getBearing(),
                     offset: [0, 100],
                     duration: 600
                 });
             }
-        }
-        if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
-            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
         }
     }, () => {}, { enableHighAccuracy: true });
 }
@@ -758,6 +775,14 @@ let vehicleVisualLngLat = [...lastKnownLngLat];
 let vehicleVisualHeading = currentHeading;
 
 function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) {
+    // 🛡️ 重播期間嚴禁真實 GPS 補間動畫介入移動黃色垃圾車 Marker
+    if (isReplaying) {
+        if (vehicleAnimFrameId !== null) {
+            cancelAnimationFrame(vehicleAnimFrameId);
+            vehicleAnimFrameId = null;
+        }
+        return;
+    }
     if (!vehicleMarker || !Array.isArray(targetLngLat) || targetLngLat.length < 2) return;
     const endLng = Number(targetLngLat[0]);
     const endLat = Number(targetLngLat[1]);
@@ -785,6 +810,10 @@ function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) 
     const startTimePerf = performance.now();
 
     function stepFrame(nowPerf) {
+        if (isReplaying) {
+            vehicleAnimFrameId = null;
+            return;
+        }
         const elapsed = nowPerf - startTimePerf;
         const t = Math.min(Math.max(elapsed / durationMs, 0), 1);
         const curLng = startLng + (endLng - startLng) * t;
@@ -1001,7 +1030,9 @@ map.on('load', () => {
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
         checkAndApplyAutoDayNightMode(pos.coords.latitude, pos.coords.longitude);
-        map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+        if (!isReplaying) {
+            map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+        }
     });
 });
 
@@ -1050,6 +1081,9 @@ document.getElementById('headingModeBtn').onclick = () => {
     isHeadingUpMode = !isHeadingUpMode;
     const btn = document.getElementById('headingModeBtn');
     const label = document.getElementById('headingLabel');
+    if (vehicleMarker) {
+        vehicleMarker.setRotation(currentHeading);
+    }
     if (isHeadingUpMode) {
         btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
         label.innerText = "車頭上";
@@ -2036,7 +2070,7 @@ function renderRouteMarkers(route) {
     });
 }
 
-function openRouteDetail(idx) {
+function openRouteDetail(idx, skipFitBounds = false) {
     selectedRouteIdx = idx; const route = savedRoutes[idx];
     if (!route) return;
     historyModal.classList.add('hidden');
@@ -2057,9 +2091,11 @@ function openRouteDetail(idx) {
     updateRouteLayers(route.points);
     renderRouteMarkers(route);
 
-    const bounds = new maplibregl.LngLatBounds();
-    route.points.forEach(p => bounds.extend([p.lng, p.lat]));
-    map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
+    if (!skipFitBounds) {
+        const bounds = new maplibregl.LngLatBounds();
+        route.points.forEach(p => bounds.extend([p.lng, p.lat]));
+        map.fitBounds(bounds, { padding: { top: 80, bottom: 260, left: 50, right: 50 }, bearing: 0, duration: 500 });
+    }
 }
 window.openRouteDetail = openRouteDetail;
 
@@ -4054,7 +4090,56 @@ document.getElementById('cancelEditBtn').onclick = () => {
     window.openRouteDetail(selectedRouteIdx);
 };
 
+// 結束重播後自動歸位：將 isReplaying 設回 false，並立即將黃色垃圾車 Marker 與地圖鏡頭恢復對齊至使用者的最新真實 GPS 位置
+function restoreRealGpsAfterReplay(alignCamera = true) {
+    isReplaying = false;
+    window.isReplaying = false;
+    if (vehicleAnimFrameId !== null) {
+        cancelAnimationFrame(vehicleAnimFrameId);
+        vehicleAnimFrameId = null;
+    }
+
+    const applyRealGpsToMarkerAndCamera = (lng, lat, heading) => {
+        lastKnownLngLat = [lng, lat];
+        currentHeading = typeof heading === 'number' && !isNaN(heading) ? heading : 0;
+        vehicleVisualLngLat = [lng, lat];
+        vehicleVisualHeading = currentHeading;
+        if (vehicleMarker) {
+            vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+        }
+        if (alignCamera && map) {
+            setCameraFollow(true);
+            map.easeTo({
+                center: lastKnownLngLat,
+                zoom: Math.max(map.getZoom(), 17),
+                bearing: isHeadingUpMode ? currentHeading : 0,
+                offset: [0, 100],
+                duration: 450
+            });
+        }
+    };
+
+    if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
+        applyRealGpsToMarkerAndCamera(lastValidGpsLng, lastValidGpsLat, lastRealGpsHeading);
+    } else if ('geolocation' in navigator) {
+        // 若尚未有歷史真實定位快取，立即主動請求一次最新 GPS 並同步歸位
+        if (vehicleMarker && Array.isArray(lastKnownLngLat)) {
+            vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+        }
+        navigator.geolocation.getCurrentPosition(pos => {
+            const filtered = processFilteredGpsPosition(pos);
+            const lng = filtered ? filtered.lng : pos.coords.longitude;
+            const lat = filtered ? filtered.lat : pos.coords.latitude;
+            const head = filtered ? filtered.heading : lastRealGpsHeading;
+            if (!isReplaying && typeof lng === 'number' && typeof lat === 'number') {
+                applyRealGpsToMarkerAndCamera(lng, lat, head);
+            }
+        }, () => {}, { enableHighAccuracy: true, timeout: 6000 });
+    }
+}
+
 function backToMain() {
+    const wasReplaying = isReplaying;
     stopSmoothPlayback();
     VoiceQueue.clear();
     if (followWatchId !== null) {
@@ -4098,11 +4183,8 @@ function backToMain() {
     clearDomMarkers(); updateRouteLayers([]);
     map.getSource('bg-route')?.setData(emptyGeoJSON());
     
-    // 🚀 新增：回到主畫面時，強制將車子座標拉回最後一次紀錄的真實 GPS 位置
-    if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
-        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
-        if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-    }
+    // 🚀 回到主畫面或離開重播時，將 isReplaying 設回 false，並將黃色垃圾車 Marker 與地圖鏡頭恢復對齊至最新真實 GPS 位置
+    restoreRealGpsAfterReplay(wasReplaying || isFollowingCamera);
     
     releaseScreenWakeLockIfIdle();
     startIdleGPS();
@@ -4113,13 +4195,9 @@ document.getElementById('topBackBtn').onclick = (e) => {
         stopSmoothPlayback(); 
         VoiceQueue.clear(); 
         
-        // 🚀 新增：按左上角返回中斷重播時，拉回真實位置
-        if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
-            lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
-            if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-        }
-        
-        window.openRouteDetail(selectedRouteIdx);
+        // 🚀 離開重播模式時，將 isReplaying 設回 false，先開啟路線預覽面板（不覆蓋鏡頭），再立即將黃色垃圾車與地圖鏡頭對齊真實 GPS 位置
+        window.openRouteDetail(selectedRouteIdx, true);
+        restoreRealGpsAfterReplay(true);
     } else if (!document.getElementById('followStopBtn').classList.contains('hidden') || !document.getElementById('tacticalStopBtn').classList.contains('hidden')) {
         document.getElementById('followStopBtn').click();
     } else if (!document.getElementById('routeDetailUI').classList.contains('hidden')) {
@@ -4434,6 +4512,14 @@ document.getElementById('startReplayBtn').onclick = () => {
 
     stopSmoothPlayback();
 
+    // 🛡️ 進入「重播複習」模式：開啟 isReplaying 鎖定車輛控制權，徹底隔離真實 GPS 定位回呼與補間動畫
+    isReplaying = true;
+    window.isReplaying = true;
+    if (vehicleAnimFrameId !== null) {
+        cancelAnimationFrame(vehicleAnimFrameId);
+        vehicleAnimFrameId = null;
+    }
+
     document.getElementById('routeDetailUI').classList.add('hidden');
     document.getElementById('playbackUI').classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = '路線重播複習';
@@ -4454,8 +4540,17 @@ document.getElementById('startReplayBtn').onclick = () => {
     const startPt = route.points[0];
     lastKnownLngLat = [startPt.lng, startPt.lat];
     currentHeading = getRouteSegmentBearing(route.points, 0);
-    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-    map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, 100] });
+    vehicleVisualLngLat = [...lastKnownLngLat];
+    vehicleVisualHeading = currentHeading;
+    if (vehicleMarker) {
+        vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+    }
+    map.jumpTo({
+        center: lastKnownLngLat,
+        zoom: 17.5,
+        bearing: isHeadingUpMode ? currentHeading : 0,
+        offset: [0, 100]
+    });
 
     startSmoothPlayback();
 };
@@ -4475,12 +4570,24 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
     const curLat = p1.lat + (p2.lat - p1.lat) * frac;
     lastKnownLngLat = [curLng, curLat];
 
-    if (currentTrackIndex < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) {
+    // 同步計算目前點位到下一個有效點位的方位角（Bearing），即時更新黃色垃圾車的車頭旋轉角度
+    const segDistM = getDistanceKm(p1.lng, p1.lat, p2.lng, p2.lat) * 1000;
+    if (currentTrackIndex < maxIdx && segDistM >= 0.05) {
         currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
     } else {
         currentHeading = getRouteSegmentBearing(pts, currentTrackIndex);
     }
-    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+
+    // 確保任何殘留的真實 GPS 補間動畫不會干擾重播車輛
+    if (vehicleAnimFrameId !== null) {
+        cancelAnimationFrame(vehicleAnimFrameId);
+        vehicleAnimFrameId = null;
+    }
+    vehicleVisualLngLat = [curLng, curLat];
+    vehicleVisualHeading = currentHeading;
+    if (vehicleMarker) {
+        vehicleMarker.setLngLat([curLng, curLat]).setRotation(currentHeading);
+    }
 
     // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 為半透明淺灰，currentTrackIndex ~ 終點維持原色高亮
     updateProgressRouteLayers(
@@ -4499,7 +4606,7 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)";
     }
 
-    // 🔊 綁定路線進度的雙層語音預警（300m 預告 + 50m 確認 + 方向 ±30° + played 鎖定）
+    // 🔊 綁定路線進度的雙層語音預警（100m 預告 + 45m 確認 + 方向 ±30° + played 鎖定）
     evaluateVoiceMarkersWithProgress({
         events: replayVoiceEvents,
         pts,
@@ -4512,7 +4619,11 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
     });
 
     if (isFollowingCamera) {
-        map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100] });
+        map.jumpTo({
+            center: [curLng, curLat],
+            bearing: isHeadingUpMode ? currentHeading : 0,
+            offset: [0, 100]
+        });
     }
 }
 
@@ -4545,6 +4656,8 @@ function startSmoothPlayback() {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
     }
+    isReplaying = true;
+    window.isReplaying = true;
     const route = savedRoutes[selectedRouteIdx];
     if (route && playProgress >= route.points.length - 1) {
         playProgress = 0;
@@ -4573,6 +4686,8 @@ function stopSmoothPlayback() {
 
 playPauseBtn.onclick = () => isPlaying ? stopSmoothPlayback() : startSmoothPlayback();
 playbackSlider.oninput = (e) => {
+    isReplaying = true;
+    window.isReplaying = true;
     playProgress = parseInt(e.target.value, 10) / 100;
     const scrubTrackIdx = Math.floor(playProgress);
     const curCumM = replayCumMeters[scrubTrackIdx] || 0;
@@ -4594,7 +4709,11 @@ playbackSlider.oninput = (e) => {
 };
 speedToggleBtn.onclick = () => {
     const nextIdx = (speedOptions.indexOf(speedMultiplier) + 1) % speedOptions.length;
-    speedMultiplier = speedOptions[nextIdx]; speedToggleBtn.innerText = `${speedMultiplier}x`;
+    speedMultiplier = speedOptions[nextIdx];
+    speedToggleBtn.innerText = `${speedMultiplier}x`;
+    if (isReplaying) {
+        renderInterpolatedStep(playProgress, false);
+    }
 };
 document.getElementById('stopPlaybackBtn').onclick = () => { 
     stopSmoothPlayback();
@@ -4603,13 +4722,9 @@ document.getElementById('stopPlaybackBtn').onclick = () => {
     document.getElementById('musicAlertBanner').classList.add('hidden');
     document.getElementById('topBackBtn').classList.remove('hidden');
     
-    // 🚀 新增：退出重播時，瞬間把車子拉回真實位置
-    if (lastValidGpsLng !== null && lastValidGpsLat !== null) {
-        lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
-        if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
-    }
-    
-    window.openRouteDetail(selectedRouteIdx); 
+    // 🚀 結束重播後自動歸位：先渲染路線預覽面板（不覆蓋鏡頭），再立即將 isReplaying 設回 false 並將黃色垃圾車與地圖鏡頭對齊最新真實 GPS 位置
+    window.openRouteDetail(selectedRouteIdx, true); 
+    restoreRealGpsAfterReplay(true);
 };
 
 // --- 7. 🔥 Pro Max 級實戰導航引擎 ＆ 全螢幕純黑智慧省電模式 ---
@@ -4808,6 +4923,9 @@ function updateTacticalDisplay() {
 }
 
 document.getElementById('startFollowBtn').onclick = async () => {
+    isReplaying = false;
+    window.isReplaying = false;
+    stopSmoothPlayback();
     stopIdleGPS();
     // 單一實例保護：啟動前先清除舊的導航監聽與戰術計時器
     if (followWatchId !== null) {

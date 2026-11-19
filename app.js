@@ -541,20 +541,187 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量旋轉地圖 ---
+// --- 1. 初始化 MapLibre GL 向量旋轉地圖（無字底圖 ＋ 獨立向量文字標註層，確保「車頭朝上」旋轉時所有路名、地名、地標文字永遠與螢幕水平直立） ---
+const VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT = {
+    'text-rotation-alignment': 'viewport',
+    'icon-rotation-alignment': 'viewport',
+    'text-pitch-alignment': 'viewport',
+    'icon-pitch-alignment': 'viewport',
+    'text-keep-upright': true
+};
+
 const map = new maplibregl.Map({
     container: 'map',
     style: {
         version: 8,
+        glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
         sources: {
             'google-maps': {
                 type: 'raster',
-                tiles: ['https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'],
+                // 移除底圖圖片內嵌的死文字 (s.e:l|p.v:off)，改由下方 MapLibre 向量 Symbol 圖層動態渲染並強制 viewport 螢幕水平對齊
+                tiles: ['https://mt1.google.com/vt/lyrs=m&apistyle=s.e:l%7Cp.v:off&x={x}&y={y}&z={z}'],
                 tileSize: 256,
-                attribution: '© Google'
+                attribution: '© Google, © OpenStreetMap'
+            },
+            'openmaptiles': {
+                type: 'vector',
+                url: 'https://tiles.openfreemap.org/planet'
             }
         },
-        layers: [{ id: 'google-maps-layer', type: 'raster', source: 'google-maps' }]
+        layers: [
+            {
+                id: 'google-maps-layer',
+                type: 'raster',
+                source: 'google-maps'
+            },
+            {
+                id: 'highway-name-path',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'transportation_name',
+                minzoom: 15.5,
+                filter: ['==', ['get', 'class'], 'path'],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'symbol-placement': 'point',
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Regular'],
+                    'text-size': 12,
+                    'text-max-width': 9
+                },
+                paint: {
+                    'text-color': '#475569',
+                    'text-halo-color': 'rgba(255,255,255,0.95)',
+                    'text-halo-width': 2
+                }
+            },
+            {
+                id: 'highway-name-minor',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'transportation_name',
+                minzoom: 14,
+                filter: ['in', ['get', 'class'], ['literal', ['minor', 'service', 'track']]],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'symbol-placement': 'point',
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Bold'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 14, 12, 17, 14, 19, 15.5],
+                    'text-max-width': 10,
+                    'text-padding': 14
+                },
+                paint: {
+                    'text-color': '#1e293b',
+                    'text-halo-color': 'rgba(255,255,255,0.96)',
+                    'text-halo-width': 2.2
+                }
+            },
+            {
+                id: 'highway-name-major',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'transportation_name',
+                minzoom: 11.5,
+                filter: ['in', ['get', 'class'], ['literal', ['primary', 'secondary', 'tertiary', 'trunk', 'motorway']]],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'symbol-placement': 'point',
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Bold'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 12, 12.5, 15, 14.5, 18, 16.5],
+                    'text-max-width': 10,
+                    'text-padding': 16
+                },
+                paint: {
+                    'text-color': '#0f172a',
+                    'text-halo-color': 'rgba(255,255,255,0.98)',
+                    'text-halo-width': 2.5
+                }
+            },
+            {
+                id: 'housenumber-label',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'housenumber',
+                minzoom: 17.2,
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'text-field': '{housenumber}',
+                    'text-font': ['Noto Sans Regular'],
+                    'text-size': 10.5,
+                    'text-padding': 4
+                },
+                paint: {
+                    'text-color': '#475569',
+                    'text-halo-color': 'rgba(255,255,255,0.92)',
+                    'text-halo-width': 1.6
+                }
+            },
+            {
+                id: 'poi-label',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'poi',
+                minzoom: 14.5,
+                filter: ['has', 'name'],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Regular'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 14.5, 11.5, 17, 13],
+                    'text-max-width': 8,
+                    'text-padding': 8
+                },
+                paint: {
+                    'text-color': '#b45309',
+                    'text-halo-color': 'rgba(255,255,255,0.96)',
+                    'text-halo-width': 2
+                }
+            },
+            {
+                id: 'place-village-label',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'place',
+                minzoom: 12,
+                filter: ['in', ['get', 'class'], ['literal', ['village', 'suburb', 'neighbourhood', 'quarter', 'hamlet']]],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Bold'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 12, 12.5, 16, 15],
+                    'text-max-width': 8,
+                    'text-padding': 10
+                },
+                paint: {
+                    'text-color': '#334155',
+                    'text-halo-color': 'rgba(255,255,255,0.96)',
+                    'text-halo-width': 2.2
+                }
+            },
+            {
+                id: 'place-town-label',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'place',
+                minzoom: 9,
+                maxzoom: 16,
+                filter: ['in', ['get', 'class'], ['literal', ['town', 'city']]],
+                layout: {
+                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
+                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
+                    'text-font': ['Noto Sans Bold'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 9, 13, 14, 17],
+                    'text-max-width': 8
+                },
+                paint: {
+                    'text-color': '#0f172a',
+                    'text-halo-color': 'rgba(255,255,255,0.98)',
+                    'text-halo-width': 2.4
+                }
+            }
+        ]
     },
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
@@ -764,8 +931,8 @@ setInterval(() => {
 }, 60000);
 
 // ==========================================
-// 🗺️ 地圖路名與地標文字永遠跟隨駕駛視角轉正 (text-rotation-alignment: 'viewport')
-// 避免「車頭上」模式旋轉時文字倒立
+// 🗺️ 地圖路名、地名、地標文字與自訂符號圖層永遠與手機螢幕水平對齊 (viewport + text-keep-upright: true)
+// 徹底防止「車頭朝上」旋轉地圖時文字或圖標跟著傾斜、顛倒
 // ==========================================
 function fixSymbolTextAlignment() {
     try {
@@ -776,8 +943,9 @@ function fixSymbolTextAlignment() {
             if (layer.type === 'symbol') {
                 try {
                     map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
-                    map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
                     map.setLayoutProperty(layer.id, 'icon-rotation-alignment', 'viewport');
+                    map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
+                    map.setLayoutProperty(layer.id, 'icon-pitch-alignment', 'viewport');
                     map.setLayoutProperty(layer.id, 'text-keep-upright', true);
                 } catch (e) {}
             }
@@ -788,7 +956,8 @@ function fixSymbolTextAlignment() {
 }
 
 map.on('load', () => {
-    vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
+    // 僅有黃色清運車輛 Marker (vehicleMarker) 保留 rotationAlignment: 'map' 隨車頭方位角旋轉
+    vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
     vehicleVisualLngLat = [...lastKnownLngLat];
     vehicleVisualHeading = currentHeading;
     
@@ -801,7 +970,31 @@ map.on('load', () => {
     map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
     map.addLayer({ id: 'freehand-temp-layer', type: 'line', source: 'freehand-temp-source', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 } });
 
-    // 修正地圖文字圖層對齊（避免車頭上模式文字倒立）並根據日出日落套用自動日夜模式
+    // 自訂標記點與起終點 Symbol Layer 防斜保護（強制 viewport 螢幕水平對齊）
+    map.addSource('custom-route-symbols', { type: 'geojson', data: emptyGeoJSON() });
+    map.addLayer({
+        id: 'custom-route-symbols-layer',
+        type: 'symbol',
+        source: 'custom-route-symbols',
+        layout: {
+            "text-rotation-alignment": "viewport",
+            "icon-rotation-alignment": "viewport",
+            "text-pitch-alignment": "viewport",
+            "icon-pitch-alignment": "viewport",
+            "text-keep-upright": true,
+            "text-field": ["get", "label"],
+            "text-font": ["Noto Sans Bold"],
+            "text-size": 12,
+            "text-offset": [0, 1.2]
+        },
+        paint: {
+            "text-color": "#0f172a",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 2
+        }
+    });
+
+    // 修正地圖所有文字與符號圖層對齊（避免車頭朝上模式文字傾斜或倒立）並根據日出日落套用自動日夜模式
     fixSymbolTextAlignment();
     checkAndApplyAutoDayNightMode();
 
@@ -812,7 +1005,7 @@ map.on('load', () => {
     });
 });
 
-// 切換或更新地圖樣式後重新修正文字對齊
+// 切換或更新地圖樣式後重新強制所有 symbol 圖層螢幕水平對齊
 map.on('style.load', () => {
     fixSymbolTextAlignment();
     isNightMapStyleActive = null;
@@ -1410,7 +1603,11 @@ function clearDomMarkers() {
 function addPinMarker(lngLat, htmlContent) {
     const el = document.createElement('div');
     el.innerHTML = htmlContent;
-    const m = new maplibregl.Marker({ element: el.firstElementChild }).setLngLat(lngLat).addTo(map);
+    const m = new maplibregl.Marker({
+        element: el.firstElementChild,
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    }).setLngLat(lngLat).addTo(map);
     domMarkers.push(m);
 }
 
@@ -1825,7 +2022,11 @@ function renderRouteMarkers(route) {
                 e.stopPropagation();
                 openViewAlertModal(ev);
             };
-            const m = new maplibregl.Marker({ element: markerEl }).setLngLat([ev.lng, ev.lat]).addTo(map);
+            const m = new maplibregl.Marker({
+                element: markerEl,
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            }).setLngLat([ev.lng, ev.lat]).addTo(map);
             domMarkers.push(m);
         }
     });
@@ -2275,7 +2476,11 @@ function renderPathEditNodes(route) {
             }
         };
 
-        const midMarker = new maplibregl.Marker({ element: midEl })
+        const midMarker = new maplibregl.Marker({
+            element: midEl,
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
             .setLngLat([midLng, midLat])
             .addTo(map);
         pathEditMarkers.push(midMarker);
@@ -2302,7 +2507,12 @@ function renderPathEditNodes(route) {
         }
         el.title = `節點 #${ptIdx + 1}（按住拖曳位置，點擊開啟修剪選單）`;
 
-        const m = new maplibregl.Marker({ element: el, draggable: true })
+        const m = new maplibregl.Marker({
+            element: el,
+            draggable: true,
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
             .setLngLat([pt.lng, pt.lat])
             .addTo(map);
         m._ptIdx = ptIdx;
@@ -2405,7 +2615,11 @@ function renderFreehandSpliceNodes(route) {
             handleFreehandNodeClick(route, ptIdx);
         });
 
-        const m = new maplibregl.Marker({ element: el })
+        const m = new maplibregl.Marker({
+            element: el,
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
             .setLngLat([pt.lng, pt.lat])
             .addTo(map);
         pathEditMarkers.push(m);
@@ -3087,7 +3301,11 @@ function renderEditableRouteMarkers(route) {
         } else {
             markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
         }
-        const m = new maplibregl.Marker({ element: markerEl }).setLngLat([ev.lng, ev.lat]).addTo(map);
+        const m = new maplibregl.Marker({
+            element: markerEl,
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        }).setLngLat([ev.lng, ev.lat]).addTo(map);
         domMarkers.push(m);
     });
 
@@ -3097,7 +3315,12 @@ function renderEditableRouteMarkers(route) {
             markerEl.className = `music-marker bg-indigo-600 border border-white shadow-lg cursor-grab active:cursor-grabbing`;
             markerEl.innerHTML = `<i class="fa-regular fa-clock"></i> ${p.scheduled_time} <i class="fa-solid fa-pen ml-1 opacity-70"></i>`;
             
-            const m = new maplibregl.Marker({ element: markerEl, draggable: true }).setLngLat([p.lng, p.lat]).addTo(map);
+            const m = new maplibregl.Marker({
+                element: markerEl,
+                draggable: true,
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            }).setLngLat([p.lng, p.lat]).addTo(map);
 
             m.on('dragstart', () => {
                 pushEditUndoSnapshot(route);
@@ -3633,7 +3856,11 @@ map.on('click', (e) => {
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             const el = document.createElement('div');
             el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 選擇位置中...</div>`;
-            tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
+            tempMarkerA = new maplibregl.Marker({
+                element: el,
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
             
             window.currentEditData = { route, editStartIndex };
             document.getElementById('customActionModal').classList.remove('hidden');
@@ -6443,7 +6670,12 @@ async function fetchAndRenderFleetRadar() {
                     existingEntry.speedKmh = memberSpeedKmh;
                 } else {
                     const el = createFleetTruckMarkerElement(memberName);
-                    const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+                    const marker = new maplibregl.Marker({
+                        element: el,
+                        anchor: 'bottom',
+                        rotationAlignment: 'viewport',
+                        pitchAlignment: 'viewport'
+                    })
                         .setLngLat([lng, lat])
                         .addTo(map);
                     fleetLayerGroup[devId] = {
@@ -6842,7 +7074,12 @@ function updatePinDistanceGuideRender() {
             e.stopPropagation();
             clearPinDistanceGuide();
         };
-        pinDistanceLineMarker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
+        pinDistanceLineMarker = new maplibregl.Marker({
+            element: badgeEl,
+            anchor: 'center',
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
             .setLngLat([midLng, midLat])
             .addTo(map);
     } else {
@@ -7260,14 +7497,24 @@ function upsertPinMarkerOnMap(pinId, pinData) {
         if (pinsLayerGroup[pinId].signature !== signature) {
             try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
             const el = createSharedPinMarkerElement(normalizedPin);
-            const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+            const marker = new maplibregl.Marker({
+                element: el,
+                anchor: 'bottom',
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            })
                 .setLngLat([lng, lat])
                 .addTo(map);
             pinsLayerGroup[pinId] = { marker, el, data: normalizedPin, signature };
         }
     } else {
         const el = createSharedPinMarkerElement(normalizedPin);
-        const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+        const marker = new maplibregl.Marker({
+            element: el,
+            anchor: 'bottom',
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        })
             .setLngLat([lng, lat])
             .addTo(map);
         pinsLayerGroup[pinId] = { marker, el, data: normalizedPin, signature };

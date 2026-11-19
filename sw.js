@@ -19,6 +19,7 @@ function isMapTileRequest(url) {
         path.endsWith('.mvt') ||
         href.includes('.pbf?') ||
         href.includes('.mvt?') ||
+        url.hostname.includes('tiles.openfreemap.org') ||
         url.hostname.includes('mt0.google.com') ||
         url.hostname.includes('mt1.google.com') ||
         url.hostname.includes('mt2.google.com') ||

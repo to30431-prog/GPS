@@ -47,7 +47,6 @@ const DEFAULT_SYSTEM_CONFIG = {
     lowSpeedZoom: 17.5,
     highSpeedZoom: 14.5,
     enableDynamicZoom: true,
-    enableAutoNightMode: true,
     showOnlineFleetList: true,
     maxAccuracyMeters: 45,
     maxSpeedKmh: 160,
@@ -72,7 +71,6 @@ function normalizeSystemConfig(raw) {
         lowSpeedZoom: Number(clampNum(src.lowSpeedZoom, 12, 21, DEFAULT_SYSTEM_CONFIG.lowSpeedZoom).toFixed(2)),
         highSpeedZoom: Number(clampNum(src.highSpeedZoom, 10, 20, DEFAULT_SYSTEM_CONFIG.highSpeedZoom).toFixed(2)),
         enableDynamicZoom: typeof src.enableDynamicZoom === 'boolean' ? src.enableDynamicZoom : DEFAULT_SYSTEM_CONFIG.enableDynamicZoom,
-        enableAutoNightMode: typeof src.enableAutoNightMode === 'boolean' ? src.enableAutoNightMode : DEFAULT_SYSTEM_CONFIG.enableAutoNightMode,
         showOnlineFleetList: typeof src.showOnlineFleetList === 'boolean' ? src.showOnlineFleetList : DEFAULT_SYSTEM_CONFIG.showOnlineFleetList,
         maxAccuracyMeters: clampNum(src.maxAccuracyMeters, 5, 300, DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters),
         maxSpeedKmh: clampNum(src.maxSpeedKmh, 30, 300, DEFAULT_SYSTEM_CONFIG.maxSpeedKmh),
@@ -316,8 +314,6 @@ function startIdleGPS() {
         const filtered = processFilteredGpsPosition(pos);
         if (!filtered) return; // 誤差 > 45m 或 > 160km/h 暴衝跳點直接捨棄
 
-        checkAndApplyAutoDayNightMode(filtered.lat, filtered.lng);
-
         if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
             window.onFleetPositionUpdate(filtered.lat, filtered.lng);
         }
@@ -558,7 +554,9 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量旋轉地圖（無字底圖 ＋ 獨立向量文字標註層，確保「車頭朝上」旋轉時所有路名、地名、地標文字永遠與螢幕水平直立） ---
+// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用清晰的日間 OpenFreeMap liberty 亮色樣式，並強制所有路名、地名、地標文字永遠與螢幕水平直立 viewport） ---
+const OPENFREEMAP_DAY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+
 const VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT = {
     'text-rotation-alignment': 'viewport',
     'icon-rotation-alignment': 'viewport',
@@ -567,179 +565,14 @@ const VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT = {
     'text-keep-upright': true
 };
 
+// 記錄最後一次繪製的路線 GeoJSON 資料，確保底圖載入後無縫繪製所有路線圖層
+let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+
 const map = new maplibregl.Map({
     container: 'map',
-    style: {
-        version: 8,
-        glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
-        sources: {
-            'google-maps': {
-                type: 'raster',
-                // 移除底圖圖片內嵌的死文字 (s.e:l|p.v:off)，改由下方 MapLibre 向量 Symbol 圖層動態渲染並強制 viewport 螢幕水平對齊
-                tiles: ['https://mt1.google.com/vt/lyrs=m&apistyle=s.e:l%7Cp.v:off&x={x}&y={y}&z={z}'],
-                tileSize: 256,
-                attribution: '© Google, © OpenStreetMap'
-            },
-            'openmaptiles': {
-                type: 'vector',
-                url: 'https://tiles.openfreemap.org/planet'
-            }
-        },
-        layers: [
-            {
-                id: 'google-maps-layer',
-                type: 'raster',
-                source: 'google-maps'
-            },
-            {
-                id: 'highway-name-path',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'transportation_name',
-                minzoom: 15.5,
-                filter: ['==', ['get', 'class'], 'path'],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'symbol-placement': 'point',
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Regular'],
-                    'text-size': 12,
-                    'text-max-width': 9
-                },
-                paint: {
-                    'text-color': '#475569',
-                    'text-halo-color': 'rgba(255,255,255,0.95)',
-                    'text-halo-width': 2
-                }
-            },
-            {
-                id: 'highway-name-minor',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'transportation_name',
-                minzoom: 14,
-                filter: ['in', ['get', 'class'], ['literal', ['minor', 'service', 'track']]],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'symbol-placement': 'point',
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Bold'],
-                    'text-size': ['interpolate', ['linear'], ['zoom'], 14, 12, 17, 14, 19, 15.5],
-                    'text-max-width': 10,
-                    'text-padding': 14
-                },
-                paint: {
-                    'text-color': '#1e293b',
-                    'text-halo-color': 'rgba(255,255,255,0.96)',
-                    'text-halo-width': 2.2
-                }
-            },
-            {
-                id: 'highway-name-major',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'transportation_name',
-                minzoom: 11.5,
-                filter: ['in', ['get', 'class'], ['literal', ['primary', 'secondary', 'tertiary', 'trunk', 'motorway']]],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'symbol-placement': 'point',
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Bold'],
-                    'text-size': ['interpolate', ['linear'], ['zoom'], 12, 12.5, 15, 14.5, 18, 16.5],
-                    'text-max-width': 10,
-                    'text-padding': 16
-                },
-                paint: {
-                    'text-color': '#0f172a',
-                    'text-halo-color': 'rgba(255,255,255,0.98)',
-                    'text-halo-width': 2.5
-                }
-            },
-            {
-                id: 'housenumber-label',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'housenumber',
-                minzoom: 17.2,
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'text-field': '{housenumber}',
-                    'text-font': ['Noto Sans Regular'],
-                    'text-size': 10.5,
-                    'text-padding': 4
-                },
-                paint: {
-                    'text-color': '#475569',
-                    'text-halo-color': 'rgba(255,255,255,0.92)',
-                    'text-halo-width': 1.6
-                }
-            },
-            {
-                id: 'poi-label',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'poi',
-                minzoom: 14.5,
-                filter: ['has', 'name'],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Regular'],
-                    'text-size': ['interpolate', ['linear'], ['zoom'], 14.5, 11.5, 17, 13],
-                    'text-max-width': 8,
-                    'text-padding': 8
-                },
-                paint: {
-                    'text-color': '#b45309',
-                    'text-halo-color': 'rgba(255,255,255,0.96)',
-                    'text-halo-width': 2
-                }
-            },
-            {
-                id: 'place-village-label',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'place',
-                minzoom: 12,
-                filter: ['in', ['get', 'class'], ['literal', ['village', 'suburb', 'neighbourhood', 'quarter', 'hamlet']]],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Bold'],
-                    'text-size': ['interpolate', ['linear'], ['zoom'], 12, 12.5, 16, 15],
-                    'text-max-width': 8,
-                    'text-padding': 10
-                },
-                paint: {
-                    'text-color': '#334155',
-                    'text-halo-color': 'rgba(255,255,255,0.96)',
-                    'text-halo-width': 2.2
-                }
-            },
-            {
-                id: 'place-town-label',
-                type: 'symbol',
-                source: 'openmaptiles',
-                'source-layer': 'place',
-                minzoom: 9,
-                maxzoom: 16,
-                filter: ['in', ['get', 'class'], ['literal', ['town', 'city']]],
-                layout: {
-                    ...VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT,
-                    'text-field': ['coalesce', ['get', 'name:zh-Hant'], ['get', 'name:zh'], ['get', 'name:latin'], ['get', 'name']],
-                    'text-font': ['Noto Sans Bold'],
-                    'text-size': ['interpolate', ['linear'], ['zoom'], 9, 13, 14, 17],
-                    'text-max-width': 8
-                },
-                paint: {
-                    'text-color': '#0f172a',
-                    'text-halo-color': 'rgba(255,255,255,0.98)',
-                    'text-halo-width': 2.4
-                }
-            }
-        ]
-    },
+    style: OPENFREEMAP_DAY_STYLE_URL,
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
@@ -866,98 +699,159 @@ function getDynamicZoomBySpeed(speedKmh) {
 }
 
 // ==========================================
-// 🌗 自動日夜模式（依裝置經緯度與當下日期時間計算日出／日落，天黑自動切換暗色系夜間地圖樣式）
+// 🛣️ 自訂路線圖層（保留「音樂開（綠色）／音樂關（藍色）／已行駛（半透明淺灰）」分段顏色與俐落外框邊線 line-casing）
 // ==========================================
-let isNightMapStyleActive = null;
-
-function computeSunriseSunset(lat = 24.954, lng = 121.346, date = new Date()) {
-    const toRad = d => d * Math.PI / 180;
-    const toDeg = r => r * 180 / Math.PI;
-
-    const startOfYear = new Date(date.getFullYear(), 0, 0);
-    const diffMs = date - startOfYear;
-    const dayOfYear = Math.floor(diffMs / 86400000);
-
-    // 太陽赤緯角 (Solar Declination)
-    const gamma = ((2 * Math.PI) / 365) * (dayOfYear - 1 + (date.getHours() - 12) / 24);
-    const eqTime = 229.18 * (
-        0.000075 +
-        0.001868 * Math.cos(gamma) -
-        0.032077 * Math.sin(gamma) -
-        0.014615 * Math.cos(2 * gamma) -
-        0.040849 * Math.sin(2 * gamma)
-    );
-    const decl = 0.006918 -
-        0.399912 * Math.cos(gamma) +
-        0.070257 * Math.sin(gamma) -
-        0.006758 * Math.cos(2 * gamma) +
-        0.000907 * Math.sin(2 * gamma) -
-        0.002697 * Math.cos(3 * gamma) +
-        0.00148 * Math.sin(3 * gamma);
-
-    const zenith = 90.833;
-    const cosHa = (Math.cos(toRad(zenith)) / (Math.cos(toRad(lat)) * Math.cos(decl))) -
-                  (Math.tan(toRad(lat)) * Math.tan(decl));
-
-    // 極晝／極夜防呆 fallback（台灣緯度不會發生，預設 06:00 ~ 18:00）
-    if (cosHa > 1 || cosHa < -1 || isNaN(cosHa)) {
-        const curHr = date.getHours() + date.getMinutes() / 60;
-        return { sunriseHour: 6.0, sunsetHour: 18.0, isNight: (curHr < 6.0 || curHr >= 18.0) };
-    }
-
-    const haDeg = toDeg(Math.acos(cosHa));
-    const tzOffsetHours = -date.getTimezoneOffset() / 60;
-    const solarNoonMin = 720 - (4 * lng) - eqTime + (tzOffsetHours * 60);
-    const sunriseMin = solarNoonMin - haDeg * 4;
-    const sunsetMin = solarNoonMin + haDeg * 4;
-
-    const sunriseHour = sunriseMin / 60;
-    const sunsetHour = sunsetMin / 60;
-    const currentLocalHour = date.getHours() + date.getMinutes() / 60;
-    const isNight = (currentLocalHour < sunriseHour || currentLocalHour >= sunsetHour);
-
-    return { sunriseHour, sunsetHour, isNight };
-}
-
-function applyDayNightMapTheme(isNight) {
-    if (!map || !map.getLayer('google-maps-layer')) return;
-    if (isNightMapStyleActive === isNight) return;
-    isNightMapStyleActive = isNight;
+function ensureCustomRouteSourcesAndLayers() {
+    if (!map) return;
 
     try {
-        if (isNight) {
-            // 🌙 夜間暗色系護眼地圖樣式：壓低底圖反光亮度與飽和度，同時讓綠色／藍色清運路線與標記維持高對比清晰度
-            map.setPaintProperty('google-maps-layer', 'raster-brightness-max', 0.42);
-            map.setPaintProperty('google-maps-layer', 'raster-brightness-min', 0.04);
-            map.setPaintProperty('google-maps-layer', 'raster-saturation', -0.45);
-            map.setPaintProperty('google-maps-layer', 'raster-contrast', 0.18);
-            document.body?.classList.add('night-map-mode');
-        } else {
-            // ☀️ 日間高清晰明亮地圖樣式
-            map.setPaintProperty('google-maps-layer', 'raster-brightness-max', 1.0);
-            map.setPaintProperty('google-maps-layer', 'raster-brightness-min', 0.0);
-            map.setPaintProperty('google-maps-layer', 'raster-saturation', 0.0);
-            map.setPaintProperty('google-maps-layer', 'raster-contrast', 0.0);
-            document.body?.classList.remove('night-map-mode');
+        // 1. 已行駛路段（半透明淺灰色 + 柔和外框）
+        if (!map.getSource('bg-route')) {
+            map.addSource('bg-route', { type: 'geojson', data: cachedBgRouteGeoJSON || emptyGeoJSON() });
         }
-    } catch (e) {}
-}
+        if (!map.getLayer('bg-route-casing')) {
+            map.addLayer({
+                id: 'bg-route-casing',
+                type: 'line',
+                source: 'bg-route',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 9,
+                    'line-opacity': 0.5,
+                    'line-blur': 0.5
+                }
+            });
+        }
+        if (!map.getLayer('bg-route-line')) {
+            map.addLayer({
+                id: 'bg-route-line',
+                type: 'line',
+                source: 'bg-route',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#94a3b8',
+                    'line-width': 6,
+                    'line-opacity': 0.45
+                }
+            });
+        }
 
-function checkAndApplyAutoDayNightMode(lat, lng, date = new Date()) {
-    const useLat = (typeof lat === 'number' && !isNaN(lat)) ? lat : (lastKnownLngLat?.[1] ?? 24.954);
-    const useLng = (typeof lng === 'number' && !isNaN(lng)) ? lng : (lastKnownLngLat?.[0] ?? 121.346);
-    if (!systemNavConfig.enableAutoNightMode) {
-        applyDayNightMapTheme(false);
-        return { sunriseHour: 6.0, sunsetHour: 18.0, isNight: false };
+        // 2. 音樂關閉路段（藍色虛線 + 俐落外框邊線 line-casing）
+        if (!map.getSource('route-Silent')) {
+            map.addSource('route-Silent', { type: 'geojson', data: cachedSilentRouteGeoJSON || emptyGeoJSON() });
+        }
+        if (!map.getLayer('route-silent-casing')) {
+            map.addLayer({
+                id: 'route-silent-casing',
+                type: 'line',
+                source: 'route-Silent',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 9,
+                    'line-opacity': 0.85,
+                    'line-blur': 0.5
+                }
+            });
+        }
+        if (!map.getLayer('route-silent-line')) {
+            map.addLayer({
+                id: 'route-silent-line',
+                type: 'line',
+                source: 'route-Silent',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#3b82f6',
+                    'line-width': 6,
+                    'line-dasharray': [2, 2]
+                }
+            });
+        }
+
+        // 3. 音樂開啟清運路段（綠色實線 + 俐落外框邊線 line-casing）
+        if (!map.getSource('route-music')) {
+            map.addSource('route-music', { type: 'geojson', data: cachedMusicRouteGeoJSON || emptyGeoJSON() });
+        }
+        if (!map.getLayer('route-music-casing')) {
+            map.addLayer({
+                id: 'route-music-casing',
+                type: 'line',
+                source: 'route-music',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 10.5,
+                    'line-opacity': 0.9,
+                    'line-blur': 0.5
+                }
+            });
+        }
+        if (!map.getLayer('route-music-line')) {
+            map.addLayer({
+                id: 'route-music-line',
+                type: 'line',
+                source: 'route-music',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#16a34a',
+                    'line-width': 7
+                }
+            });
+        }
+
+        if (!map.getSource('freehand-temp-source')) {
+            map.addSource('freehand-temp-source', {
+                type: 'geojson',
+                data: (typeof freehandDraftCoords !== 'undefined' && Array.isArray(freehandDraftCoords) && freehandDraftCoords.length >= 2)
+                    ? { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: freehandDraftCoords } }] }
+                    : emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('freehand-temp-layer')) {
+            map.addLayer({
+                id: 'freehand-temp-layer',
+                type: 'line',
+                source: 'freehand-temp-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 }
+            });
+        }
+
+        if (!map.getSource('custom-route-symbols')) {
+            map.addSource('custom-route-symbols', { type: 'geojson', data: emptyGeoJSON() });
+        }
+        if (!map.getLayer('custom-route-symbols-layer')) {
+            map.addLayer({
+                id: 'custom-route-symbols-layer',
+                type: 'symbol',
+                source: 'custom-route-symbols',
+                layout: {
+                    'text-rotation-alignment': 'viewport',
+                    'icon-rotation-alignment': 'viewport',
+                    'text-pitch-alignment': 'viewport',
+                    'icon-pitch-alignment': 'viewport',
+                    'text-keep-upright': true,
+                    'text-field': ['get', 'label'],
+                    'text-font': ['Noto Sans Bold'],
+                    'text-size': 12,
+                    'text-offset': [0, 1.2]
+                },
+                paint: {
+                    'text-color': '#0f172a',
+                    'text-halo-color': '#ffffff',
+                    'text-halo-width': 2
+                }
+            });
+        }
+
+        if (typeof activeDistanceGuidePin !== 'undefined' && activeDistanceGuidePin && typeof updatePinDistanceGuideRender === 'function') {
+            updatePinDistanceGuideRender();
+        }
+    } catch (e) {
+        console.warn('建立自訂路線圖層時發生例外:', e);
     }
-    const sunInfo = computeSunriseSunset(useLat, useLng, date);
-    applyDayNightMapTheme(sunInfo.isNight);
-    return sunInfo;
 }
-window.checkAndApplyAutoDayNightMode = checkAndApplyAutoDayNightMode;
-setInterval(() => {
-    checkAndApplyAutoDayNightMode();
-}, 60000);
 
 // ==========================================
 // 🗺️ 地圖路名、地名、地標文字與自訂符號圖層永遠與手機螢幕水平對齊 (viewport + text-keep-upright: true)
@@ -989,60 +883,24 @@ map.on('load', () => {
     vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
     vehicleVisualLngLat = [...lastKnownLngLat];
     vehicleVisualHeading = currentHeading;
-    
-    map.addSource('bg-route', { type: 'geojson', data: emptyGeoJSON() });
-    map.addLayer({ id: 'bg-route-line', type: 'line', source: 'bg-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#94a3b8', 'line-width': 6, 'line-opacity': 0.45 } });
-    map.addSource('route-Silent', { type: 'geojson', data: emptyGeoJSON() });
-    map.addLayer({ id: 'route-silent-line', type: 'line', source: 'route-Silent', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#3b82f6', 'line-width': 6, 'line-dasharray': [2, 2] } });
-    map.addSource('route-music', { type: 'geojson', data: emptyGeoJSON() });
-    map.addLayer({ id: 'route-music-line', type: 'line', source: 'route-music', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#16a34a', 'line-width': 7 } });
-    map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
-    map.addLayer({ id: 'freehand-temp-layer', type: 'line', source: 'freehand-temp-source', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 } });
 
-    // 自訂標記點與起終點 Symbol Layer 防斜保護（強制 viewport 螢幕水平對齊）
-    map.addSource('custom-route-symbols', { type: 'geojson', data: emptyGeoJSON() });
-    map.addLayer({
-        id: 'custom-route-symbols-layer',
-        type: 'symbol',
-        source: 'custom-route-symbols',
-        layout: {
-            "text-rotation-alignment": "viewport",
-            "icon-rotation-alignment": "viewport",
-            "text-pitch-alignment": "viewport",
-            "icon-pitch-alignment": "viewport",
-            "text-keep-upright": true,
-            "text-field": ["get", "label"],
-            "text-font": ["Noto Sans Bold"],
-            "text-size": 12,
-            "text-offset": [0, 1.2]
-        },
-        paint: {
-            "text-color": "#0f172a",
-            "text-halo-color": "#ffffff",
-            "text-halo-width": 2
-        }
-    });
-
-    // 修正地圖所有文字與符號圖層對齊（避免車頭朝上模式文字傾斜或倒立）並根據日出日落套用自動日夜模式
+    ensureCustomRouteSourcesAndLayers();
     fixSymbolTextAlignment();
-    checkAndApplyAutoDayNightMode();
 
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
-        checkAndApplyAutoDayNightMode(pos.coords.latitude, pos.coords.longitude);
         if (!isReplaying) {
             map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
         }
     });
 });
 
-// 切換或更新地圖樣式後重新強制所有 symbol 圖層螢幕水平對齊
 map.on('style.load', () => {
+    ensureCustomRouteSourcesAndLayers();
     fixSymbolTextAlignment();
-    isNightMapStyleActive = null;
-    checkAndApplyAutoDayNightMode();
 });
 map.on('styledata', () => {
+    ensureCustomRouteSourcesAndLayers();
     fixSymbolTextAlignment();
 });
 
@@ -1297,14 +1155,19 @@ function updateRouteLayers(points, throttleMs = 0) {
     }
 
     const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(points);
-    map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
-    map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
+    cachedBgRouteGeoJSON = emptyGeoJSON();
+    cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
+    cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
+    ensureCustomRouteSourcesAndLayers();
+    map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+    map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+    map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
 }
 
 // ==========================================
 // 👾 動態軌跡變色（小精靈吃路線）與路線進度／雙層語音預警核心輔助函數
-// - 已行駛路段（索引 0 至 currentTrackIndex）：渲染於 bg-route（半透明淺灰色）
-// - 未行駛路段（索引 currentTrackIndex 至終點）：維持原本高亮綠色（音樂收運）／藍色（音樂關閉）
+// - 已行駛路段（索引 0 至 currentTrackIndex）：渲染於 bg-route（日間半透明淺灰，夜間高亮度綠色 #22c55e）
+// - 未行駛路段（索引 currentTrackIndex 至終點）：日間維持高亮綠/藍，夜間改為高對比螢光天藍色 (#00E5FF) 並加粗 1px
 // ==========================================
 function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, throttleMs = 0) {
     if (throttleMs > 0) {
@@ -1315,17 +1178,22 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
         lastRouteLayerRenderTime = performance.now();
     }
 
+    ensureCustomRouteSourcesAndLayers();
+
     if (!Array.isArray(points) || points.length < 2) {
-        map.getSource('bg-route')?.setData(emptyGeoJSON());
-        map.getSource('route-music')?.setData(emptyGeoJSON());
-        map.getSource('route-Silent')?.setData(emptyGeoJSON());
+        cachedBgRouteGeoJSON = emptyGeoJSON();
+        cachedMusicRouteGeoJSON = emptyGeoJSON();
+        cachedSilentRouteGeoJSON = emptyGeoJSON();
+        map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+        map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+        map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
         return;
     }
 
     const maxIdx = points.length - 1;
     const clampedIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
 
-    // 1. 已行駛路段（0 至 currentTrackIndex）：半透明淺灰色 (bg-route)
+    // 1. 已行駛路段（0 至 currentTrackIndex）：日間半透明淺灰色 / 夜間高亮度綠色 (bg-route)
     const traveledCoords = [];
     for (let i = 0; i <= clampedIdx; i++) {
         traveledCoords.push([points[i].lng, points[i].lat]);
@@ -1337,15 +1205,16 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
         }
     }
     if (traveledCoords.length >= 2) {
-        map.getSource('bg-route')?.setData({
+        cachedBgRouteGeoJSON = {
             type: 'FeatureCollection',
             features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: traveledCoords } }]
-        });
+        };
     } else {
-        map.getSource('bg-route')?.setData(emptyGeoJSON());
+        cachedBgRouteGeoJSON = emptyGeoJSON();
     }
+    map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
 
-    // 2. 未行駛路段（currentTrackIndex 至終點）：維持高亮綠色／原色
+    // 2. 未行駛路段（currentTrackIndex 至終點）：夜間高對比螢光天藍色 (#00E5FF) 加粗 1px ／ 日間原色
     let remainingPoints = [];
     if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
         const nextIdx = Math.min(clampedIdx + 1, maxIdx);
@@ -1360,8 +1229,10 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
     }
 
     const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(remainingPoints);
-    map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
-    map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
+    cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
+    cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
+    map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+    map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
 }
 
 // 計算路線各節點的累積里程（公尺），用於精準計算沿路線前瞻距離（Look-ahead Distance）
@@ -5249,7 +5120,6 @@ document.getElementById('startFollowBtn').onclick = async () => {
         if (!filtered) return; // 剔除 accuracy > 45m 低精度與 > 160km/h 衛星反射瞬移
 
         const lng = filtered.lng, lat = filtered.lat;
-        checkAndApplyAutoDayNightMode(lat, lng);
 
         if (!filtered.isStationary) {
             if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
@@ -8286,7 +8156,6 @@ async function fetchSystemConfig() {
 // --- 10.2 套用完整系統參數至當前導航與畫面 ---
 function applySystemConfigToRuntime(newCfg) {
     const normalized = normalizeSystemConfig(newCfg);
-    const prevNightSetting = systemNavConfig.enableAutoNightMode;
     const prevDynamicZoom = systemNavConfig.enableDynamicZoom;
     const prevLowZoom = systemNavConfig.lowSpeedZoom;
     const prevHighZoom = systemNavConfig.highSpeedZoom;
@@ -8302,11 +8171,6 @@ function applySystemConfigToRuntime(newCfg) {
     // 1.5 左上角車隊雷達在線名單顯示開關即時同步套用
     if (typeof renderOnlineFleetListUI === 'function') {
         renderOnlineFleetListUI();
-    }
-
-    // 2. 日出日落自動夜間模式即時套用
-    if (prevNightSetting !== normalized.enableAutoNightMode) {
-        checkAndApplyAutoDayNightMode();
     }
 
     // 3. 若跟隨中且縮放設定變更，平滑更新當前視野縮放
@@ -8486,7 +8350,6 @@ function populateAdminSettingsForm(cfg) {
     setVal('adminLowSpeedZoomInput', c.lowSpeedZoom);
     setVal('adminHighSpeedZoomInput', c.highSpeedZoom);
     setChecked('adminEnableDynamicZoomInput', c.enableDynamicZoom);
-    setChecked('adminEnableAutoNightInput', c.enableAutoNightMode);
     setChecked('adminShowOnlineFleetListInput', c.showOnlineFleetList);
     setVal('adminMaxAccuracyInput', c.maxAccuracyMeters);
     setVal('adminMaxSpeedInput', c.maxSpeedKmh);
@@ -8507,7 +8370,6 @@ function readAdminSettingsForm() {
         lowSpeedZoom: getVal('adminLowSpeedZoomInput'),
         highSpeedZoom: getVal('adminHighSpeedZoomInput'),
         enableDynamicZoom: getChecked('adminEnableDynamicZoomInput'),
-        enableAutoNightMode: getChecked('adminEnableAutoNightInput'),
         showOnlineFleetList: getChecked('adminShowOnlineFleetListInput'),
         maxAccuracyMeters: getVal('adminMaxAccuracyInput'),
         maxSpeedKmh: getVal('adminMaxSpeedInput'),

@@ -304,6 +304,3 @@ input[type=range]::-webkit-slider-runnable-track {
     flex-shrink: 0;
     animation: voiceDotPulse 1.2s infinite ease-in-out;
 }
-
-
-

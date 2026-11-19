@@ -35,6 +35,75 @@ let gpsFreqMs = 2000, minMoveMeters = 2, lastRecordTime = 0;
 let isBlackScreenActive = false, isScreenAutoWoken = false, sleepTimer = null;
 let lastRouteLayerRenderTime = 0;
 
+// ==========================================
+// ⚙️ v3.1 動態導航與車隊系統參數（與 Firebase system_config 雙向即時同步，讀取不到時自動套用預設值）
+// ==========================================
+const DEFAULT_SYSTEM_CONFIG = {
+    radarIntervalSec: 5,
+    lookAheadDistMeters: 100,
+    confirmDistMeters: 45,
+    bearingToleranceDeg: 30,
+    voiceRate: 1.1,
+    lowSpeedZoom: 17.5,
+    highSpeedZoom: 14.5,
+    enableDynamicZoom: true,
+    enableAutoNightMode: true,
+    showOnlineFleetList: true,
+    maxAccuracyMeters: 45,
+    maxSpeedKmh: 160,
+    minLockSpeedKmh: 4,
+    announcementText: ''
+};
+
+function clampNum(val, min, max, fallback) {
+    const n = Number(val);
+    if (isNaN(n)) return fallback;
+    return Math.min(Math.max(n, min), max);
+}
+
+function normalizeSystemConfig(raw) {
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    return {
+        radarIntervalSec: clampNum(src.radarIntervalSec, 2, 120, DEFAULT_SYSTEM_CONFIG.radarIntervalSec),
+        lookAheadDistMeters: clampNum(src.lookAheadDistMeters, 20, 600, DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters),
+        confirmDistMeters: clampNum(src.confirmDistMeters, 10, 200, DEFAULT_SYSTEM_CONFIG.confirmDistMeters),
+        bearingToleranceDeg: clampNum(src.bearingToleranceDeg, 5, 180, DEFAULT_SYSTEM_CONFIG.bearingToleranceDeg),
+        voiceRate: Number(clampNum(src.voiceRate, 0.8, 1.5, DEFAULT_SYSTEM_CONFIG.voiceRate).toFixed(2)),
+        lowSpeedZoom: Number(clampNum(src.lowSpeedZoom, 12, 21, DEFAULT_SYSTEM_CONFIG.lowSpeedZoom).toFixed(2)),
+        highSpeedZoom: Number(clampNum(src.highSpeedZoom, 10, 20, DEFAULT_SYSTEM_CONFIG.highSpeedZoom).toFixed(2)),
+        enableDynamicZoom: typeof src.enableDynamicZoom === 'boolean' ? src.enableDynamicZoom : DEFAULT_SYSTEM_CONFIG.enableDynamicZoom,
+        enableAutoNightMode: typeof src.enableAutoNightMode === 'boolean' ? src.enableAutoNightMode : DEFAULT_SYSTEM_CONFIG.enableAutoNightMode,
+        showOnlineFleetList: typeof src.showOnlineFleetList === 'boolean' ? src.showOnlineFleetList : DEFAULT_SYSTEM_CONFIG.showOnlineFleetList,
+        maxAccuracyMeters: clampNum(src.maxAccuracyMeters, 5, 300, DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters),
+        maxSpeedKmh: clampNum(src.maxSpeedKmh, 30, 300, DEFAULT_SYSTEM_CONFIG.maxSpeedKmh),
+        minLockSpeedKmh: Number(clampNum(src.minLockSpeedKmh, 0.5, 30, DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh).toFixed(1)),
+        announcementText: typeof src.announcementText === 'string' ? src.announcementText.trim() : DEFAULT_SYSTEM_CONFIG.announcementText
+    };
+}
+
+let systemNavConfig = { ...DEFAULT_SYSTEM_CONFIG };
+try {
+    const cachedCfg = localStorage.getItem('yingge_system_nav_config_v31');
+    if (cachedCfg) {
+        systemNavConfig = normalizeSystemConfig(JSON.parse(cachedCfg));
+    }
+} catch (e) {}
+
+function renderFleetAnnouncementBanner(text) {
+    const bannerEl = document.getElementById('fleetAnnouncementBanner');
+    const textEl = document.getElementById('fleetAnnouncementText');
+    if (!bannerEl || !textEl) return;
+    const clean = typeof text === 'string' ? text.trim() : '';
+    if (clean.length > 0) {
+        textEl.textContent = clean;
+        bannerEl.classList.remove('hidden');
+    } else {
+        textEl.textContent = '';
+        bannerEl.classList.add('hidden');
+    }
+}
+renderFleetAnnouncementBanner(systemNavConfig.announcementText);
+
 // 確認系統列與背景維持純黑 #000000
 function ensurePureBlackSystemBars() {
     let metaTheme = document.querySelector('meta[name="theme-color"]');
@@ -57,7 +126,8 @@ function isPowerSaveMapPaused() {
 // 持續啟用螢幕喚醒鎖定（Wake Lock API）防止手機休眠斷網
 async function requestScreenWakeLock() {
     try {
-        if ('wakeLock' in navigator && !wakeLock) {
+        if ('wakeLock' in navigator) {
+            if (wakeLock && !wakeLock.released) return;
             wakeLock = await navigator.wakeLock.request('screen');
             wakeLock.addEventListener('release', () => {
                 wakeLock = null;
@@ -66,8 +136,8 @@ async function requestScreenWakeLock() {
     } catch (e) {}
 }
 
-async function releaseScreenWakeLockIfIdle() {
-    if (isBlackScreenActive || isRecording || followWatchId !== null) return;
+async function releaseScreenWakeLockIfIdle(forceRelease = false) {
+    if (!forceRelease && (isBlackScreenActive || isRecording || followWatchId !== null)) return;
     try {
         if (wakeLock) {
             await wakeLock.release();
@@ -78,12 +148,24 @@ async function releaseScreenWakeLockIfIdle() {
     }
 }
 
+// 徹底停用手機電子羅盤（deviceorientation / deviceorientationabsolute），防止駕駛室金屬磁場干擾
+(function disableDeviceCompass() {
+    const noopCompass = (e) => {
+        if (e && typeof e.stopImmediatePropagation === 'function') {
+            // 僅確保本應用絕不依賴電子羅盤更新車頭角
+        }
+    };
+    window.removeEventListener('deviceorientation', noopCompass, true);
+    window.removeEventListener('deviceorientationabsolute', noopCompass, true);
+})();
+
 // ==========================================
 // 🛡️ GPS 防亂飄與雜訊過濾核心引擎
-// 1. 剔除低精度飄移點（accuracy > 35m 直接捨棄）
-// 2. 剔除衛星反射瞬移（換算時速 > 120 km/h 視為雜訊忽略）
-// 3. 停車防抖動鎖定（距離 < 8m 或 speed < 0.5 m/s 凍結位置與車頭朝向）
-// 4. 移動中輕量加權平滑（新座標 0.7 + 前一座標 0.3）
+// 1. 剔除低精度飄移點（保留 accuracy <= 45m，超過 45m 直接捨棄）
+// 2. 剔除衛星反射瞬移（換算時速放寬上限至 160 km/h，解決高速公路 100+ km/h 凍結問題）
+// 3. 徹底停用電子羅盤：純以 GPS 前後有效座標計算真實移動方位角（Bearing）
+// 4. 車速 < 4 km/h 或位移 < 5m 時鎖死最後角度，防止怠速或低速作業時畫面亂轉
+// 5. 移動中輕量加權平滑（新座標 0.7 + 前一座標 0.3）
 // ==========================================
 let lastValidGpsLat = null;
 let lastValidGpsLng = null;
@@ -102,8 +184,12 @@ function processFilteredGpsPosition(pos) {
         ? pos.coords.accuracy
         : 10;
 
-    // 1. 剔除低精度飄移點：若誤差大於 35 公尺（訊號遮蔽落入基地台粗略定位），直接捨棄
-    if (accuracy > 35) {
+    const maxAccuracyMeters = Number(systemNavConfig.maxAccuracyMeters) || DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters;
+    const maxSpeedKmh = Number(systemNavConfig.maxSpeedKmh) || DEFAULT_SYSTEM_CONFIG.maxSpeedKmh;
+    const minLockSpeedKmh = Number(systemNavConfig.minLockSpeedKmh) || DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh;
+
+    // 1. 剔除低精度飄移點：保留 accuracy <= maxAccuracyMeters (預設 45 公尺)，超過直接捨棄
+    if (accuracy > maxAccuracyMeters) {
         return null;
     }
 
@@ -117,18 +203,12 @@ function processFilteredGpsPosition(pos) {
     const rawSpeed = (typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed) && pos.coords.speed >= 0)
         ? pos.coords.speed
         : null;
-    const rawHeading = (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) && pos.coords.heading >= 0)
-        ? pos.coords.heading
-        : null;
 
-    // 首次取得合格高精度定位：直接初始化基準點
+    // 首次取得合格高精度定位：直接初始化基準點（不使用電子羅盤 heading）
     if (lastValidGpsLat === null || lastValidGpsLng === null) {
         lastValidGpsLat = rawLat;
         lastValidGpsLng = rawLng;
         lastValidGpsTime = now;
-        if (rawHeading !== null && (rawSpeed === null || rawSpeed >= 0.5)) {
-            currentHeading = rawHeading;
-        }
         lastKnownLngLat = [rawLng, rawLat];
         const firstRes = {
             lng: rawLng,
@@ -150,21 +230,25 @@ function processFilteredGpsPosition(pos) {
     const dtSec = Math.max(0.25, (now - lastValidGpsTime) / 1000);
     const impliedSpeedKmh = (distKm / dtSec) * 3600;
 
-    // 2. 剔除衛星反射瞬移：若換算時速超過 120 km/h（不合理跳點），視為雜訊直接忽略
-    if (distMeters >= 8 && impliedSpeedKmh > 120) {
+    // 2. 剔除衛星反射瞬移：時速過濾上限依動態設定 maxSpeedKmh (預設 160 km/h)
+    if (distMeters >= 5 && impliedSpeedKmh > maxSpeedKmh) {
         return null;
     }
 
-    // 3. 停車防抖動鎖定：當與上一筆有效座標距離 < 8 公尺（或 coords.speed < 0.5 m/s）時，
-    //    判定車輛處於靜止作業狀態，凍結位置與車頭朝向（heading）更新
-    const isLowSpeed = (rawSpeed !== null && rawSpeed < 0.5);
-    if (distMeters < 8 || isLowSpeed) {
+    // 計算目前真實車速（若硬體未回傳 speed 或回傳 0 但實際有顯著高速位移，採用座標推算時速）
+    const hardwareSpeedKmh = rawSpeed !== null ? (rawSpeed * 3.6) : null;
+    const effectiveSpeedKmh = (hardwareSpeedKmh !== null && (hardwareSpeedKmh >= 1 || distMeters < 5))
+        ? hardwareSpeedKmh
+        : Math.min(impliedSpeedKmh, maxSpeedKmh);
+
+    // 3. 停車與低速防抖動鎖定：當車速 < minLockSpeedKmh (預設 4 km/h) 或位移 < 5m 時，鎖死最後車頭角度（currentHeading）
+    if (distMeters < 5 || effectiveSpeedKmh < minLockSpeedKmh) {
         lastKnownLngLat = [lastValidGpsLng, lastValidGpsLat];
         const stationaryRes = {
             lng: lastValidGpsLng,
             lat: lastValidGpsLat,
             heading: currentHeading,
-            speedKmh: 0,
+            speedKmh: effectiveSpeedKmh < minLockSpeedKmh ? 0 : effectiveSpeedKmh,
             accuracy,
             isStationary: true,
             isFirstFix: false
@@ -172,6 +256,7 @@ function processFilteredGpsPosition(pos) {
         lastRawGpsFixKey = fixKey;
         lastRawGpsFixWallTime = now;
         lastFilteredGpsResult = stationaryRes;
+        lastRecordedSpeedKmh = stationaryRes.speedKmh;
         return stationaryRes;
     }
 
@@ -179,20 +264,15 @@ function processFilteredGpsPosition(pos) {
     const smoothedLng = Number((rawLng * 0.7 + lastValidGpsLng * 0.3).toFixed(6));
     const smoothedLat = Number((rawLat * 0.7 + lastValidGpsLat * 0.3).toFixed(6));
 
-    // 更新移動中的車頭朝向（優先採用平滑軌跡切線方向，穩定不亂轉）
-    const moveStepM = getDistanceKm(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat) * 1000;
-    if (moveStepM >= 1.5) {
-        currentHeading = getBearing(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat);
-    } else if (rawHeading !== null) {
-        currentHeading = rawHeading;
-    }
+    // 5. 純用 GPS 前後有效座標計算真實移動方位角（Bearing），徹底停用電子羅盤
+    currentHeading = getBearing(lastValidGpsLng, lastValidGpsLat, smoothedLng, smoothedLat);
 
     lastValidGpsLng = smoothedLng;
     lastValidGpsLat = smoothedLat;
     lastValidGpsTime = now;
     lastKnownLngLat = [smoothedLng, smoothedLat];
 
-    const movingSpeedKmh = rawSpeed !== null ? (rawSpeed * 3.6) : Math.min(impliedSpeedKmh, 120);
+    const movingSpeedKmh = Math.min(effectiveSpeedKmh, maxSpeedKmh);
     const movingRes = {
         lng: smoothedLng,
         lat: smoothedLat,
@@ -205,6 +285,7 @@ function processFilteredGpsPosition(pos) {
     lastRawGpsFixKey = fixKey;
     lastRawGpsFixWallTime = now;
     lastFilteredGpsResult = movingRes;
+    lastRecordedSpeedKmh = movingSpeedKmh;
     return movingRes;
 }
 
@@ -220,15 +301,26 @@ function startIdleGPS() {
     if (!('geolocation' in navigator)) return;
     idleWatchId = navigator.geolocation.watchPosition(pos => {
         const filtered = processFilteredGpsPosition(pos);
-        if (!filtered) return; // 誤差 > 35m 或 > 120km/h 暴衝跳點直接捨棄
+        if (!filtered) return; // 誤差 > 45m 或 > 160km/h 暴衝跳點直接捨棄
+
+        checkAndApplyAutoDayNightMode(filtered.lat, filtered.lng);
 
         if (!isPowerSaveMapPaused()) {
             const acc = Math.round(filtered.accuracy);
             const accEl = document.getElementById('accuracyText');
             if (accEl) accEl.innerText = `± ${acc} m`;
-            // 🚀 修改：移除 !filtered.isStationary，確保靜止時車子也能立即校正回實際定位
             if (vehicleMarker) {
-                vehicleMarker.setLngLat(lastKnownLngLat).setRotation(filtered.heading);
+                smoothMoveVehicleMarker(lastKnownLngLat, filtered.heading, 750);
+            }
+            if (!filtered.isStationary && isFollowingCamera) {
+                const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
+                map.easeTo({
+                    center: lastKnownLngLat,
+                    zoom: targetZoom,
+                    bearing: isHeadingUpMode ? filtered.heading : map.getBearing(),
+                    offset: [0, 100],
+                    duration: 600
+                });
             }
         }
         if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
@@ -316,38 +408,205 @@ puckEl.innerHTML = `
 </svg>`;
 
 let vehicleMarker = null;
+let lastRecordedSpeedKmh = 0;
 
 // ==========================================
-// 🗺️ 地圖路名與地標文字永遠跟隨駕駛視角轉正
+// 🏎️ 車輛 Marker 補間動畫（requestAnimationFrame 平滑位移與轉向，消除一秒跳一格瞬移感）
+// ==========================================
+let vehicleAnimFrameId = null;
+let vehicleVisualLngLat = [...lastKnownLngLat];
+let vehicleVisualHeading = currentHeading;
+
+function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) {
+    if (!vehicleMarker || !Array.isArray(targetLngLat) || targetLngLat.length < 2) return;
+    const endLng = Number(targetLngLat[0]);
+    const endLat = Number(targetLngLat[1]);
+    const endHeading = typeof targetHeading === 'number' && !isNaN(targetHeading) ? targetHeading : vehicleVisualHeading;
+
+    if (vehicleAnimFrameId !== null) {
+        cancelAnimationFrame(vehicleAnimFrameId);
+        vehicleAnimFrameId = null;
+    }
+
+    const startLng = Number(vehicleVisualLngLat[0]);
+    const startLat = Number(vehicleVisualLngLat[1]);
+    const startHeading = Number(vehicleVisualHeading) || 0;
+    const jumpMeters = getDistanceKm(startLng, startLat, endLng, endLat) * 1000;
+
+    // 若初始定位跳距過大 (> 250m) 或 durationMs <= 0，直接瞬間對齊不補間
+    if (durationMs <= 0 || isNaN(startLng) || isNaN(startLat) || jumpMeters > 250) {
+        vehicleVisualLngLat = [endLng, endLat];
+        vehicleVisualHeading = endHeading;
+        vehicleMarker.setLngLat(vehicleVisualLngLat).setRotation(vehicleVisualHeading);
+        return;
+    }
+
+    const deltaHeading = getAngleDiff(startHeading, endHeading);
+    const startTimePerf = performance.now();
+
+    function stepFrame(nowPerf) {
+        const elapsed = nowPerf - startTimePerf;
+        const t = Math.min(Math.max(elapsed / durationMs, 0), 1);
+        const curLng = startLng + (endLng - startLng) * t;
+        const curLat = startLat + (endLat - startLat) * t;
+        const curHead = (startHeading + deltaHeading * t + 360) % 360;
+
+        vehicleVisualLngLat = [curLng, curLat];
+        vehicleVisualHeading = curHead;
+        if (vehicleMarker) {
+            vehicleMarker.setLngLat(vehicleVisualLngLat).setRotation(vehicleVisualHeading);
+        }
+
+        if (t < 1) {
+            vehicleAnimFrameId = requestAnimationFrame(stepFrame);
+        } else {
+            vehicleAnimFrameId = null;
+        }
+    }
+
+    vehicleAnimFrameId = requestAnimationFrame(stepFrame);
+}
+
+// ==========================================
+// 🔍 車速動態縮放（Speed-based Dynamic Zoom，支援管理員動態設定）
+// - 時速 > 60 km/h：平滑拉遠視野（預設 Zoom 14.5）
+// - 時速 < 20 km/h：平滑放大視野（預設 Zoom 17.5）
+// - 時速 20~60 km/h：線性平滑過渡
+// - 若管理員關閉「車速動態縮放」，則維持當前地圖縮放倍率不自動變動
+// ==========================================
+function getDynamicZoomBySpeed(speedKmh) {
+    const spd = typeof speedKmh === 'number' && !isNaN(speedKmh) ? Math.max(0, speedKmh) : 0;
+    lastRecordedSpeedKmh = spd;
+
+    const lowZoom = Number(systemNavConfig.lowSpeedZoom) || DEFAULT_SYSTEM_CONFIG.lowSpeedZoom;
+    const highZoom = Number(systemNavConfig.highSpeedZoom) || DEFAULT_SYSTEM_CONFIG.highSpeedZoom;
+
+    if (!systemNavConfig.enableDynamicZoom) {
+        return map ? map.getZoom() : lowZoom;
+    }
+
+    if (spd >= 60) {
+        return Number(highZoom.toFixed(2));
+    }
+    if (spd <= 20) {
+        return Number(lowZoom.toFixed(2));
+    }
+    // 20 ~ 60 km/h：由 lowZoom 線性平滑過渡至 highZoom
+    const midFactor = (spd - 20) / 40;
+    return Number((lowZoom + (highZoom - lowZoom) * midFactor).toFixed(2));
+}
+
+// ==========================================
+// 🌗 自動日夜模式（依裝置經緯度與當下日期時間計算日出／日落，天黑自動切換暗色系夜間地圖樣式）
+// ==========================================
+let isNightMapStyleActive = null;
+
+function computeSunriseSunset(lat = 24.954, lng = 121.346, date = new Date()) {
+    const toRad = d => d * Math.PI / 180;
+    const toDeg = r => r * 180 / Math.PI;
+
+    const startOfYear = new Date(date.getFullYear(), 0, 0);
+    const diffMs = date - startOfYear;
+    const dayOfYear = Math.floor(diffMs / 86400000);
+
+    // 太陽赤緯角 (Solar Declination)
+    const gamma = ((2 * Math.PI) / 365) * (dayOfYear - 1 + (date.getHours() - 12) / 24);
+    const eqTime = 229.18 * (
+        0.000075 +
+        0.001868 * Math.cos(gamma) -
+        0.032077 * Math.sin(gamma) -
+        0.014615 * Math.cos(2 * gamma) -
+        0.040849 * Math.sin(2 * gamma)
+    );
+    const decl = 0.006918 -
+        0.399912 * Math.cos(gamma) +
+        0.070257 * Math.sin(gamma) -
+        0.006758 * Math.cos(2 * gamma) +
+        0.000907 * Math.sin(2 * gamma) -
+        0.002697 * Math.cos(3 * gamma) +
+        0.00148 * Math.sin(3 * gamma);
+
+    const zenith = 90.833;
+    const cosHa = (Math.cos(toRad(zenith)) / (Math.cos(toRad(lat)) * Math.cos(decl))) -
+                  (Math.tan(toRad(lat)) * Math.tan(decl));
+
+    // 極晝／極夜防呆 fallback（台灣緯度不會發生，預設 06:00 ~ 18:00）
+    if (cosHa > 1 || cosHa < -1 || isNaN(cosHa)) {
+        const curHr = date.getHours() + date.getMinutes() / 60;
+        return { sunriseHour: 6.0, sunsetHour: 18.0, isNight: (curHr < 6.0 || curHr >= 18.0) };
+    }
+
+    const haDeg = toDeg(Math.acos(cosHa));
+    const tzOffsetHours = -date.getTimezoneOffset() / 60;
+    const solarNoonMin = 720 - (4 * lng) - eqTime + (tzOffsetHours * 60);
+    const sunriseMin = solarNoonMin - haDeg * 4;
+    const sunsetMin = solarNoonMin + haDeg * 4;
+
+    const sunriseHour = sunriseMin / 60;
+    const sunsetHour = sunsetMin / 60;
+    const currentLocalHour = date.getHours() + date.getMinutes() / 60;
+    const isNight = (currentLocalHour < sunriseHour || currentLocalHour >= sunsetHour);
+
+    return { sunriseHour, sunsetHour, isNight };
+}
+
+function applyDayNightMapTheme(isNight) {
+    if (!map || !map.getLayer('google-maps-layer')) return;
+    if (isNightMapStyleActive === isNight) return;
+    isNightMapStyleActive = isNight;
+
+    try {
+        if (isNight) {
+            // 🌙 夜間暗色系護眼地圖樣式：壓低底圖反光亮度與飽和度，同時讓綠色／藍色清運路線與標記維持高對比清晰度
+            map.setPaintProperty('google-maps-layer', 'raster-brightness-max', 0.42);
+            map.setPaintProperty('google-maps-layer', 'raster-brightness-min', 0.04);
+            map.setPaintProperty('google-maps-layer', 'raster-saturation', -0.45);
+            map.setPaintProperty('google-maps-layer', 'raster-contrast', 0.18);
+            document.body?.classList.add('night-map-mode');
+        } else {
+            // ☀️ 日間高清晰明亮地圖樣式
+            map.setPaintProperty('google-maps-layer', 'raster-brightness-max', 1.0);
+            map.setPaintProperty('google-maps-layer', 'raster-brightness-min', 0.0);
+            map.setPaintProperty('google-maps-layer', 'raster-saturation', 0.0);
+            map.setPaintProperty('google-maps-layer', 'raster-contrast', 0.0);
+            document.body?.classList.remove('night-map-mode');
+        }
+    } catch (e) {}
+}
+
+function checkAndApplyAutoDayNightMode(lat, lng, date = new Date()) {
+    const useLat = (typeof lat === 'number' && !isNaN(lat)) ? lat : (lastKnownLngLat?.[1] ?? 24.954);
+    const useLng = (typeof lng === 'number' && !isNaN(lng)) ? lng : (lastKnownLngLat?.[0] ?? 121.346);
+    if (!systemNavConfig.enableAutoNightMode) {
+        applyDayNightMapTheme(false);
+        return { sunriseHour: 6.0, sunsetHour: 18.0, isNight: false };
+    }
+    const sunInfo = computeSunriseSunset(useLat, useLng, date);
+    applyDayNightMapTheme(sunInfo.isNight);
+    return sunInfo;
+}
+window.checkAndApplyAutoDayNightMode = checkAndApplyAutoDayNightMode;
+setInterval(() => {
+    checkAndApplyAutoDayNightMode();
+}, 60000);
+
+// ==========================================
+// 🗺️ 地圖路名與地標文字永遠跟隨駕駛視角轉正 (text-rotation-alignment: 'viewport')
 // 避免「車頭上」模式旋轉時文字倒立
 // ==========================================
 function fixSymbolTextAlignment() {
     try {
         const style = map.getStyle();
         if (!style || !style.layers) return;
-        
+
         style.layers.forEach(layer => {
             if (layer.type === 'symbol') {
-                const layout = layer.layout || {};
-                if (layout['text-field'] !== undefined) {
-                    
-                    // 判斷是否為沿道路線條排列的路名
-                    const isLinePlacement = layout['symbol-placement'] === 'line';
-
-                    if (isLinePlacement) {
-                        // 🟢 【道路名稱】：必須跟隨地圖 (map) 旋轉才能貼合道路，並開啟防倒立翻轉
-                        try {
-                            map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'map');
-                            map.setLayoutProperty(layer.id, 'text-keep-upright', true); 
-                        } catch (e) {}
-                    } else {
-                        // 🟢 【一般地標】：永遠面對螢幕 (viewport)，不隨地圖旋轉與傾斜
-                        try {
-                            map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
-                            map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
-                        } catch (e) {}
-                    }
-                }
+                try {
+                    map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
+                    map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
+                    map.setLayoutProperty(layer.id, 'icon-rotation-alignment', 'viewport');
+                    map.setLayoutProperty(layer.id, 'text-keep-upright', true);
+                } catch (e) {}
             }
         });
     } catch (e) {
@@ -357,6 +616,8 @@ function fixSymbolTextAlignment() {
 
 map.on('load', () => {
     vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
+    vehicleVisualLngLat = [...lastKnownLngLat];
+    vehicleVisualHeading = currentHeading;
     
     map.addSource('bg-route', { type: 'geojson', data: emptyGeoJSON() });
     map.addLayer({ id: 'bg-route-line', type: 'line', source: 'bg-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#94a3b8', 'line-width': 6, 'line-opacity': 0.45 } });
@@ -367,17 +628,24 @@ map.on('load', () => {
     map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
     map.addLayer({ id: 'freehand-temp-layer', type: 'line', source: 'freehand-temp-source', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 } });
 
-    // 修正地圖文字圖層對齊（避免車頭上模式文字倒立）
+    // 修正地圖文字圖層對齊（避免車頭上模式文字倒立）並根據日出日落套用自動日夜模式
     fixSymbolTextAlignment();
+    checkAndApplyAutoDayNightMode();
 
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
+        checkAndApplyAutoDayNightMode(pos.coords.latitude, pos.coords.longitude);
         map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
     });
 });
 
-// 切換地圖樣式 (setStyle) 後重新修正文字對齊
+// 切換或更新地圖樣式後重新修正文字對齊
 map.on('style.load', () => {
+    fixSymbolTextAlignment();
+    isNightMapStyleActive = null;
+    checkAndApplyAutoDayNightMode();
+});
+map.on('styledata', () => {
     fixSymbolTextAlignment();
 });
 
@@ -403,8 +671,11 @@ function setCameraFollow(follow) {
 
 document.getElementById('locateBtn').onclick = () => {
     setCameraFollow(true);
+    const resumeZoom = (followWatchId !== null || isRecording)
+        ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
+        : Math.max(map.getZoom(), 17);
     map.easeTo({
-        center: lastKnownLngLat, zoom: Math.max(map.getZoom(), 17),
+        center: lastKnownLngLat, zoom: resumeZoom,
         bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, 100], duration: 400
     });
 };
@@ -505,7 +776,7 @@ const VoiceQueue = {
             }
             const u = new SpeechSynthesisUtterance(nextText);
             u.lang = 'zh-TW';
-            u.rate = 1.05;
+            u.rate = clampNum(systemNavConfig.voiceRate, 0.8, 1.5, DEFAULT_SYSTEM_CONFIG.voiceRate);
 
             let finished = false;
             const onComplete = () => {
@@ -585,15 +856,7 @@ document.getElementById('voiceToggleBtn').onclick = () => {
 function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
 
 // 優化軌跡圖層更新：合併連續同狀態線段，大幅減少 GeoJSON Feature 物件數量，防止長時間跑車或重播時手機發熱卡頓
-function updateRouteLayers(points, throttleMs = 0) {
-    if (throttleMs > 0) {
-        const now = performance.now();
-        if (now - lastRouteLayerRenderTime < throttleMs) return;
-        lastRouteLayerRenderTime = now;
-    } else {
-        lastRouteLayerRenderTime = performance.now();
-    }
-
+function buildRouteLayerFeatures(points) {
     const musicFeatures = [], silentFeatures = [];
     if (Array.isArray(points) && points.length >= 2) {
         let currentCoords = [[points[0].lng, points[0].lat]];
@@ -621,8 +884,347 @@ function updateRouteLayers(points, throttleMs = 0) {
             else silentFeatures.push(feature);
         }
     }
+    return { musicFeatures, silentFeatures };
+}
+
+function updateRouteLayers(points, throttleMs = 0) {
+    if (throttleMs > 0) {
+        const now = performance.now();
+        if (now - lastRouteLayerRenderTime < throttleMs) return;
+        lastRouteLayerRenderTime = now;
+    } else {
+        lastRouteLayerRenderTime = performance.now();
+    }
+
+    const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(points);
     map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
     map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
+}
+
+// ==========================================
+// 👾 動態軌跡變色（小精靈吃路線）與路線進度／雙層語音預警核心輔助函數
+// - 已行駛路段（索引 0 至 currentTrackIndex）：渲染於 bg-route（半透明淺灰色）
+// - 未行駛路段（索引 currentTrackIndex 至終點）：維持原本高亮綠色（音樂收運）／藍色（音樂關閉）
+// ==========================================
+function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, throttleMs = 0) {
+    if (throttleMs > 0) {
+        const now = performance.now();
+        if (now - lastRouteLayerRenderTime < throttleMs) return;
+        lastRouteLayerRenderTime = now;
+    } else {
+        lastRouteLayerRenderTime = performance.now();
+    }
+
+    if (!Array.isArray(points) || points.length < 2) {
+        map.getSource('bg-route')?.setData(emptyGeoJSON());
+        map.getSource('route-music')?.setData(emptyGeoJSON());
+        map.getSource('route-Silent')?.setData(emptyGeoJSON());
+        return;
+    }
+
+    const maxIdx = points.length - 1;
+    const clampedIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
+
+    // 1. 已行駛路段（0 至 currentTrackIndex）：半透明淺灰色 (bg-route)
+    const traveledCoords = [];
+    for (let i = 0; i <= clampedIdx; i++) {
+        traveledCoords.push([points[i].lng, points[i].lat]);
+    }
+    if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
+        const lastC = traveledCoords[traveledCoords.length - 1];
+        if (!lastC || lastC[0] !== exactPos.lng || lastC[1] !== exactPos.lat) {
+            traveledCoords.push([exactPos.lng, exactPos.lat]);
+        }
+    }
+    if (traveledCoords.length >= 2) {
+        map.getSource('bg-route')?.setData({
+            type: 'FeatureCollection',
+            features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: traveledCoords } }]
+        });
+    } else {
+        map.getSource('bg-route')?.setData(emptyGeoJSON());
+    }
+
+    // 2. 未行駛路段（currentTrackIndex 至終點）：維持高亮綠色／原色
+    let remainingPoints = [];
+    if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
+        const nextIdx = Math.min(clampedIdx + 1, maxIdx);
+        const startPt = {
+            lng: exactPos.lng,
+            lat: exactPos.lat,
+            musicActive: exactPos.musicActive !== undefined ? exactPos.musicActive : Boolean(points[nextIdx]?.musicActive)
+        };
+        remainingPoints = [startPt, ...points.slice(clampedIdx + 1)];
+    } else {
+        remainingPoints = points.slice(clampedIdx);
+    }
+
+    const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(remainingPoints);
+    map.getSource('route-music')?.setData({ type: 'FeatureCollection', features: musicFeatures });
+    map.getSource('route-Silent')?.setData({ type: 'FeatureCollection', features: silentFeatures });
+}
+
+// 計算路線各節點的累積里程（公尺），用於精準計算沿路線前瞻距離（Look-ahead Distance）
+function buildCumulativeRouteMeters(pts) {
+    if (!Array.isArray(pts) || pts.length === 0) return [];
+    const cum = new Array(pts.length).fill(0);
+    for (let i = 1; i < pts.length; i++) {
+        const segM = getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat) * 1000;
+        cum[i] = cum[i - 1] + segM;
+    }
+    return cum;
+}
+
+// 取得路線指定索引處的真實路段行進方向（Bearing）
+function getRouteSegmentBearing(pts, idx) {
+    if (!Array.isArray(pts) || pts.length < 2) return 0;
+    const clamped = Math.min(Math.max(idx, 0), pts.length - 1);
+    for (let j = clamped + 1; j < pts.length; j++) {
+        const dM = getDistanceKm(pts[clamped].lng, pts[clamped].lat, pts[j].lng, pts[j].lat) * 1000;
+        if (dM >= 1.5) {
+            return getBearing(pts[clamped].lng, pts[clamped].lat, pts[j].lng, pts[j].lat);
+        }
+    }
+    for (let j = clamped - 1; j >= 0; j--) {
+        const dM = getDistanceKm(pts[j].lng, pts[j].lat, pts[clamped].lng, pts[clamped].lat) * 1000;
+        if (dM >= 1.5) {
+            return getBearing(pts[j].lng, pts[j].lat, pts[clamped].lng, pts[clamped].lat);
+        }
+    }
+    return typeof pts[clamped]?.bearing === 'number' ? pts[clamped].bearing : 0;
+}
+
+// 進度鎖定追蹤器：計算車輛目前在路線座標陣列中的 currentTrackIndex，防止去回程重疊路口跳號
+function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, isMoving) {
+    if (!Array.isArray(pts) || pts.length === 0) return { trackIndex: 0, minDistMeters: Infinity };
+    const maxIdx = pts.length - 1;
+    const startIdx = Math.max(0, prevTrackIndex - 3);
+    const endIdx = Math.min(maxIdx, prevTrackIndex + 45);
+
+    let bestLocalIdx = prevTrackIndex;
+    let bestLocalScore = Infinity;
+    let bestLocalDist = Infinity;
+
+    for (let i = startIdx; i <= endIdx; i++) {
+        const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+        let penalty = 0;
+        if (isMoving) {
+            const segB = getRouteSegmentBearing(pts, i);
+            const angDiff = Math.abs(getAngleDiff(vehicleHeading, segB));
+            if (angDiff > 60) penalty = 35; // 逆向或垂直重疊路段加權懲罰，避免跳到回程
+        }
+        const score = d + penalty;
+        if (score < bestLocalScore) {
+            bestLocalScore = score;
+            bestLocalIdx = i;
+            bestLocalDist = d;
+        }
+    }
+
+    if (bestLocalDist <= 40) {
+        return {
+            trackIndex: Math.max(prevTrackIndex, bestLocalIdx),
+            minDistMeters: bestLocalDist
+        };
+    }
+
+    // 若偏離局部視窗超過 40m（例如中途切入路線），進行全路線搜尋並優先匹配同向路段
+    let bestGlobalIdx = prevTrackIndex;
+    let bestGlobalScore = Infinity;
+    let bestGlobalDist = Infinity;
+    for (let i = 0; i <= maxIdx; i++) {
+        const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+        let penalty = 0;
+        if (isMoving) {
+            const segB = getRouteSegmentBearing(pts, i);
+            const angDiff = Math.abs(getAngleDiff(vehicleHeading, segB));
+            if (angDiff > 60) penalty = 30;
+        }
+        const score = d + penalty;
+        if (score < bestGlobalScore) {
+            bestGlobalScore = score;
+            bestGlobalIdx = i;
+            bestGlobalDist = d;
+        }
+    }
+
+    if (bestGlobalDist <= 35) {
+        return {
+            trackIndex: bestGlobalIdx,
+            minDistMeters: bestGlobalDist
+        };
+    }
+
+    return {
+        trackIndex: prevTrackIndex,
+        minDistMeters: Math.min(bestLocalDist, bestGlobalDist)
+    };
+}
+
+// 整理並重置路線所有語音標記點（包含開關音樂與黃色提醒點），重置 played / prePlayed 狀態
+function prepareVoiceMarkerEvents(route, includeImplicitMusicTransitions = false) {
+    const pts = route?.points || [];
+    if (pts.length === 0) return [];
+
+    const rawList = (route.events || []).map(ev => {
+        ev.played = false;
+        ev.prePlayed = false;
+
+        let evPtIdx = (typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : -1;
+        if (evPtIdx === -1) {
+            let bestScore = Infinity;
+            let bestIdx = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const d = getDistanceKm(ev.lng, ev.lat, pts[i].lng, pts[i].lat) * 1000;
+                let dirPenalty = 0;
+                if (typeof ev.bearing === 'number') {
+                    const segB = getRouteSegmentBearing(pts, i);
+                    if (Math.abs(getAngleDiff(ev.bearing, segB)) > 45) dirPenalty = 25;
+                }
+                if (d + dirPenalty < bestScore) {
+                    bestScore = d + dirPenalty;
+                    bestIdx = i;
+                }
+            }
+            evPtIdx = bestIdx;
+        }
+        const segmentBearing = getRouteSegmentBearing(pts, evPtIdx);
+        return {
+            ...ev,
+            ptIdx: evPtIdx,
+            segmentBearing,
+            played: false,
+            prePlayed: false,
+            sourceEvent: ev
+        };
+    });
+
+    if (includeImplicitMusicTransitions && pts.length >= 2) {
+        for (let i = 1; i < pts.length; i++) {
+            const currActive = Boolean(pts[i].musicActive);
+            const prevActive = Boolean(pts[i - 1].musicActive);
+            if (currActive !== prevActive) {
+                const evtType = currActive ? 'on' : 'off';
+                const alreadyExists = rawList.some(e => e.type === evtType && Math.abs(e.ptIdx - i) <= 2);
+                if (!alreadyExists) {
+                    rawList.push({
+                        type: evtType,
+                        lng: pts[i].lng,
+                        lat: pts[i].lat,
+                        ptIdx: i,
+                        segmentBearing: getRouteSegmentBearing(pts, i),
+                        played: false,
+                        prePlayed: false,
+                        sourceEvent: null
+                    });
+                }
+            }
+        }
+    }
+
+    return rawList.sort((a, b) => a.ptIdx - b.ptIdx);
+}
+
+// ==========================================
+// 🔊 綁定路線進度的雙層語音防誤報引擎
+// 必須同時滿足 3 大條件才加入語音佇列：
+// 1. 距離條件：進入觸發半徑（第一層：沿路線前瞻約 100m 預告；第二層：進入 40~50m 內完整確認）
+// 2. 方向一致：當前車輛行進方向（vehicleBearing）與所屬路段方向誤差在 ±30° 以內
+// 3. 進度鎖定：currentTrackIndex 已推進至該標記點綁定的路線索引區間，且本趟尚未播報（played !== true）
+// ==========================================
+function evaluateVoiceMarkersWithProgress({
+    events,
+    pts,
+    cumMeters,
+    currentTrackIndex,
+    lng,
+    lat,
+    vehicleBearing,
+    onTriggerWake = false
+}) {
+    if (!Array.isArray(events) || events.length === 0 || !Array.isArray(pts) || pts.length < 2) return;
+    const maxIdx = pts.length - 1;
+    const trackIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
+    const currentTrackCumM = cumMeters[trackIdx] || 0;
+    const currentSegBearing = getRouteSegmentBearing(pts, trackIdx);
+
+    const lookAheadDist = Number(systemNavConfig.lookAheadDistMeters) || DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters;
+    const confirmDist = Number(systemNavConfig.confirmDistMeters) || DEFAULT_SYSTEM_CONFIG.confirmDistMeters;
+    const bearingTol = Number(systemNavConfig.bearingToleranceDeg) || DEFAULT_SYSTEM_CONFIG.bearingToleranceDeg;
+    const lookAheadLabel = Math.round(lookAheadDist);
+
+    events.forEach(ev => {
+        if (!ev || ev.played === true) return;
+        const evIdx = Math.min(Math.max(ev.ptIdx || 0, 0), maxIdx);
+        const evCumM = cumMeters[evIdx] || 0;
+        const aheadRouteMeters = evCumM - currentTrackCumM;
+        const directDistMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
+        const markerSegBearing = typeof ev.segmentBearing === 'number'
+            ? ev.segmentBearing
+            : getRouteSegmentBearing(pts, evIdx);
+
+        // --- 第二層：進入近距離確認半徑 (預設 45 公尺) 內觸發完整確認語音 ---
+        // 條件 1：車輛與標記點物理距離 <= confirmDist（且沿線距離不超過 confirmDist + 5）
+        const isWithinConfirmRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+        // 條件 2：當前車輛行進方向與標記點所屬路段方向一致（誤差 ±bearingTol° 以內）
+        const bearingDiffConfirm = Math.abs(getAngleDiff(vehicleBearing, markerSegBearing));
+        const isConfirmDirectionAligned = (bearingDiffConfirm <= bearingTol);
+        // 條件 3：當前導航進度 currentTrackIndex 已推進至該標記點綁定之路線索引區間，且 played !== true
+        const isConfirmIndexInZone = (trackIdx <= evIdx + 12 && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+
+        if (isWithinConfirmRadius && isConfirmDirectionAligned && isConfirmIndexInZone && ev.played !== true) {
+            ev.played = true;
+            ev.prePlayed = true;
+            if (ev.sourceEvent) {
+                ev.sourceEvent.played = true;
+                ev.sourceEvent.prePlayed = true;
+            }
+            if (onTriggerWake) autoWakeScreen();
+            if (ev.type === 'on') {
+                showNavAlert('🎵', '開啟音樂！', 'bg-green-600');
+                speakText('請開啟音樂');
+            } else if (ev.type === 'off') {
+                showNavAlert('🔇', '關閉音樂！', 'bg-red-600');
+                speakText('請關閉音樂');
+            } else if (ev.type === 'alert') {
+                showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null);
+                speakText(`前方提醒，${ev.note || '注意路況'}`);
+            }
+            if (onTriggerWake) autoSleepScreen();
+            return;
+        }
+
+        // --- 第一層：沿路線前方約 lookAheadDist (預設 100 公尺) 處觸發簡短預告語音 ---
+        if (ev.prePlayed === true) return;
+        const lookAheadUpper = Math.max(lookAheadDist + 15, confirmDist + 15);
+        const lookAheadLower = confirmDist + 5;
+        // 條件 1：沿路線前方距離到達預警區間（且物理距離 > lookAheadLower 避免與第二層重疊）
+        const isWithinLookAheadZone = (aheadRouteMeters <= lookAheadUpper && aheadRouteMeters > lookAheadLower && directDistMeters > lookAheadLower);
+        // 條件 2：當前車輛行進方向與當前行駛路段（或標記點路段）方向一致（誤差 ±bearingTol° 以內）
+        const bearingDiffCurrentSeg = Math.abs(getAngleDiff(vehicleBearing, currentSegBearing));
+        const isLookAheadDirectionAligned = (bearingDiffCurrentSeg <= bearingTol || bearingDiffConfirm <= bearingTol);
+        // 條件 3：currentTrackIndex 位於標記點前瞻索引區間（trackIdx < evIdx）且尚未播報
+        const isLookAheadIndexInZone = (trackIdx < evIdx);
+
+        if (isWithinLookAheadZone && isLookAheadDirectionAligned && isLookAheadIndexInZone && ev.prePlayed !== true) {
+            ev.prePlayed = true;
+            if (ev.sourceEvent) {
+                ev.sourceEvent.prePlayed = true;
+            }
+            if (onTriggerWake) autoWakeScreen();
+            if (ev.type === 'on') {
+                showNavAlert('🎵', `前方 ${lookAheadLabel} 公尺：準備開啟音樂`, 'bg-green-600');
+                speakText(`前方 ${lookAheadLabel} 公尺，準備開啟音樂`);
+            } else if (ev.type === 'off') {
+                showNavAlert('🔇', `前方 ${lookAheadLabel} 公尺：準備關閉音樂`, 'bg-red-600');
+                speakText(`前方 ${lookAheadLabel} 公尺，準備關閉音樂`);
+            } else if (ev.type === 'alert') {
+                showNavAlert('⚠️', `前方 ${lookAheadLabel} 公尺：${ev.note || '注意路況'}`, 'bg-amber-600', ev.photo || null);
+                speakText(`前方 ${lookAheadLabel} 公尺，注意${ev.note || '路況'}`);
+            }
+            if (onTriggerWake) autoSleepScreen();
+        }
+    });
 }
 
 function clearDomMarkers() {
@@ -645,11 +1247,11 @@ function renderMusicButtonState() {
     const icon = document.getElementById('musicBtnIcon');
     const text = document.getElementById('musicBtnText');
     if (musicActive) {
-        musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all";
-        icon.className = "fa-solid fa-music text-lg"; text.innerText = "音樂播放中 (點擊關閉)";
+        musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-2.5 px-3 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all";
+        icon.className = "fa-solid fa-music text-base"; text.innerText = "音樂播放中 (點擊關閉)";
     } else {
-        musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all";
-        icon.className = "fa-solid fa-volume-xmark text-lg"; text.innerText = "音樂關閉中 (點擊開啟)";
+        musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-2.5 px-3 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all";
+        icon.className = "fa-solid fa-volume-xmark text-base"; text.innerText = "音樂關閉中 (點擊開啟)";
     }
 }
 
@@ -736,18 +1338,31 @@ document.getElementById('recordBtn').onclick = async () => {
             const distM = distKm * 1000;
 
             if (distM >= minMoveMeters || (now - lastRecordTime >= gpsFreqMs && distM >= 1.5)) {
-                currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
+                const minLockSpeed = Number(systemNavConfig.minLockSpeedKmh) || DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh;
+                // 車速 >= minLockSpeed 且位移 >= 5m 才更新真實移動方位角，否則鎖死最後角度
+                if (distM >= 5 && filtered.speedKmh >= minLockSpeed) {
+                    currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
+                } else {
+                    currentHeading = filtered.heading;
+                }
                 totalDistanceKm += distKm;
                 lastKnownLngLat = [lng, lat];
                 routePoints.push({ lng, lat, time: now, musicActive, music: musicActive, bearing: currentHeading });
 
                 if (!isPowerSaveMapPaused()) {
                     document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
-                    if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]).setRotation(currentHeading);
+                    if (vehicleMarker) smoothMoveVehicleMarker([lng, lat], currentHeading, 750);
                     updateRouteLayers(routePoints, 250);
 
                     if (isFollowingCamera) {
-                        map.easeTo({ center: [lng, lat], bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                        const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
+                        map.easeTo({
+                            center: [lng, lat],
+                            zoom: targetZoom,
+                            bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
+                            offset: [0, 100],
+                            duration: 600
+                        });
                     }
                 }
                 lastRecordTime = now;
@@ -755,6 +1370,46 @@ document.getElementById('recordBtn').onclick = async () => {
         }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
     } else {
+        // 當有效軌跡點不足 2 點（例如靜止測試 0.00 km）時，直接停止錄製狀態、安全釋放 WakeLock 並彈出明確提示
+        if (routePoints.length < 2) {
+            isRecording = false;
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            if (timerInterval !== null) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            try {
+                if (wakeLock) {
+                    await wakeLock.release();
+                    wakeLock = null;
+                }
+            } catch (err) {
+                wakeLock = null;
+            }
+            await releaseScreenWakeLockIfIdle(true);
+
+            clearDomMarkers();
+            updateRouteLayers([]);
+            document.getElementById('distanceText').innerText = '0.00';
+            document.getElementById('timeText').innerText = '00:00:00';
+            document.getElementById('speedText').innerText = '0.0';
+
+            document.getElementById('recordingTopRow').classList.add('hidden');
+            document.getElementById('idleTopRow').classList.remove('hidden');
+            document.getElementById('startManualDrawBtn')?.classList.remove('hidden');
+            document.getElementById('recordBtn').classList.replace('bg-red-600', 'bg-green-700');
+            document.getElementById('recordBtnText').innerText = '開始紀錄路線';
+            document.getElementById('recordBtn').querySelector('i').classList.replace('fa-stop', 'fa-play');
+            document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
+
+            showNavAlert('移動距離過短（不足 2 個軌跡點），已取消本次紀錄');
+            startIdleGPS();
+            return;
+        }
+
         if (!confirm("確定要「停止紀錄並儲存」這條路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) return;
 
         isRecording = false;
@@ -766,7 +1421,15 @@ document.getElementById('recordBtn').onclick = async () => {
             clearInterval(timerInterval);
             timerInterval = null;
         }
-        releaseScreenWakeLockIfIdle();
+        try {
+            if (wakeLock) {
+                await wakeLock.release();
+                wakeLock = null;
+            }
+        } catch (err) {
+            wakeLock = null;
+        }
+        await releaseScreenWakeLockIfIdle(true);
 
         document.getElementById('recordingTopRow').classList.add('hidden');
         document.getElementById('idleTopRow').classList.remove('hidden');
@@ -774,33 +1437,29 @@ document.getElementById('recordBtn').onclick = async () => {
         document.getElementById('recordBtn').classList.replace('bg-red-600', 'bg-green-700');
         document.getElementById('recordBtnText').innerText = '開始紀錄路線';
         document.getElementById('recordBtn').querySelector('i').classList.replace('fa-stop', 'fa-play');
-        document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手';
+        document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
 
-        if (routePoints.length >= 2) {
-            const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
-            if (name) {
-                const savedAuthor = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
-                const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
-                localStorage.setItem('yinggeRouteLastAuthor', author);
+        const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
+        if (name) {
+            const savedAuthor = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
+            const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
+            localStorage.setItem('yinggeRouteLastAuthor', author);
 
-                const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
-                const nowId = Date.now();
-                savedRoutes.unshift({
-                    id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
-                    date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                    createdAt: new Date(nowId).toISOString(),
-                    distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
-                    points: routePoints, events: musicEvents,
-                    alerts: [], warnings: []
-                });
-                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-                try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
-                document.getElementById('historyCount').innerText = savedRoutes.length;
-                window.openRouteDetail(0);
-            }
-        } else {
-            alert("移動距離過短，未儲存路線。");
+            const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
+            const nowId = Date.now();
+            savedRoutes.unshift({
+                id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
+                date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                createdAt: new Date(nowId).toISOString(),
+                distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
+                points: routePoints, events: musicEvents,
+                alerts: [], warnings: []
+            });
+            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+            try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
+            document.getElementById('historyCount').innerText = savedRoutes.length;
+            window.openRouteDetail(0);
         }
         startIdleGPS();
     }
@@ -965,6 +1624,7 @@ function openRouteDetail(idx) {
     document.getElementById('detailTime').innerText = route.timeStr;
     document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
 
+    map.getSource('bg-route')?.setData(emptyGeoJSON());
     updateRouteLayers(route.points);
     renderRouteMarkers(route);
 
@@ -2730,8 +3390,8 @@ function openAlertModalForEdit(route, eventIdx) {
 
 // --- 6. 模擬重播引擎 ---
 let animFrameId = null, isPlaying = false, playProgress = 0, lastFrameTime = 0;
-let replayMappedAlerts = [], replayTriggeredAlertSet = new Set();
-let replayMappedMusicEvents = [], replayTriggeredMusicSet = new Set();
+let replayVoiceEvents = [];
+let replayCumMeters = [];
 const speedOptions = [1, 2, 4, 6];
 let speedMultiplier = 1;
 
@@ -2751,63 +3411,22 @@ document.getElementById('startReplayBtn').onclick = () => {
     document.getElementById('playbackTitle').innerText = route.name;
     speedToggleBtn.innerText = `${speedMultiplier}x`;
 
-    replayMappedAlerts = (route.events || [])
-        .filter(ev => ev.type === 'alert')
-        .map(ev => {
-            let minEvDist = Infinity, evPtIdx = typeof ev.ptIdx === 'number' ? ev.ptIdx : 0;
-            for (let i = 0; i < route.points.length; i++) {
-                const d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
-                if (d < minEvDist) { minEvDist = d; evPtIdx = i; }
-            }
-            return { ...ev, ptIdx: evPtIdx };
-        });
-    replayTriggeredAlertSet.clear();
+    // 初始化累積里程與語音標記事件，重置所有 played / prePlayed 狀態
+    replayCumMeters = buildCumulativeRouteMeters(route.points);
+    replayVoiceEvents = prepareVoiceMarkerEvents(route, true);
 
-    const rawMusicEvents = (route.events || [])
-        .filter(ev => ev.type === 'on' || ev.type === 'off')
-        .map(ev => {
-            let minEvDist = Infinity, evPtIdx = typeof ev.ptIdx === 'number' ? ev.ptIdx : 0;
-            if (typeof ev.ptIdx !== 'number') {
-                for (let i = 0; i < route.points.length; i++) {
-                    const d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
-                    if (d < minEvDist) { minEvDist = d; evPtIdx = i; }
-                }
-            }
-            return { ...ev, ptIdx: evPtIdx };
-        });
-
-    for (let i = 1; i < route.points.length; i++) {
-        const currActive = Boolean(route.points[i].musicActive);
-        const prevActive = Boolean(route.points[i - 1].musicActive);
-        if (currActive !== prevActive) {
-            const evtType = currActive ? 'on' : 'off';
-            const alreadyExists = rawMusicEvents.some(e => e.type === evtType && Math.abs(e.ptIdx - i) <= 2);
-            if (!alreadyExists) {
-                rawMusicEvents.push({
-                    type: evtType,
-                    lng: route.points[i].lng,
-                    lat: route.points[i].lat,
-                    ptIdx: i
-                });
-            }
-        }
-    }
-    replayMappedMusicEvents = rawMusicEvents.sort((a, b) => a.ptIdx - b.ptIdx);
-    replayTriggeredMusicSet.clear();
-
-    map.getSource('bg-route')?.setData({
-        type: 'FeatureCollection',
-        features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: route.points.map(p => [p.lng, p.lat]) } }]
-    });
-    updateRouteLayers([]); renderRouteMarkers(route);
+    // 初始狀態（currentTrackIndex = 0）：已行駛路段為空，未行駛路段完整高亮顯示
+    updateProgressRouteLayers(route.points, 0, null, 0);
+    renderRouteMarkers(route);
 
     playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
     setCameraFollow(true);
 
     const startPt = route.points[0];
     lastKnownLngLat = [startPt.lng, startPt.lat];
-    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat);
-    map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, offset: [0, 100] });
+    currentHeading = getRouteSegmentBearing(route.points, 0);
+    if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+    map.jumpTo({ center: lastKnownLngLat, zoom: 17.5, bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, 100] });
 
     startSmoothPlayback();
 };
@@ -2818,20 +3437,29 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
     const pts = route.points;
     const maxIdx = pts.length - 1;
     const clamped = Math.min(Math.max(floatIdx, 0), maxIdx);
-    const i = Math.min(Math.floor(clamped), maxIdx);
-    const frac = clamped - i;
+    const currentTrackIndex = Math.min(Math.floor(clamped), maxIdx);
+    const frac = clamped - currentTrackIndex;
 
-    const p1 = pts[i], p2 = pts[Math.min(i + 1, maxIdx)];
+    const p1 = pts[currentTrackIndex], p2 = pts[Math.min(currentTrackIndex + 1, maxIdx)];
     if (!p1 || !p2) return;
     const curLng = p1.lng + (p2.lng - p1.lng) * frac;
     const curLat = p1.lat + (p2.lat - p1.lat) * frac;
     lastKnownLngLat = [curLng, curLat];
 
-    if (i < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
+    if (currentTrackIndex < maxIdx && (p1.lng !== p2.lng || p1.lat !== p2.lat)) {
+        currentHeading = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
+    } else {
+        currentHeading = getRouteSegmentBearing(pts, currentTrackIndex);
+    }
     if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
 
-    const walkedPoints = pts.slice(0, i + 1).concat([{ lng: curLng, lat: curLat, musicActive: p2.musicActive }]);
-    updateRouteLayers(walkedPoints, forceLayerUpdate ? 0 : 50);
+    // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 為半透明淺灰，currentTrackIndex ~ 終點維持原色高亮
+    updateProgressRouteLayers(
+        pts,
+        currentTrackIndex,
+        { lng: curLng, lat: curLat, musicActive: p2.musicActive },
+        forceLayerUpdate ? 0 : 40
+    );
 
     const badge = document.getElementById('replayMusicBadge');
     if (p2.musicActive) {
@@ -2842,36 +3470,21 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         badge.innerText = "🔇 目前路段：音樂已關閉 (中斷移動)";
     }
 
-    const triggerWindow = Math.max(2.5, speedMultiplier * 0.8);
+    // 🔊 綁定路線進度的雙層語音預警（300m 預告 + 50m 確認 + 方向 ±30° + played 鎖定）
+    evaluateVoiceMarkersWithProgress({
+        events: replayVoiceEvents,
+        pts,
+        cumMeters: replayCumMeters,
+        currentTrackIndex,
+        lng: curLng,
+        lat: curLat,
+        vehicleBearing: currentHeading,
+        onTriggerWake: false
+    });
 
-    if (replayMappedMusicEvents.length > 0) {
-        replayMappedMusicEvents.forEach((ev, idx) => {
-            if (replayTriggeredMusicSet.has(idx)) return;
-            if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= triggerWindow) {
-                replayTriggeredMusicSet.add(idx);
-                if (ev.type === 'on') {
-                    showNavAlert('🎵', '開啟音樂！', 'bg-green-600');
-                    speakText('請開啟音樂');
-                } else if (ev.type === 'off') {
-                    showNavAlert('🔇', '關閉音樂！', 'bg-red-600');
-                    speakText('請關閉音樂');
-                }
-            }
-        });
+    if (isFollowingCamera) {
+        map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100] });
     }
-
-    if (replayMappedAlerts.length > 0) {
-        replayMappedAlerts.forEach((ev, idx) => {
-            if (replayTriggeredAlertSet.has(idx)) return;
-            if (clamped >= ev.ptIdx && clamped - ev.ptIdx <= triggerWindow) {
-                replayTriggeredAlertSet.add(idx);
-                showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null);
-                speakText(`前方提醒，${ev.note || '注意路況'}`);
-            }
-        });
-    }
-
-    if (isFollowingCamera) map.jumpTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100] });
 }
 
 function playbackLoop(timestamp) {
@@ -2903,10 +3516,17 @@ function startSmoothPlayback() {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
     }
-    if (playProgress >= savedRoutes[selectedRouteIdx].points.length - 1) {
+    const route = savedRoutes[selectedRouteIdx];
+    if (route && playProgress >= route.points.length - 1) {
         playProgress = 0;
-        replayTriggeredAlertSet.clear();
-        replayTriggeredMusicSet.clear();
+        replayVoiceEvents.forEach(ev => {
+            ev.played = false;
+            ev.prePlayed = false;
+            if (ev.sourceEvent) {
+                ev.sourceEvent.played = false;
+                ev.sourceEvent.prePlayed = false;
+            }
+        });
     }
     isPlaying = true; lastFrameTime = 0;
     playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
@@ -2925,14 +3545,21 @@ function stopSmoothPlayback() {
 playPauseBtn.onclick = () => isPlaying ? stopSmoothPlayback() : startSmoothPlayback();
 playbackSlider.oninput = (e) => {
     playProgress = parseInt(e.target.value, 10) / 100;
-    const triggerWindow = Math.max(2.5, speedMultiplier * 0.8);
-    replayMappedAlerts.forEach((ev, idx) => {
-        if (playProgress < ev.ptIdx) replayTriggeredAlertSet.delete(idx);
-        else if (playProgress - ev.ptIdx > triggerWindow) replayTriggeredAlertSet.add(idx);
-    });
-    replayMappedMusicEvents.forEach((ev, idx) => {
-        if (playProgress < ev.ptIdx) replayTriggeredMusicSet.delete(idx);
-        else if (playProgress - ev.ptIdx > triggerWindow) replayTriggeredMusicSet.add(idx);
+    const scrubTrackIdx = Math.floor(playProgress);
+    const curCumM = replayCumMeters[scrubTrackIdx] || 0;
+    const confirmDist = Number(systemNavConfig.confirmDistMeters) || DEFAULT_SYSTEM_CONFIG.confirmDistMeters;
+    const lookAheadDist = Number(systemNavConfig.lookAheadDistMeters) || DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters;
+    replayVoiceEvents.forEach(ev => {
+        const evCumM = replayCumMeters[ev.ptIdx] || 0;
+        const aheadM = evCumM - curCumM;
+        if (aheadM > confirmDist + 5) {
+            ev.played = false;
+            if (ev.sourceEvent) ev.sourceEvent.played = false;
+        }
+        if (aheadM > lookAheadDist + 15) {
+            ev.prePlayed = false;
+            if (ev.sourceEvent) ev.sourceEvent.prePlayed = false;
+        }
     });
     renderInterpolatedStep(playProgress, true);
 };
@@ -3077,6 +3704,11 @@ function autoSleepScreen() {
 
 let navAlertHideTimer = null;
 function showNavAlert(iconHtml, text, bgColorClass, photoUrl = null) {
+    if (text === undefined) {
+        text = iconHtml;
+        iconHtml = '⚠️';
+        bgColorClass = 'bg-amber-600';
+    }
     if (navAlertHideTimer) clearTimeout(navAlertHideTimer);
     if (text === '') {
         // 🚀 無文字模式 (轉彎專用)：水平置中圓角正方形大圖示
@@ -3173,14 +3805,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
     isBlackScreenActive = false; isScreenAutoWoken = false;
 
     const pts = route.points;
-    const mappedEvents = (route.events || []).map(ev => {
-        let minEvDist = Infinity, evPtIdx = 0;
-        for(let i = 0; i < route.points.length; i++) {
-            let d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
-            if(d < minEvDist) { minEvDist = d; evPtIdx = i; }
-        }
-        return { ...ev, ptIdx: evPtIdx };
-    });
+    const followCumMeters = buildCumulativeRouteMeters(pts);
+    // 重新開始導航時，完整重置所有標記點的 played 與 prePlayed 狀態
+    const mappedEvents = prepareVoiceMarkerEvents(route, false);
     window.activeFollowMappedEvents = mappedEvents;
 
     window.stopsQueue = (route.points || []).map((p, index) => ({ ...p, ptIdx: index })).filter(p => p.is_stop === true);
@@ -3193,8 +3820,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
         document.getElementById('tacticalTimePanel').classList.add('hidden');
     }
 
-    let currentNavIdx = 0; 
-    updateRouteLayers(route.points); renderRouteMarkers(route);
+    let currentTrackIndex = 0;
+    updateProgressRouteLayers(route.points, 0, null, 0);
+    renderRouteMarkers(route);
     setCameraFollow(true);
 
     // 🚀 按下導航瞬間，強制將鏡頭拉近到「實戰特寫視角」並傾斜
@@ -3211,27 +3839,41 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     followWatchId = navigator.geolocation.watchPosition(pos => {
         const filtered = processFilteredGpsPosition(pos);
-        if (!filtered) return; // 剔除 accuracy > 35m 低精度與 > 120km/h 衛星反射瞬移
+        if (!filtered) return; // 剔除 accuracy > 45m 低精度與 > 160km/h 衛星反射瞬移
 
         const lng = filtered.lng, lat = filtered.lat;
+        checkAndApplyAutoDayNightMode(lat, lng);
+
         if (!filtered.isStationary) {
             if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
             if (!isPowerSaveMapPaused()) {
-                if (vehicleMarker) vehicleMarker.setLngLat(lastKnownLngLat).setRotation(currentHeading);
+                if (vehicleMarker) {
+                    smoothMoveVehicleMarker(lastKnownLngLat, currentHeading, 750);
+                }
 
                 if (isFollowingCamera) {
-                    map.easeTo({ center: lastKnownLngLat, bearing: isHeadingUpMode ? currentHeading : map.getBearing(), offset: [0, 100], duration: 300 });
+                    const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
+                    map.easeTo({
+                        center: lastKnownLngLat,
+                        zoom: targetZoom,
+                        bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
+                        offset: [0, 100],
+                        duration: 600
+                    });
                 }
             }
         }
 
-        let isOffRoute = true, closestPtIdx = currentNavIdx, minDist = Infinity;
+        // 即時計算路線進度索引 currentTrackIndex（含去回程方向權重保護）
+        const progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary);
+        currentTrackIndex = progressInfo.trackIndex;
+        const minDist = progressInfo.minDistMeters;
+        let isOffRoute = true;
 
-        for (let i = 0; i < pts.length; i++) {
-            const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
-            if (d < minDist) { minDist = d; closestPtIdx = i; }
+        // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 渲染為半透明淺灰色，currentTrackIndex ~ 終點維持高亮原色
+        if (!isPowerSaveMapPaused()) {
+            updateProgressRouteLayers(pts, currentTrackIndex, null, 150);
         }
-        currentNavIdx = closestPtIdx;
 
         const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
         if (!hasAnnouncedStart) {
@@ -3250,7 +3892,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
         if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
             const targetStop = window.stopsQueue[window.currentStopIndex];
             const distToStop = getDistanceKm(lng, lat, targetStop.lng, targetStop.lat) * 1000;
-            const indexDiff = currentNavIdx - targetStop.ptIdx;
+            const indexDiff = currentTrackIndex - targetStop.ptIdx;
             
             // 🚀 核心修復：距離嚴格縮小為 15 公尺，並加入「軌跡進度鎖」(防止隔壁巷子誤觸)
             const isNearStop = (distToStop <= 15 && Math.abs(indexDiff) <= 30);
@@ -3273,7 +3915,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
         if (!hasAnnouncedEnd) {
             const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;
-            if (distToEnd <= 40 || currentNavIdx >= pts.length - 3) {
+            if (distToEnd <= 40 || currentTrackIndex >= pts.length - 3) {
                 speakText("已抵達路線終點，本次清運任務結束，辛苦了！");
                 hasAnnouncedEnd = true; document.getElementById('tacticalTimePanel').classList.add('hidden');
             }
@@ -3291,26 +3933,26 @@ document.getElementById('startFollowBtn').onclick = async () => {
         }
 
         if (!isOffRoute) {
-            let lookAheadIdx = closestPtIdx, scanDist = 0;
+            let lookAheadIdx = currentTrackIndex, scanDist = 0;
             while (lookAheadIdx < pts.length - 1 && scanDist < 30) {
                 scanDist += (getDistanceKm(pts[lookAheadIdx].lng, pts[lookAheadIdx].lat, pts[lookAheadIdx+1].lng, pts[lookAheadIdx+1].lat) * 1000);
                 lookAheadIdx++;
             }
 
-            if (lookAheadIdx > closestPtIdx && !triggeredTurnIndices.has(closestPtIdx)) {
-                const currentSegAngle = getBearing(pts[closestPtIdx].lng, pts[closestPtIdx].lat, pts[closestPtIdx+1].lng, pts[closestPtIdx+1].lat);
+            if (lookAheadIdx > currentTrackIndex && !triggeredTurnIndices.has(currentTrackIndex)) {
+                const currentSegAngle = getBearing(pts[currentTrackIndex].lng, pts[currentTrackIndex].lat, pts[currentTrackIndex+1].lng, pts[currentTrackIndex+1].lat);
                 const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
                 const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
                 
                 if (angleDiff > 40 && angleDiff < 140) {
-                    for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
+                    for(let k = Math.max(0, currentTrackIndex - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                     autoWakeScreen(); 
                     // 🚀 換成 100% 絕對支援的基本大箭頭 (向右)
                     showNavAlert('<i class="fa-solid fa-arrow-right"></i>', '', 'bg-blue-600'); 
                     speakText("前方準備右轉"); 
                     autoSleepScreen();
                 } else if (angleDiff < -40 && angleDiff > -140) {
-                    for(let k = Math.max(0, closestPtIdx - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
+                    for(let k = Math.max(0, currentTrackIndex - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
                     autoWakeScreen(); 
                     // 🚀 換成 100% 絕對支援的基本大箭頭 (向左)
                     showNavAlert('<i class="fa-solid fa-arrow-left"></i>', '', 'bg-blue-600'); 
@@ -3319,19 +3961,16 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 }
             }
 
-            mappedEvents.forEach((ev, idx) => {
-                if (triggeredMusicIndices.has(idx)) return;
-                // 🚀 軌跡進度誤差稍微放寬，但物理距離嚴格縮小到 15 公尺
-                if (Math.abs(currentNavIdx - ev.ptIdx) <= 25) {
-                    const distMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
-                    if (distMeters <= 15) {
-                        triggeredMusicIndices.add(idx); autoWakeScreen();
-                        if (ev.type === 'on') { showNavAlert('🎵', '開啟音樂！', 'bg-green-600'); speakText("請開啟音樂"); }
-                        else if (ev.type === 'off') { showNavAlert('🔇', '關閉音樂！', 'bg-red-600'); speakText("請關閉音樂"); }
-                        else if (ev.type === 'alert') { showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null); speakText(`前方提醒，${ev.note || '注意路況'}`); }
-                        autoSleepScreen();
-                    }
-                }
+            // 🔊 綁定路線進度的雙層語音預警（300m 簡短預告 + 50m 完整確認 + 方向 ±30° 一致 + played 鎖定防重複）
+            evaluateVoiceMarkersWithProgress({
+                events: mappedEvents,
+                pts,
+                cumMeters: followCumMeters,
+                currentTrackIndex,
+                lng,
+                lat,
+                vehicleBearing: currentHeading,
+                onTriggerWake: true
             });
         }
     }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
@@ -3607,7 +4246,15 @@ function confirmQuickNavAlert() {
     // 同步加入當下正在執行的導航事件陣列，並標記為本次已觸發（避免剛標記完原地立刻重複播報，下趟經過時即正常播報）
     if (Array.isArray(window.activeFollowMappedEvents)) {
         const newIdx = window.activeFollowMappedEvents.length;
-        window.activeFollowMappedEvents.push({ ...newAlertEv });
+        newAlertEv.played = true;
+        newAlertEv.prePlayed = true;
+        window.activeFollowMappedEvents.push({
+            ...newAlertEv,
+            segmentBearing: lockedQuickAlertBearing || 0,
+            played: true,
+            prePlayed: true,
+            sourceEvent: newAlertEv
+        });
         triggeredMusicIndices.add(newIdx);
     }
 
@@ -4569,6 +5216,7 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
         name: fleetUserName,
         lat: Number(lat.toFixed(6)),
         lng: Number(lng.toFixed(6)),
+        speedKmh: Math.round(Math.max(0, lastRecordedSpeedKmh || 0)),
         updatedAt: now
     };
 
@@ -4597,6 +5245,82 @@ window.onFleetPositionUpdate = function(lat, lng) {
     }
 };
 
+// ==========================================
+// 🟢 左上角「車隊雷達在線名單」即時清單（支援超過 3 人自動收折＋點擊快速 flyTo 追蹤隊友）
+// ==========================================
+let onlineFleetMembersList = [];
+let isOnlineFleetListExpanded = false;
+
+function renderOnlineFleetListUI() {
+    const container = document.getElementById('onlineFleetListContainer');
+    if (!container) return;
+
+    // 若管理員關閉「顯示左上角車隊在線名單」或目前無其他同事在線，自動隱藏不佔空間
+    if (!systemNavConfig.showOnlineFleetList || !Array.isArray(onlineFleetMembersList) || onlineFleetMembersList.length === 0) {
+        container.innerHTML = '';
+        container.classList.add('hidden');
+        return;
+    }
+
+    container.classList.remove('hidden');
+    container.innerHTML = '';
+
+    const totalOnline = onlineFleetMembersList.length;
+    const maxVisible = 3;
+    const shouldCollapse = totalOnline > maxVisible && !isOnlineFleetListExpanded;
+    const visibleMembers = shouldCollapse
+        ? onlineFleetMembersList.slice(0, maxVisible)
+        : onlineFleetMembersList;
+
+    visibleMembers.forEach(member => {
+        const pillBtn = document.createElement('button');
+        pillBtn.type = 'button';
+        pillBtn.className = 'bg-white/95 hover:bg-emerald-50 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-gray-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap';
+        pillBtn.title = `點擊追蹤 ${member.name} 的即時位置`;
+
+        const dotSpan = document.createElement('span');
+        dotSpan.textContent = '🟢';
+        dotSpan.className = 'text-[10px] leading-none';
+
+        const textSpan = document.createElement('span');
+        textSpan.textContent = `${member.name} · ${member.speedKmh} km/h`;
+
+        pillBtn.appendChild(dotSpan);
+        pillBtn.appendChild(textSpan);
+
+        pillBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 暫時解除自己的車頭鎖定（按右側「置中」按鈕即可切回自己）
+            setCameraFollow(false);
+            map.flyTo({
+                center: [member.lng, member.lat],
+                zoom: Math.max(map.getZoom(), 16.5),
+                duration: 900
+            });
+        });
+
+        container.appendChild(pillBtn);
+    });
+
+    if (totalOnline > maxVisible) {
+        const hiddenCount = totalOnline - maxVisible;
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'bg-white/90 hover:bg-amber-50 backdrop-blur px-3 py-1 rounded-xl shadow-md text-[11px] font-black text-emerald-700 border border-emerald-200 flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap';
+        toggleBtn.textContent = isOnlineFleetListExpanded
+            ? `收合在線名單 ▴`
+            : `+ 還有 ${hiddenCount} 位在線 ▾`;
+
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isOnlineFleetListExpanded = !isOnlineFleetListExpanded;
+            renderOnlineFleetListUI();
+        });
+
+        container.appendChild(toggleBtn);
+    }
+}
+
 function createFleetTruckMarkerElement(memberName) {
     const wrapper = document.createElement('div');
     wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
@@ -4623,6 +5347,7 @@ async function fetchAndRenderFleetRadar() {
         const data = await res.json();
         const now = Date.now();
         const activeIds = new Set();
+        const nextOnlineMembers = [];
 
         if (data && typeof data === 'object') {
             Object.entries(data).forEach(([devId, info]) => {
@@ -4640,20 +5365,56 @@ async function fetchAndRenderFleetRadar() {
                 activeIds.add(devId);
                 const memberName = (info.name || '隊員').trim();
 
-                if (fleetLayerGroup[devId]) {
-                    fleetLayerGroup[devId].marker.setLngLat([lng, lat]);
-                    if (fleetLayerGroup[devId].name !== memberName) {
-                        const nameSpan = fleetLayerGroup[devId].el.querySelector('.fleet-member-name');
+                // 計算同事即時時速 (km/h)：優先採用雲端回報之 speedKmh，若舊版未帶則依前後座標差推算
+                let memberSpeedKmh = 0;
+                const existingEntry = fleetLayerGroup[devId];
+                if (typeof info.speedKmh === 'number' && !isNaN(info.speedKmh) && info.speedKmh >= 0) {
+                    memberSpeedKmh = (now - updatedAt > 30000) ? 0 : Math.round(info.speedKmh);
+                } else if (existingEntry && existingEntry.lastLat !== undefined && existingEntry.lastUpdatedAt && updatedAt > existingEntry.lastUpdatedAt) {
+                    const distKm = getDistanceKm(existingEntry.lastLng, existingEntry.lastLat, lng, lat);
+                    const dtSec = Math.max(1, (updatedAt - existingEntry.lastUpdatedAt) / 1000);
+                    const implied = (distKm / dtSec) * 3600;
+                    const maxSpd = Number(systemNavConfig.maxSpeedKmh) || 160;
+                    memberSpeedKmh = (distKm * 1000 < 5 || implied < 2) ? 0 : Math.round(Math.min(implied, maxSpd));
+                } else if (existingEntry && typeof existingEntry.speedKmh === 'number' && (now - updatedAt <= 20000)) {
+                    memberSpeedKmh = existingEntry.speedKmh;
+                }
+
+                if (existingEntry) {
+                    existingEntry.marker.setLngLat([lng, lat]);
+                    if (existingEntry.name !== memberName) {
+                        const nameSpan = existingEntry.el.querySelector('.fleet-member-name');
                         if (nameSpan) nameSpan.textContent = memberName;
-                        fleetLayerGroup[devId].name = memberName;
+                        existingEntry.name = memberName;
                     }
+                    existingEntry.lastLat = lat;
+                    existingEntry.lastLng = lng;
+                    existingEntry.lastUpdatedAt = updatedAt;
+                    existingEntry.speedKmh = memberSpeedKmh;
                 } else {
                     const el = createFleetTruckMarkerElement(memberName);
                     const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
                         .setLngLat([lng, lat])
                         .addTo(map);
-                    fleetLayerGroup[devId] = { marker, el, name: memberName };
+                    fleetLayerGroup[devId] = {
+                        marker,
+                        el,
+                        name: memberName,
+                        lastLat: lat,
+                        lastLng: lng,
+                        lastUpdatedAt: updatedAt,
+                        speedKmh: memberSpeedKmh
+                    };
                 }
+
+                nextOnlineMembers.push({
+                    devId,
+                    name: memberName,
+                    lat,
+                    lng,
+                    speedKmh: memberSpeedKmh,
+                    updatedAt
+                });
             });
         }
 
@@ -4664,6 +5425,11 @@ async function fetchAndRenderFleetRadar() {
                 delete fleetLayerGroup[devId];
             }
         });
+
+        // 依名稱排序保持清單穩定不跳動，並更新左上角在線名單 UI
+        nextOnlineMembers.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+        onlineFleetMembersList = nextOnlineMembers;
+        renderOnlineFleetListUI();
     } catch (err) {
         // 巷弄斷網或 5 秒逾時靜默略過，不干擾導航並於下週期自動恢復
     } finally {
@@ -4772,6 +5538,26 @@ function ensureBackgroundSilentKeepAlive() {
     }, { passive: true });
 });
 
+// ==========================================
+// 📍 共享地圖地標核心狀態變數（提前宣告以避免 startFleetRadarSystem 啟動時觸發 TDZ ReferenceError）
+// ==========================================
+const MAP_PINS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/map_pins';
+const MAP_PINS_ALL_URL = `${MAP_PINS_BASE_URL}.json`;
+
+// 獨立的共享地標圖層群組（不受 clearDomMarkers 影響，於一般、錄製、預覽、重播與導航模式皆保留）
+const pinsLayerGroup = {};
+window.pinsLayerGroup = pinsLayerGroup;
+
+let mapPinsPollTimer = null;
+let isFetchingMapPins = false;
+let pendingMapPinLat = null;
+let pendingMapPinLng = null;
+let currentMapPinPhotoBase64 = '';
+let activeViewingMapPin = null;
+let activeDistanceGuidePin = null;
+let pinDistanceGuideTimer = null;
+let pinDistanceLineMarker = null;
+
 function startFleetRadarSystem() {
     if (!fleetUserName) return;
 
@@ -4858,20 +5644,6 @@ document.addEventListener('visibilitychange', async () => {
 // ==========================================
 // 📍 10. 全車隊共享地圖地標（藍色水滴＋縮圖照片）
 // ==========================================
-const MAP_PINS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/map_pins';
-const MAP_PINS_ALL_URL = `${MAP_PINS_BASE_URL}.json`;
-
-// 獨立的共享地標圖層群組（不受 clearDomMarkers 影響，於一般、錄製、預覽、重播與導航模式皆保留）
-const pinsLayerGroup = {};
-window.pinsLayerGroup = pinsLayerGroup;
-
-let mapPinsPollTimer = null;
-let isFetchingMapPins = false;
-let pendingMapPinLat = null;
-let pendingMapPinLng = null;
-let currentMapPinPhotoBase64 = '';
-let activeViewingMapPin = null;
-
 const createMapPinModal = document.getElementById('createMapPinModal');
 const createMapPinCoordsText = document.getElementById('createMapPinCoordsText');
 const mapPinTitleInput = document.getElementById('mapPinTitleInput');
@@ -4900,10 +5672,6 @@ const btnCloseViewMapPinTop = document.getElementById('btnCloseViewMapPinTop');
 const pinDistanceGuideBanner = document.getElementById('pinDistanceGuideBanner');
 const pinDistanceGuideText = document.getElementById('pinDistanceGuideText');
 const btnCancelPinDistanceGuideBanner = document.getElementById('btnCancelPinDistanceGuideBanner');
-
-let activeDistanceGuidePin = null;
-let pinDistanceGuideTimer = null;
-let pinDistanceLineMarker = null;
 
 function ensurePinDistanceGuideLayer() {
     if (!map || !map.isStyleLoaded()) return false;
@@ -5595,79 +6363,140 @@ if (map.loaded()) {
 startSharedMapPinsSystem();
 
 // ==========================================
-// ⚙️ 10. 管理員隱藏設定面板（6 位數密碼驗證＋全隊同步調整更新秒數）
+// ⚙️ 10. 管理員隱藏設定面板（6 位數密碼驗證＋全隊導航參數與公告橫幅雙向即時同步 v3.1）
 // ==========================================
 const ADMIN_SETTINGS_PASSWORD = '888888';
 
-// --- 10.1 從 Firebase 讀取全隊雷達更新秒數 ---
+// --- 10.1 從 Firebase 讀取全隊系統參數設定（讀取不到時自動套用預設值） ---
 async function fetchSystemConfig() {
     try {
         const res = await fetchWithTimeout(SYSTEM_CONFIG_URL, { cache: 'no-store' }, 5000);
-        if (!res.ok) return DEFAULT_RADAR_INTERVAL_SEC;
+        if (!res.ok) return normalizeSystemConfig(systemNavConfig);
         const data = await res.json();
-        if (data && typeof data.radarIntervalSec === 'number' && data.radarIntervalSec > 0) {
-            return data.radarIntervalSec;
+        if (data && typeof data === 'object') {
+            return normalizeSystemConfig(data);
         }
-        return DEFAULT_RADAR_INTERVAL_SEC;
+        return normalizeSystemConfig(DEFAULT_SYSTEM_CONFIG);
     } catch (e) {
-        return DEFAULT_RADAR_INTERVAL_SEC;
+        return normalizeSystemConfig(systemNavConfig);
     }
 }
 
-// --- 10.2 檢查雲端秒數是否變更，若變更則即時套用（無須重開 App） ---
+// --- 10.2 套用完整系統參數至當前導航與畫面 ---
+function applySystemConfigToRuntime(newCfg) {
+    const normalized = normalizeSystemConfig(newCfg);
+    const prevNightSetting = systemNavConfig.enableAutoNightMode;
+    const prevDynamicZoom = systemNavConfig.enableDynamicZoom;
+    const prevLowZoom = systemNavConfig.lowSpeedZoom;
+    const prevHighZoom = systemNavConfig.highSpeedZoom;
+
+    systemNavConfig = normalized;
+    try {
+        localStorage.setItem('yingge_system_nav_config_v31', JSON.stringify(normalized));
+    } catch (e) {}
+
+    // 1. 全隊頂部公告橫幅即時顯示／隱藏
+    renderFleetAnnouncementBanner(normalized.announcementText);
+
+    // 1.5 左上角車隊雷達在線名單顯示開關即時同步套用
+    if (typeof renderOnlineFleetListUI === 'function') {
+        renderOnlineFleetListUI();
+    }
+
+    // 2. 日出日落自動夜間模式即時套用
+    if (prevNightSetting !== normalized.enableAutoNightMode) {
+        checkAndApplyAutoDayNightMode();
+    }
+
+    // 3. 若跟隨中且縮放設定變更，平滑更新當前視野縮放
+    if (
+        isFollowingCamera &&
+        !isPowerSaveMapPaused() &&
+        normalized.enableDynamicZoom &&
+        (prevDynamicZoom !== normalized.enableDynamicZoom ||
+         prevLowZoom !== normalized.lowSpeedZoom ||
+         prevHighZoom !== normalized.highSpeedZoom)
+    ) {
+        const targetZoom = getDynamicZoomBySpeed(lastRecordedSpeedKmh);
+        try {
+            map.easeTo({
+                center: lastKnownLngLat,
+                zoom: targetZoom,
+                bearing: isHeadingUpMode ? currentHeading : map.getBearing(),
+                offset: [0, 100],
+                duration: 450
+            });
+        } catch (e) {}
+    }
+
+    // 4. 車隊雷達輪詢秒數變更時即時重啟計時器
+    const cloudSec = normalized.radarIntervalSec;
+    if (cloudSec && cloudSec !== currentRadarIntervalSec) {
+        currentRadarIntervalSec = cloudSec;
+        lastKnownCloudInterval = cloudSec;
+        restartFleetRadarWithNewInterval(cloudSec);
+        updateAdminIntervalDisplay(cloudSec);
+    }
+}
+
+// --- 10.3 檢查雲端系統設定是否變更，若變更則即時套用（無須重開 App） ---
 let isCheckingSystemConfig = false;
 async function checkAndApplyRadarInterval() {
     if (isCheckingSystemConfig) return;
     isCheckingSystemConfig = true;
     try {
-        const cloudSec = await fetchSystemConfig();
-        if (cloudSec && cloudSec !== currentRadarIntervalSec) {
-            currentRadarIntervalSec = cloudSec;
-            lastKnownCloudInterval = cloudSec;
-            // 清除舊計時器並以新秒數重新啟動雷達輪詢
-            restartFleetRadarWithNewInterval(cloudSec);
-            updateAdminIntervalDisplay(cloudSec);
-        }
+        const cloudCfg = await fetchSystemConfig();
+        applySystemConfigToRuntime(cloudCfg);
     } finally {
         isCheckingSystemConfig = false;
     }
 }
 
-// --- 10.3 以新秒數重新啟動車隊雷達輪詢（GPS 上傳 + 雷達讀取） ---
+// --- 10.4 以新秒數重新啟動車隊雷達輪詢（GPS 上傳 + 雷達讀取） ---
 function restartFleetRadarWithNewInterval(intervalSec) {
     if (!fleetUserName) return;
 
-    // 清除舊的 fleetPollTimer（雷達讀取）
     if (fleetPollTimer !== null) {
         clearInterval(fleetPollTimer);
         fleetPollTimer = null;
     }
-    // 以新秒數重新啟動輪詢
     const intervalMs = (intervalSec || DEFAULT_RADAR_INTERVAL_SEC) * 1000;
     fetchAndRenderFleetRadar();
     fleetPollTimer = setInterval(fetchAndRenderFleetRadar, intervalMs);
 }
 
-// --- 10.4 初始化：讀取雲端秒數並套用 ---
-(async function initRadarInterval() {
-    const cloudSec = await fetchSystemConfig();
-    currentRadarIntervalSec = cloudSec;
-    lastKnownCloudInterval = cloudSec;
-    // 若車隊雷達已啟動，以雲端秒數重新啟動輪詢
+// --- 10.5 初始化：啟動時立即讀取雲端系統參數與公告橫幅並定時同步 ---
+(async function initSystemConfigSync() {
+    const cloudCfg = await fetchSystemConfig();
+    currentRadarIntervalSec = cloudCfg.radarIntervalSec;
+    lastKnownCloudInterval = cloudCfg.radarIntervalSec;
+    applySystemConfigToRuntime(cloudCfg);
     if (fleetRadarStarted && fleetUserName) {
-        restartFleetRadarWithNewInterval(cloudSec);
+        restartFleetRadarWithNewInterval(cloudCfg.radarIntervalSec);
     }
+    // 確保即使尚未設定車隊名稱的裝置，也能每 10 秒自動同步全隊頂部公告與最新導航參數
+    setInterval(() => {
+        checkAndApplyRadarInterval();
+    }, 10000);
 })();
 
-// --- 10.5 在每次 fetchAndRenderFleetRadar 時一併檢查雲端秒數是否變更 ---
+// --- 10.6 在每次 fetchAndRenderFleetRadar 時一併檢查雲端參數是否變更 ---
 const _originalFetchAndRenderFleetRadar = fetchAndRenderFleetRadar;
 fetchAndRenderFleetRadar = async function() {
     await _originalFetchAndRenderFleetRadar();
     checkAndApplyRadarInterval();
 };
 
-// --- 10.6 標題連續點擊 5 次隱藏觸發機制 ---
+// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發管理員設定驗證 ---
 (function setupAdminTitleTrigger() {
+    const versionBadgeEl = document.getElementById('appVersionBadge');
+    if (versionBadgeEl) {
+        versionBadgeEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openAdminPasswordModal();
+        });
+    }
+
     const titleEl = document.getElementById('appStatusTitle');
     if (!titleEl) return;
 
@@ -5678,7 +6507,6 @@ fetchAndRenderFleetRadar = async function() {
         e.stopPropagation();
         tapCount++;
         if (tapTimer) clearTimeout(tapTimer);
-        // 3 秒內連點 5 下觸發
         tapTimer = setTimeout(() => { tapCount = 0; }, 3000);
 
         if (tapCount >= 5) {
@@ -5689,7 +6517,7 @@ fetchAndRenderFleetRadar = async function() {
     });
 })();
 
-// --- 10.7 密碼驗證彈窗 ---
+// --- 10.8 密碼驗證彈窗 ---
 function openAdminPasswordModal() {
     const modal = document.getElementById('adminPasswordModal');
     const input = document.getElementById('adminPasswordInput');
@@ -5725,22 +6553,70 @@ document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () 
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
 });
 
-// --- 10.8 管理員設定面板 ---
+// --- 10.9 管理員設定面板表單渲染與雙向同步 ---
+function populateAdminSettingsForm(cfg) {
+    const c = normalizeSystemConfig(cfg);
+    selectedAdminInterval = c.radarIntervalSec;
+    updateAdminIntervalDisplay(c.radarIntervalSec);
+    highlightAdminIntervalBtn(c.radarIntervalSec);
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    };
+    const setChecked = (id, boolVal) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = Boolean(boolVal);
+    };
+
+    setVal('adminAnnouncementInput', c.announcementText || '');
+    setVal('adminLookAheadDistInput', c.lookAheadDistMeters);
+    setVal('adminConfirmDistInput', c.confirmDistMeters);
+    setVal('adminBearingTolInput', c.bearingToleranceDeg);
+    setVal('adminVoiceRateInput', c.voiceRate);
+    setVal('adminLowSpeedZoomInput', c.lowSpeedZoom);
+    setVal('adminHighSpeedZoomInput', c.highSpeedZoom);
+    setChecked('adminEnableDynamicZoomInput', c.enableDynamicZoom);
+    setChecked('adminEnableAutoNightInput', c.enableAutoNightMode);
+    setChecked('adminShowOnlineFleetListInput', c.showOnlineFleetList);
+    setVal('adminMaxAccuracyInput', c.maxAccuracyMeters);
+    setVal('adminMaxSpeedInput', c.maxSpeedKmh);
+    setVal('adminMinLockSpeedInput', c.minLockSpeedKmh);
+}
+
+function readAdminSettingsForm() {
+    const getVal = (id) => document.getElementById(id)?.value;
+    const getChecked = (id) => Boolean(document.getElementById(id)?.checked);
+
+    return normalizeSystemConfig({
+        radarIntervalSec: selectedAdminInterval,
+        announcementText: getVal('adminAnnouncementInput') || '',
+        lookAheadDistMeters: getVal('adminLookAheadDistInput'),
+        confirmDistMeters: getVal('adminConfirmDistInput'),
+        bearingToleranceDeg: getVal('adminBearingTolInput'),
+        voiceRate: getVal('adminVoiceRateInput'),
+        lowSpeedZoom: getVal('adminLowSpeedZoomInput'),
+        highSpeedZoom: getVal('adminHighSpeedZoomInput'),
+        enableDynamicZoom: getChecked('adminEnableDynamicZoomInput'),
+        enableAutoNightMode: getChecked('adminEnableAutoNightInput'),
+        showOnlineFleetList: getChecked('adminShowOnlineFleetListInput'),
+        maxAccuracyMeters: getVal('adminMaxAccuracyInput'),
+        maxSpeedKmh: getVal('adminMaxSpeedInput'),
+        minLockSpeedKmh: getVal('adminMinLockSpeedInput')
+    });
+}
+
 async function openAdminSettingsPanel() {
     const modal = document.getElementById('adminSettingsModal');
     if (!modal) return;
 
-    // 讀取最新雲端秒數
-    const cloudSec = await fetchSystemConfig();
-    currentRadarIntervalSec = cloudSec;
-    lastKnownCloudInterval = cloudSec;
-    selectedAdminInterval = cloudSec;
-
-    // 更新顯示
-    updateAdminIntervalDisplay(cloudSec);
-    highlightAdminIntervalBtn(cloudSec);
-
+    // 先以目前本機有效設定立即渲染，再從 Firebase 拉取最新雲端設定覆蓋
+    populateAdminSettingsForm(systemNavConfig);
     modal.classList.remove('hidden');
+
+    const cloudCfg = await fetchSystemConfig();
+    applySystemConfigToRuntime(cloudCfg);
+    populateAdminSettingsForm(cloudCfg);
 }
 
 function updateAdminIntervalDisplay(sec) {
@@ -5753,9 +6629,9 @@ function highlightAdminIntervalBtn(activeSec) {
     btns.forEach(btn => {
         const val = parseInt(btn.dataset.interval, 10);
         if (val === activeSec) {
-            btn.className = 'admin-interval-btn bg-blue-50 border-2 border-blue-400 text-blue-800 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-between text-sm ring-2 ring-blue-300';
+            btn.className = 'admin-interval-btn bg-blue-50 border-2 border-blue-500 text-blue-800 font-extrabold py-2 px-1 rounded-xl active:scale-95 transition-all flex flex-col items-center justify-center text-xs ring-2 ring-blue-200';
         } else {
-            btn.className = 'admin-interval-btn bg-gray-50 hover:bg-blue-50 border-2 border-gray-200 text-gray-800 font-extrabold py-3 px-4 rounded-2xl active:scale-95 transition-all flex items-center justify-between text-sm';
+            btn.className = 'admin-interval-btn bg-white hover:bg-blue-50 border-2 border-gray-200 text-gray-800 font-extrabold py-2 px-1 rounded-xl active:scale-95 transition-all flex flex-col items-center justify-center text-xs';
         }
     });
 }
@@ -5766,22 +6642,38 @@ document.querySelectorAll('.admin-interval-btn').forEach(btn => {
         const val = parseInt(btn.dataset.interval, 10);
         if (!isNaN(val) && val > 0) {
             selectedAdminInterval = val;
+            updateAdminIntervalDisplay(val);
             highlightAdminIntervalBtn(val);
         }
     });
 });
 
-// 儲存按鈕
+// 一鍵清空公告按鈕
+document.getElementById('btnClearAdminAnnouncement')?.addEventListener('click', () => {
+    const input = document.getElementById('adminAnnouncementInput');
+    if (input) {
+        input.value = '';
+        input.focus();
+    }
+});
+
+// 恢復預設值按鈕
+document.getElementById('btnResetAdminDefaults')?.addEventListener('click', () => {
+    populateAdminSettingsForm(DEFAULT_SYSTEM_CONFIG);
+});
+
+// 儲存並同步按鈕
 document.getElementById('btnSaveAdminSettings')?.addEventListener('click', async () => {
     const saveBtn = document.getElementById('btnSaveAdminSettings');
     if (!saveBtn) return;
     const originalText = saveBtn.innerHTML;
-    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 儲存中...';
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 同步中...';
     saveBtn.disabled = true;
 
     try {
+        const newConfig = readAdminSettingsForm();
         const payload = {
-            radarIntervalSec: selectedAdminInterval,
+            ...newConfig,
             updatedAt: Date.now()
         };
         await fetchWithTimeout(SYSTEM_CONFIG_URL, {
@@ -5790,19 +6682,16 @@ document.getElementById('btnSaveAdminSettings')?.addEventListener('click', async
             body: JSON.stringify(payload)
         }, 5000);
 
-        currentRadarIntervalSec = selectedAdminInterval;
-        lastKnownCloudInterval = selectedAdminInterval;
-        updateAdminIntervalDisplay(selectedAdminInterval);
+        // 本機立即套用所有新參數與公告橫幅
+        applySystemConfigToRuntime(newConfig);
+        populateAdminSettingsForm(newConfig);
 
-        // 本機立即套用新秒數
-        restartFleetRadarWithNewInterval(selectedAdminInterval);
-
-        saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> 已成功儲存！';
+        saveBtn.innerHTML = '<i class="fa-solid fa-check"></i> 已儲存並全隊同步！';
         setTimeout(() => {
             saveBtn.innerHTML = originalText;
             saveBtn.disabled = false;
             document.getElementById('adminSettingsModal')?.classList.add('hidden');
-        }, 1500);
+        }, 1200);
     } catch (err) {
         saveBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> 儲存失敗，請重試';
         saveBtn.disabled = false;

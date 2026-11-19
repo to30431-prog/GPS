@@ -1845,8 +1845,9 @@ function openRouteDetail(idx) {
     document.getElementById('topBackBtn').classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = '路線預覽';
 
-    document.getElementById('detailTitle').innerText = route.name;
-    document.getElementById('detailDate').innerText = `保存於 ${route.date} · 創作者：${route.author || '隊員'}`;
+    const curVer = getRouteVersion(route);
+    document.getElementById('detailTitle').innerText = `${route.name} (v${curVer})`;
+    document.getElementById('detailDate').innerText = `更新於 ${route.date} · 創作者：${route.author || '隊員'}`;
     document.getElementById('detailDist').innerText = `${route.distance} km`;
     document.getElementById('detailTime').innerText = route.timeStr;
     document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
@@ -1866,8 +1867,7 @@ document.getElementById('deleteRouteBtn').ontouchend = (e) => {
     setTimeout(() => {
         if (confirm('確定要刪除這條清運路線嗎？')) {
             savedRoutes.splice(selectedRouteIdx, 1);
-            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-            document.getElementById('historyCount').innerText = savedRoutes.length;
+            persistSavedRoutesToStorage();
             
             document.getElementById('routeDetailUI').classList.add('hidden');
             document.getElementById('topBackBtn').classList.add('hidden');
@@ -1880,21 +1880,51 @@ document.getElementById('deleteRouteBtn').ontouchend = (e) => {
     }, 100);
 };
 
-// --- 路線標記後製編輯引擎 ---
+// ==========================================
+// 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 10步Undo）
+// ==========================================
 let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [];
 let editStep = 0, editStartIndex = -1, tempMarkerA = null;
-let editSubMode = 'marker', pathEditMarkers = [];
+let editSubMode = 'path', pathEditMarkers = [];
+let selectedEditNodeIdx = -1;
 
-// ✍️ 手繪接軌狀態變數與復原堆疊
+// ✍️ 手繪延伸／剪接狀態變數與 10 步復原堆疊
+const MAX_EDIT_UNDO_STEPS = 10;
 let freehandUndoStack = [];
 let isFreehandDrawing = false;
 let freehandStartIndex = -1;
 let freehandStrokeCoords = [];
+let freehandSpliceStartIdx = -1;
+let freehandDraftCoords = [];
 
 const modeMarkerBtn = document.getElementById('modeMarkerBtn');
 const modePathBtn = document.getElementById('modePathBtn');
 const modeFreehandBtn = document.getElementById('modeFreehandBtn');
 const btnUndoFreehand = document.getElementById('btnUndoFreehand');
+const undoStepCountBadge = document.getElementById('undoStepCountBadge');
+const editorLiveDistText = document.getElementById('editorLiveDistText');
+const editorLiveNodesText = document.getElementById('editorLiveNodesText');
+const nodeTrimActionPanel = document.getElementById('nodeTrimActionPanel');
+const selectedNodeInfoText = document.getElementById('selectedNodeInfoText');
+const btnCloseNodeTrimPanel = document.getElementById('btnCloseNodeTrimPanel');
+const btnDeleteSingleNode = document.getElementById('btnDeleteSingleNode');
+const btnTrimBeforeNode = document.getElementById('btnTrimBeforeNode');
+const btnTrimAfterNode = document.getElementById('btnTrimAfterNode');
+const btnEditorZoomIn = document.getElementById('btnEditorZoomIn');
+const btnEditorZoomOut = document.getElementById('btnEditorZoomOut');
+const btnManualZoomIn = document.getElementById('btnManualZoomIn');
+const btnManualZoomOut = document.getElementById('btnManualZoomOut');
+
+function ensureEditorMapZoomEnabled() {
+    try { map.touchZoomRotate.enable(); } catch (e) {}
+    try { map.scrollZoom.enable(); } catch (e) {}
+    try { map.doubleClickZoom.enable(); } catch (e) {}
+}
+
+if (btnEditorZoomIn) btnEditorZoomIn.onclick = () => { ensureEditorMapZoomEnabled(); map.zoomIn({ duration: 220 }); };
+if (btnEditorZoomOut) btnEditorZoomOut.onclick = () => { ensureEditorMapZoomEnabled(); map.zoomOut({ duration: 220 }); };
+if (btnManualZoomIn) btnManualZoomIn.onclick = () => { ensureEditorMapZoomEnabled(); map.zoomIn({ duration: 220 }); };
+if (btnManualZoomOut) btnManualZoomOut.onclick = () => { ensureEditorMapZoomEnabled(); map.zoomOut({ duration: 220 }); };
 
 function clearPathEditMarkers() {
     pathEditMarkers.forEach(m => {
@@ -1935,96 +1965,109 @@ function updateFreehandTempLayer(coords) {
     });
 }
 
-function cancelActiveFreehandStroke() {
+function cancelActiveFreehandStroke(clearSpliceDraft = false) {
     isFreehandDrawing = false;
     freehandStartIndex = -1;
     freehandStrokeCoords = [];
-    updateFreehandTempLayer([]);
-}
-
-function updateUndoFreehandBtnUI() {
-    if (!btnUndoFreehand) return;
-    if (editSubMode === 'freehand' || freehandUndoStack.length > 0) {
-        btnUndoFreehand.classList.remove('hidden');
-    } else {
-        btnUndoFreehand.classList.add('hidden');
+    if (clearSpliceDraft) {
+        freehandSpliceStartIdx = -1;
+        freehandDraftCoords = [];
     }
-    btnUndoFreehand.disabled = (freehandUndoStack.length === 0);
+    updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
+    try { map.dragPan.enable(); } catch (e) {}
+    ensureEditorMapZoomEnabled();
 }
 
-function setEditSubMode(mode) {
-    editSubMode = mode;
-    const inactiveClass = "text-gray-400 font-extrabold text-xs sm:text-sm px-2 py-2 rounded-full transition-colors hover:bg-gray-100 active:scale-95 whitespace-nowrap flex items-center justify-center";
-    if (modeMarkerBtn) modeMarkerBtn.className = (mode === 'marker')
-        ? "bg-blue-100 text-blue-700 font-extrabold text-xs sm:text-sm px-2 py-2 rounded-full transition-colors active:scale-95 whitespace-nowrap flex items-center justify-center"
-        : inactiveClass;
-    if (modePathBtn) modePathBtn.className = (mode === 'path')
-        ? "bg-emerald-100 text-emerald-700 font-extrabold text-xs sm:text-sm px-2 py-2 rounded-full transition-colors active:scale-95 whitespace-nowrap flex items-center justify-center"
-        : inactiveClass;
-    if (modeFreehandBtn) modeFreehandBtn.className = (mode === 'freehand')
-        ? "bg-emerald-100 text-emerald-700 font-extrabold text-xs sm:text-sm px-2 py-2 rounded-full transition-colors active:scale-95 whitespace-nowrap flex items-center justify-center"
-        : inactiveClass;
-
-    const promptEl = document.getElementById('editPromptText');
-    if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
-    editStep = 0;
-    cancelActiveFreehandStroke();
-
-    if (mode === 'marker') {
-        try { map.dragPan.enable(); } catch (e) {}
-        clearPathEditMarkers();
-        if (promptEl) {
-            promptEl.className = "bg-amber-500 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center";
-            promptEl.innerText = "🛠️ 請點擊地圖軌跡，選擇區段的『起點 (A點)』";
-        }
-    } else if (mode === 'path') {
-        try { map.dragPan.enable(); } catch (e) {}
-        if (promptEl) {
-            promptEl.className = "bg-emerald-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center";
-            promptEl.innerText = "🛣️ 點擊綠/藍色軌跡產生「編輯點」，並拖拉修改路線";
-        }
-    } else if (mode === 'freehand') {
-        clearPathEditMarkers();
-        try { map.dragPan.disable(); } catch (e) {}
-        if (promptEl) {
-            promptEl.className = "bg-emerald-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center";
-            promptEl.innerText = "手指在路線附近按住滑動，放開後自動銜接原路線";
-        }
+function pushEditUndoSnapshot(route) {
+    if (!route || !Array.isArray(route.points)) return;
+    freehandUndoStack.push({
+        points: JSON.parse(JSON.stringify(route.points)),
+        events: JSON.parse(JSON.stringify(route.events || [])),
+        selectedEditNodeIdx,
+        freehandSpliceStartIdx
+    });
+    if (freehandUndoStack.length > MAX_EDIT_UNDO_STEPS) {
+        freehandUndoStack.shift();
     }
     updateUndoFreehandBtnUI();
 }
 
-if (modeMarkerBtn) modeMarkerBtn.onclick = () => setEditSubMode('marker');
-if (modePathBtn) modePathBtn.onclick = () => setEditSubMode('path');
-if (modeFreehandBtn) modeFreehandBtn.onclick = () => setEditSubMode('freehand');
-
-if (btnUndoFreehand) {
-    btnUndoFreehand.onclick = () => {
-        if (!isEditingMode || freehandUndoStack.length === 0) return;
-        const route = savedRoutes[selectedRouteIdx];
-        if (!route) return;
-        const prevState = freehandUndoStack.pop();
-        route.points = prevState.points;
-        route.events = prevState.events;
-        cancelActiveFreehandStroke();
-        vibrate(30);
-        updateRouteLayers(route.points);
-        renderEditableRouteMarkers(route);
-        updateUndoFreehandBtnUI();
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl && editSubMode === 'freehand') {
-            promptEl.innerText = "↩️ 已復原上一次手繪！手指在路線附近按住滑動可繼續接軌";
+function updateUndoFreehandBtnUI() {
+    if (!btnUndoFreehand) return;
+    const count = freehandUndoStack.length;
+    btnUndoFreehand.disabled = (count === 0);
+    if (undoStepCountBadge) {
+        if (count > 0) {
+            undoStepCountBadge.textContent = String(count);
+            undoStepCountBadge.classList.remove('hidden');
+        } else {
+            undoStepCountBadge.classList.add('hidden');
         }
+    }
+}
+
+function updateEditorLiveStatsUI(route) {
+    if (!route || !Array.isArray(route.points)) return;
+    let totalKm = 0;
+    for (let i = 1; i < route.points.length; i++) {
+        totalKm += getDistanceKm(
+            route.points[i - 1].lng,
+            route.points[i - 1].lat,
+            route.points[i].lng,
+            route.points[i].lat
+        );
+    }
+    route.distance = totalKm.toFixed(2);
+    if (editorLiveDistText) editorLiveDistText.textContent = route.distance;
+    if (editorLiveNodesText) editorLiveNodesText.textContent = String(route.points.length);
+    const detailDistEl = document.getElementById('detailDist');
+    if (detailDistEl) detailDistEl.innerText = `${route.distance} km`;
+}
+
+function updateNodeTrimPanelUI(route) {
+    if (!nodeTrimActionPanel) return;
+    if (!isEditingMode || editSubMode !== 'path' || !route || !Array.isArray(route.points) || selectedEditNodeIdx < 0 || selectedEditNodeIdx >= route.points.length) {
+        nodeTrimActionPanel.classList.add('hidden');
+        return;
+    }
+    nodeTrimActionPanel.classList.remove('hidden');
+    const total = route.points.length;
+    let roleLabel = '';
+    if (selectedEditNodeIdx === 0) roleLabel = '（起點 S）';
+    else if (selectedEditNodeIdx === total - 1) roleLabel = '（終點 E）';
+    if (selectedNodeInfoText) {
+        selectedNodeInfoText.textContent = `🎯 已選取節點 #${selectedEditNodeIdx + 1} / 共 ${total} 點 ${roleLabel}`;
+    }
+}
+
+if (btnCloseNodeTrimPanel) {
+    btnCloseNodeTrimPanel.onclick = () => {
+        selectedEditNodeIdx = -1;
+        const route = savedRoutes[selectedRouteIdx];
+        updateNodeTrimPanelUI(route);
+        if (route) renderPathEditNodes(route);
     };
 }
 
-// 路線陣列長度改變後，重新計算車頭角 bearing，並同步更新「音樂開關 (A到B)」、「黃色提醒點」與「時刻站牌」綁定的路線索引
-function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
+// 重新計算路線總距離、每個軌跡點的車頭角 bearing，並重新綁定所有語音標記點與時刻站牌的路徑索引 ptIdx
+// 若 dropTrimmedOutliers = true（例如修剪頭尾後），自動剔除距離剩餘路線超過 55 公尺的已裁切區段標記點
+function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = null, dropTrimmedOutliers = false) {
     if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
     const pts = route.points;
 
-    // 1. 重新計算每個點的 bearing 與遞增時間戳記
+    // 若未傳入 preservedStops，自動由現有 points 收集
+    const stopsToRestore = Array.isArray(preservedStops)
+        ? preservedStops
+        : pts.filter(p => p.is_stop).map(p => ({
+            lng: p.lng,
+            lat: p.lat,
+            stop_name: p.stop_name,
+            scheduled_time: p.scheduled_time
+        }));
+
+    // 1. 重新計算每個點的 bearing、遞增時間戳記與總距離 (km)
     let curTime = pts[0].time || Date.now();
+    let totalDistKm = 0;
     for (let i = 0; i < pts.length; i++) {
         const isMusic = Boolean(pts[i].musicActive);
         pts[i].musicActive = isMusic;
@@ -2032,6 +2075,7 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         if (i > 0) {
             const prev = pts[i - 1];
             const dKm = getDistanceKm(prev.lng, prev.lat, pts[i].lng, pts[i].lat);
+            totalDistKm += dKm;
             if (dKm * 1000 > 0.05) {
                 pts[i].bearing = getBearing(prev.lng, prev.lat, pts[i].lng, pts[i].lat);
             } else {
@@ -2044,20 +2088,22 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     if (pts.length >= 2) {
         pts[0].bearing = pts[1].bearing || 0;
     }
+    route.distance = totalDistKm.toFixed(2);
 
     // 2. 重新匹配時刻站牌 (is_stop) 至最近的路線節點
-    if (Array.isArray(preservedStops) && preservedStops.length > 0) {
-        pts.forEach(p => {
-            delete p.is_stop;
-            delete p.stop_name;
-            delete p.scheduled_time;
-        });
-        preservedStops.forEach(st => {
+    pts.forEach(p => {
+        delete p.is_stop;
+        delete p.stop_name;
+        delete p.scheduled_time;
+    });
+    if (stopsToRestore.length > 0) {
+        stopsToRestore.forEach(st => {
             let minD = Infinity, bestIdx = 0;
             for (let i = 0; i < pts.length; i++) {
                 const d = getDistanceKm(st.lng, st.lat, pts[i].lng, pts[i].lat);
                 if (d < minD) { minD = d; bestIdx = i; }
             }
+            if (dropTrimmedOutliers && minD * 1000 > 55) return;
             pts[bestIdx].is_stop = true;
             pts[bestIdx].stop_name = st.stop_name;
             pts[bestIdx].scheduled_time = st.scheduled_time;
@@ -2065,20 +2111,21 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     }
 
     // 3. 重新匹配黃色提醒點 (alert) 的最近路線點索引，並依新的 musicActive 狀態自動重建 A/B 音樂開關事件與索引
-    const updatedAlerts = (route.events || [])
-        .filter(ev => ev && ev.type === 'alert')
-        .map(ev => {
-            let minD = Infinity, bestIdx = 0;
-            for (let i = 0; i < pts.length; i++) {
-                const d = getDistanceKm(ev.lng, ev.lat, pts[i].lng, pts[i].lat);
-                if (d < minD) { minD = d; bestIdx = i; }
-            }
-            return {
-                ...ev,
-                ptIdx: bestIdx,
-                bearing: pts[bestIdx].bearing || 0
-            };
+    const updatedAlerts = [];
+    (route.events || []).forEach(ev => {
+        if (!ev || ev.type !== 'alert') return;
+        let minD = Infinity, bestIdx = 0;
+        for (let i = 0; i < pts.length; i++) {
+            const d = getDistanceKm(ev.lng, ev.lat, pts[i].lng, pts[i].lat);
+            if (d < minD) { minD = d; bestIdx = i; }
+        }
+        if (dropTrimmedOutliers && minD * 1000 > 55) return;
+        updatedAlerts.push({
+            ...ev,
+            ptIdx: bestIdx,
+            bearing: pts[bestIdx].bearing || 0
         });
+    });
 
     const rebuiltMusicEvents = [];
     let currentMusic = Boolean(pts[0].musicActive);
@@ -2106,9 +2153,619 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     }
 
     route.events = [...rebuiltMusicEvents, ...updatedAlerts];
+    updateEditorLiveStatsUI(route);
 }
 
-// 綁定地圖容器的 touchstart/mousedown、touchmove/mousemove、touchend/mouseup 手繪接軌事件
+// 萃取路線上的關鍵轉折節點索引（讓密集的 GPS 軌跡也能清爽顯示可拖曳關鍵點與「+ 虛擬中點」）
+function computeRouteKeyNodeIndices(pts) {
+    if (!Array.isArray(pts) || pts.length === 0) return [];
+    const n = pts.length;
+    if (n <= 45) {
+        return pts.map((_, i) => i);
+    }
+
+    const keySet = new Set([0, n - 1]);
+    if (selectedEditNodeIdx >= 0 && selectedEditNodeIdx < n) {
+        keySet.add(selectedEditNodeIdx);
+    }
+    if (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < n) {
+        keySet.add(freehandSpliceStartIdx);
+    }
+
+    const stepStride = Math.max(2, Math.floor(n / 36));
+    let lastAddedIdx = 0;
+
+    for (let i = 1; i < n - 1; i++) {
+        const p = pts[i];
+        if (p.isKeyNode || p.is_stop) {
+            keySet.add(i);
+            lastAddedIdx = i;
+            continue;
+        }
+        // 轉角變化明顯處自動保留為關鍵節點
+        const prev = pts[Math.max(0, i - 2)];
+        const next = pts[Math.min(n - 1, i + 2)];
+        const b1 = getBearing(prev.lng, prev.lat, p.lng, p.lat);
+        const b2 = getBearing(p.lng, p.lat, next.lng, next.lat);
+        const angleDiff = getAngleDiff(b1, b2);
+        if (angleDiff >= 18 && (i - lastAddedIdx >= 2)) {
+            keySet.add(i);
+            lastAddedIdx = i;
+            continue;
+        }
+        if (i - lastAddedIdx >= stepStride) {
+            keySet.add(i);
+            lastAddedIdx = i;
+        }
+    }
+
+    return Array.from(keySet).sort((a, b) => a - b);
+}
+
+// 渲染「🖐️ 拖曳微調」模式的關鍵節點與兩節點間的「+ 虛擬中點」
+function renderPathEditNodes(route) {
+    clearPathEditMarkers();
+    if (!isEditingMode || !route || !Array.isArray(route.points) || route.points.length === 0) return;
+
+    if (editSubMode === 'freehand') {
+        renderFreehandSpliceNodes(route);
+        return;
+    }
+    if (editSubMode !== 'path') return;
+
+    const pts = route.points;
+    const keyIndices = computeRouteKeyNodeIndices(pts);
+
+    // 1. 渲染兩關鍵節點之間的「+ 虛擬中點」
+    for (let k = 0; k < keyIndices.length - 1; k++) {
+        const idxA = keyIndices[k];
+        const idxB = keyIndices[k + 1];
+        const ptA = pts[idxA];
+        const ptB = pts[idxB];
+        const segDistM = getDistanceKm(ptA.lng, ptA.lat, ptB.lng, ptB.lat) * 1000;
+        if (segDistM < 5) continue;
+
+        const midLng = Number(((ptA.lng + ptB.lng) / 2).toFixed(6));
+        const midLat = Number(((ptA.lat + ptB.lat) / 2).toFixed(6));
+
+        const midEl = document.createElement('button');
+        midEl.type = 'button';
+        midEl.title = '點擊插入新轉折點 (+ 虛擬中點)';
+        midEl.className = 'w-5 h-5 rounded-full bg-white/95 hover:bg-emerald-50 text-emerald-700 border-2 border-emerald-500 shadow-md flex items-center justify-center font-black text-xs leading-none active:scale-90 transition-transform cursor-pointer z-10';
+        midEl.innerHTML = '+';
+
+        midEl.onclick = (ev) => {
+            ev.stopPropagation();
+            pushEditUndoSnapshot(route);
+
+            const inheritedMusic = Boolean(ptA.musicActive);
+            let newSelectedIdx;
+            if (idxB - idxA > 1) {
+                // 若兩關鍵點之間已有細分點，直接將中位點升級為關鍵轉折點並移至幾何中點
+                const midIdx = Math.floor((idxA + idxB) / 2);
+                pts[midIdx].lng = midLng;
+                pts[midIdx].lat = midLat;
+                pts[midIdx].isKeyNode = true;
+                newSelectedIdx = midIdx;
+            } else {
+                const newPt = {
+                    lng: midLng,
+                    lat: midLat,
+                    time: Date.now(),
+                    musicActive: inheritedMusic,
+                    music: inheritedMusic,
+                    bearing: ptA.bearing || 0,
+                    isKeyNode: true
+                };
+                pts.splice(idxA + 1, 0, newPt);
+                newSelectedIdx = idxA + 1;
+            }
+
+            selectedEditNodeIdx = newSelectedIdx;
+            syncRouteMarkersAndIndicesAfterSpline(route);
+            vibrate(25);
+            updateRouteLayers(route.points);
+            renderEditableRouteMarkers(route);
+            renderPathEditNodes(route);
+            updateNodeTrimPanelUI(route);
+
+            const promptEl = document.getElementById('editPromptText');
+            if (promptEl) {
+                promptEl.innerText = `➕ 已插入新轉折點 #${newSelectedIdx + 1}！可直接按住拖曳調整位置`;
+            }
+        };
+
+        const midMarker = new maplibregl.Marker({ element: midEl })
+            .setLngLat([midLng, midLat])
+            .addTo(map);
+        pathEditMarkers.push(midMarker);
+    }
+
+    // 2. 渲染可拖曳、可點擊修剪的關鍵節點
+    keyIndices.forEach((ptIdx, kPos) => {
+        const pt = pts[ptIdx];
+        if (!pt) return;
+        const isSelected = (ptIdx === selectedEditNodeIdx);
+        const isEndpoint = (ptIdx === 0 || ptIdx === pts.length - 1);
+
+        const prevKeyIdx = kPos > 0 ? keyIndices[kPos - 1] : ptIdx;
+        const nextKeyIdx = kPos < keyIndices.length - 1 ? keyIndices[kPos + 1] : ptIdx;
+
+        const el = document.createElement('div');
+        if (isSelected) {
+            el.className = 'w-6 h-6 bg-amber-300 border-[4px] border-red-600 ring-4 ring-amber-400/60 rounded-full shadow-xl cursor-grab active:cursor-grabbing z-30 flex items-center justify-center';
+            el.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-700"></span>';
+        } else if (isEndpoint) {
+            el.className = 'w-5 h-5 bg-white border-[5px] border-indigo-600 rounded-full shadow-lg cursor-grab active:cursor-grabbing z-20';
+        } else {
+            el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-600 hover:border-amber-500 rounded-full shadow-md cursor-grab active:cursor-grabbing z-20';
+        }
+        el.title = `節點 #${ptIdx + 1}（按住拖曳位置，點擊開啟修剪選單）`;
+
+        const m = new maplibregl.Marker({ element: el, draggable: true })
+            .setLngLat([pt.lng, pt.lat])
+            .addTo(map);
+        m._ptIdx = ptIdx;
+
+        m.on('dragstart', () => {
+            pushEditUndoSnapshot(route);
+            selectedEditNodeIdx = ptIdx;
+            updateNodeTrimPanelUI(route);
+        });
+
+        m.on('drag', () => {
+            const lngLat = m.getLngLat();
+            const newLng = Number(lngLat.lng.toFixed(6));
+            const newLat = Number(lngLat.lat.toFixed(6));
+            pt.lng = newLng;
+            pt.lat = newLat;
+            pt.isKeyNode = true;
+
+            // 線性平滑插值相鄰關鍵點之間的細分點，避免拖曳單一節點時留下鋸齒舊軌跡點
+            if (ptIdx > prevKeyIdx + 1) {
+                const startPt = pts[prevKeyIdx];
+                const span = ptIdx - prevKeyIdx;
+                for (let s = 1; s < span; s++) {
+                    const ratio = s / span;
+                    pts[prevKeyIdx + s].lng = Number((startPt.lng + (newLng - startPt.lng) * ratio).toFixed(6));
+                    pts[prevKeyIdx + s].lat = Number((startPt.lat + (newLat - startPt.lat) * ratio).toFixed(6));
+                }
+            }
+            if (nextKeyIdx > ptIdx + 1) {
+                const endPt = pts[nextKeyIdx];
+                const span = nextKeyIdx - ptIdx;
+                for (let s = 1; s < span; s++) {
+                    const ratio = s / span;
+                    pts[ptIdx + s].lng = Number((newLng + (endPt.lng - newLng) * ratio).toFixed(6));
+                    pts[ptIdx + s].lat = Number((newLat + (endPt.lat - newLat) * ratio).toFixed(6));
+                }
+            }
+
+            updateRouteLayers(route.points, 25);
+        });
+
+        m.on('dragend', () => {
+            syncRouteMarkersAndIndicesAfterSpline(route);
+            updateRouteLayers(route.points);
+            renderEditableRouteMarkers(route);
+            renderPathEditNodes(route);
+            updateNodeTrimPanelUI(route);
+            const promptEl = document.getElementById('editPromptText');
+            if (promptEl) {
+                promptEl.innerText = `✅ 已微調節點 #${ptIdx + 1} 位置（總距離 ${route.distance} km）`;
+            }
+        });
+
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            selectedEditNodeIdx = ptIdx;
+            vibrate(20);
+            renderPathEditNodes(route);
+            updateNodeTrimPanelUI(route);
+            const promptEl = document.getElementById('editPromptText');
+            if (promptEl) {
+                promptEl.innerText = `🎯 已選取節點 #${ptIdx + 1}：可於下方選單刪除此點或修剪頭尾多餘路線`;
+            }
+        });
+
+        pathEditMarkers.push(m);
+    });
+}
+
+// 渲染「✍️ 手繪延伸／剪接」模式下的路線錨點（支援先點選舊節點再畫線/加點連回另一舊節點自動剪除替換，或從頭尾延伸）
+function renderFreehandSpliceNodes(route) {
+    clearPathEditMarkers();
+    if (!isEditingMode || editSubMode !== 'freehand' || !route || !Array.isArray(route.points) || route.points.length === 0) return;
+
+    const pts = route.points;
+    const keyIndices = computeRouteKeyNodeIndices(pts);
+
+    keyIndices.forEach(ptIdx => {
+        const pt = pts[ptIdx];
+        if (!pt) return;
+        const isSpliceStart = (ptIdx === freehandSpliceStartIdx);
+        const isHead = (ptIdx === 0);
+        const isTail = (ptIdx === pts.length - 1);
+
+        const el = document.createElement('div');
+        if (isSpliceStart) {
+            el.className = 'w-6 h-6 bg-orange-500 text-white border-[3px] border-white ring-4 ring-orange-400/70 rounded-full shadow-xl cursor-pointer z-30 flex items-center justify-center text-[10px] font-black';
+            el.innerHTML = '✂️';
+        } else if (isHead || isTail) {
+            el.className = 'w-5 h-5 bg-amber-400 border-[4px] border-orange-700 rounded-full shadow-lg cursor-pointer z-20';
+        } else {
+            el.className = 'w-4 h-4 bg-white border-[4px] border-orange-500 hover:scale-125 rounded-full shadow cursor-pointer z-20 transition-transform';
+        }
+        el.title = isSpliceStart
+            ? `剪接/延伸起點 #${ptIdx + 1}（請畫線或點選地圖加點，再點擊另一舊節點完成剪接）`
+            : `節點 #${ptIdx + 1}（點擊設為手繪剪接/延伸起點，或作為剪接終點）`;
+
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            handleFreehandNodeClick(route, ptIdx);
+        });
+
+        const m = new maplibregl.Marker({ element: el })
+            .setLngLat([pt.lng, pt.lat])
+            .addTo(map);
+        pathEditMarkers.push(m);
+    });
+}
+
+// 處理「手繪延伸／剪接」模式下點選舊節點的互動（選取剪接起點 A ➔ 畫線/加點 ➔ 點擊另一舊節點 B 自動剪除舊路徑並替換）
+function handleFreehandNodeClick(route, clickedIdx) {
+    if (!route || !Array.isArray(route.points)) return;
+    const pts = route.points;
+    const clickedPt = pts[clickedIdx];
+    if (!clickedPt) return;
+    const promptEl = document.getElementById('editPromptText');
+
+    // 若已選取起點 A 且已畫出新路徑點 (freehandDraftCoords.length >= 2)，此時點擊另一個舊節點 B ➔ 立即剪除 A 與 B 之間的舊路徑並無縫替換！
+    if (freehandSpliceStartIdx !== -1 && freehandSpliceStartIdx !== clickedIdx && freehandDraftCoords.length >= 2) {
+        const endCoord = [Number(clickedPt.lng.toFixed(6)), Number(clickedPt.lat.toFixed(6))];
+        const fullDraft = [...freehandDraftCoords, endCoord];
+        applySpliceBetweenNodes(route, freehandSpliceStartIdx, clickedIdx, fullDraft);
+        freehandSpliceStartIdx = -1;
+        freehandDraftCoords = [];
+        updateFreehandTempLayer([]);
+        renderFreehandSpliceNodes(route);
+        return;
+    }
+
+    // 否則將此舊節點設為新的「延伸／剪接起點」
+    freehandSpliceStartIdx = clickedIdx;
+    freehandDraftCoords = [[Number(clickedPt.lng.toFixed(6)), Number(clickedPt.lat.toFixed(6))]];
+    updateFreehandTempLayer([]);
+    vibrate(25);
+    renderFreehandSpliceNodes(route);
+
+    const isEndpoint = (clickedIdx === 0 || clickedIdx === pts.length - 1);
+    if (promptEl) {
+        promptEl.innerText = isEndpoint
+            ? `🎯 已選取${clickedIdx === 0 ? '起點 S' : '終點 E'} (#${clickedIdx + 1})！可單指畫線或點擊地圖向外延伸，或連回另一舊節點剪接`
+            : `✂️ 已鎖定舊節點 #${clickedIdx + 1}！請單指畫線（或點擊地圖加點）並連回另一個舊節點即可剪除中間舊路徑`;
+    }
+}
+
+// 執行兩舊節點之間的剪接替換（將 idxA 與 idxB 之間的多餘舊路徑剪除，無縫替換為新畫的路徑）
+function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
+    if (!route || !Array.isArray(route.points) || rawCoords.length < 2) return;
+    const pts = route.points;
+    const preservedStops = pts
+        .filter(p => p.is_stop)
+        .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
+
+    pushEditUndoSnapshot(route);
+
+    const isForward = (startIdx <= endIdx);
+    const idxStart = Math.min(startIdx, endIdx);
+    const idxEnd = Math.max(startIdx, endIdx);
+
+    const orderedCoords = isForward ? [...rawCoords] : [...rawCoords].reverse();
+    orderedCoords[0] = [Number(pts[idxStart].lng.toFixed(6)), Number(pts[idxStart].lat.toFixed(6))];
+    const endSnapCoord = [Number(pts[idxEnd].lng.toFixed(6)), Number(pts[idxEnd].lat.toFixed(6))];
+    const lastDrawn = orderedCoords[orderedCoords.length - 1];
+    if (getDistanceKm(lastDrawn[0], lastDrawn[1], endSnapCoord[0], endSnapCoord[1]) * 1000 > 0.5) {
+        orderedCoords.push(endSnapCoord);
+    } else {
+        orderedCoords[orderedCoords.length - 1] = endSnapCoord;
+    }
+
+    const densified = densifyRoadCoordinates(orderedCoords, 5);
+    const inheritedMusic = Boolean(pts[idxStart]?.musicActive);
+    const newSegmentPoints = densified.map(([lng, lat], i) => ({
+        lng,
+        lat,
+        time: Date.now(),
+        musicActive: inheritedMusic,
+        music: inheritedMusic,
+        bearing: 0,
+        isKeyNode: (i === 0 || i === densified.length - 1)
+    }));
+
+    pts.splice(idxStart, idxEnd - idxStart + 1, ...newSegmentPoints);
+    syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, true);
+    vibrate([40, 30, 40]);
+    updateRouteLayers(route.points);
+    renderEditableRouteMarkers(route);
+    renderFreehandSpliceNodes(route);
+
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `✅ 已剪除節點 #${idxStart + 1}～#${idxEnd + 1} 舊路徑並無縫替換為新路線！（總距離 ${route.distance} km）`;
+    }
+}
+
+// 執行從頭尾端點向外延伸路線
+function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
+    if (!route || !Array.isArray(route.points) || rawCoords.length < 2) return;
+    const pts = route.points;
+    const preservedStops = pts
+        .filter(p => p.is_stop)
+        .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
+
+    pushEditUndoSnapshot(route);
+
+    const distToHead = anchorIdx;
+    const distToTail = (pts.length - 1) - anchorIdx;
+    const inheritedMusic = Boolean(pts[anchorIdx]?.musicActive);
+
+    if (distToTail <= distToHead) {
+        // 往尾端 (E) 延伸
+        const alignedCoords = [...rawCoords];
+        alignedCoords[0] = [Number(pts[anchorIdx].lng.toFixed(6)), Number(pts[anchorIdx].lat.toFixed(6))];
+        const densified = densifyRoadCoordinates(alignedCoords, 5);
+        const newTailPoints = densified.map(([lng, lat], i) => ({
+            lng,
+            lat,
+            time: Date.now(),
+            musicActive: inheritedMusic,
+            music: inheritedMusic,
+            bearing: 0,
+            isKeyNode: (i === densified.length - 1)
+        }));
+        pts.splice(anchorIdx, pts.length - anchorIdx, ...newTailPoints);
+        freehandSpliceStartIdx = pts.length - 1;
+    } else {
+        // 往開頭 (S) 延伸
+        const reversedCoords = [...rawCoords].reverse();
+        reversedCoords[reversedCoords.length - 1] = [Number(pts[anchorIdx].lng.toFixed(6)), Number(pts[anchorIdx].lat.toFixed(6))];
+        const densified = densifyRoadCoordinates(reversedCoords, 5);
+        const newHeadPoints = densified.map(([lng, lat], i) => ({
+            lng,
+            lat,
+            time: Date.now(),
+            musicActive: inheritedMusic,
+            music: inheritedMusic,
+            bearing: 0,
+            isKeyNode: (i === 0)
+        }));
+        pts.splice(0, anchorIdx + 1, ...newHeadPoints);
+        freehandSpliceStartIdx = 0;
+    }
+
+    const newAnchorPt = pts[freehandSpliceStartIdx];
+    freehandDraftCoords = newAnchorPt ? [[Number(newAnchorPt.lng.toFixed(6)), Number(newAnchorPt.lat.toFixed(6))]] : [];
+
+    syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, false);
+    vibrate([40, 30, 40]);
+    updateRouteLayers(route.points);
+    renderEditableRouteMarkers(route);
+    renderFreehandSpliceNodes(route);
+
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `✅ 已延伸路線至 ${route.distance} km！可繼續點擊/畫線延伸，或按「↩️ 上一步」復原`;
+    }
+}
+
+// ==========================================
+// ✂️ 刪除多餘路線（單點刪除 ／ 刪除此點之前 ／ 刪除此點之後）
+// ==========================================
+if (btnDeleteSingleNode) {
+    btnDeleteSingleNode.onclick = () => {
+        const route = savedRoutes[selectedRouteIdx];
+        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+        const pts = route.points;
+        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+        if (pts.length <= 2) {
+            alert('⚠️ 路線至少需保留 2 個軌跡點，無法再刪除節點！');
+            return;
+        }
+
+        pushEditUndoSnapshot(route);
+
+        // 若為密集軌跡中的關鍵轉折點，找出前後相鄰關鍵點並一併抹平該偏移區段；若為一般點則直接移除該點
+        const keyIndices = computeRouteKeyNodeIndices(pts);
+        const kPos = keyIndices.indexOf(selectedEditNodeIdx);
+        const removedNodeNum = selectedEditNodeIdx + 1;
+
+        if (kPos > 0 && kPos < keyIndices.length - 1 && (keyIndices[kPos + 1] - keyIndices[kPos - 1] > 2) && (pts.length > 45)) {
+            const prevIdx = keyIndices[kPos - 1];
+            const nextIdx = keyIndices[kPos + 1];
+            const removeCount = nextIdx - prevIdx - 1;
+            if (pts.length - removeCount >= 2) {
+                pts.splice(prevIdx + 1, removeCount);
+                selectedEditNodeIdx = Math.min(prevIdx, pts.length - 1);
+            } else {
+                pts.splice(selectedEditNodeIdx, 1);
+                selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
+            }
+        } else {
+            pts.splice(selectedEditNodeIdx, 1);
+            selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
+        }
+
+        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+        vibrate(35);
+        updateRouteLayers(route.points);
+        renderEditableRouteMarkers(route);
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `🗑️ 已刪除偏移節點 #${removedNodeNum}（目前總距離 ${route.distance} km）`;
+        }
+    };
+}
+
+if (btnTrimBeforeNode) {
+    btnTrimBeforeNode.onclick = () => {
+        const route = savedRoutes[selectedRouteIdx];
+        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+        const pts = route.points;
+        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+
+        if (selectedEditNodeIdx === 0) {
+            alert('ℹ️ 目前選取的已經是路線「起點 (S)」，前方沒有多餘路線可刪除！');
+            return;
+        }
+        if (pts.length - selectedEditNodeIdx < 2) {
+            alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更前面的節點。');
+            return;
+        }
+
+        const cutCount = selectedEditNodeIdx;
+        pushEditUndoSnapshot(route);
+
+        pts.splice(0, cutCount);
+        pts[0].isKeyNode = true;
+        selectedEditNodeIdx = 0;
+
+        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+        vibrate([40, 30, 40]);
+        updateRouteLayers(route.points);
+        renderEditableRouteMarkers(route);
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `✂️ 已修剪開頭多餘路線（刪除前 ${cutCount} 點，新總距離 ${route.distance} km）`;
+        }
+    };
+}
+
+if (btnTrimAfterNode) {
+    btnTrimAfterNode.onclick = () => {
+        const route = savedRoutes[selectedRouteIdx];
+        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+        const pts = route.points;
+        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+
+        if (selectedEditNodeIdx === pts.length - 1) {
+            alert('ℹ️ 目前選取的已經是路線「終點 (E)」，後方沒有多餘路線可刪除！');
+            return;
+        }
+        if (selectedEditNodeIdx < 1) {
+            alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更後面的節點。');
+            return;
+        }
+
+        const cutCount = (pts.length - 1) - selectedEditNodeIdx;
+        pushEditUndoSnapshot(route);
+
+        pts.splice(selectedEditNodeIdx + 1, cutCount);
+        pts[pts.length - 1].isKeyNode = true;
+        selectedEditNodeIdx = pts.length - 1;
+
+        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+        vibrate([40, 30, 40]);
+        updateRouteLayers(route.points);
+        renderEditableRouteMarkers(route);
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `✂️ 已修剪尾端多餘路線（刪除後 ${cutCount} 點，新總距離 ${route.distance} km）`;
+        }
+    };
+}
+
+function setEditSubMode(mode) {
+    editSubMode = mode;
+    ensureEditorMapZoomEnabled();
+    try { map.dragPan.enable(); } catch (e) {}
+
+    const inactiveClass = "text-gray-600 hover:bg-white/70 font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
+    if (modePathBtn) modePathBtn.className = (mode === 'path')
+        ? "bg-emerald-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+    if (modeFreehandBtn) modeFreehandBtn.className = (mode === 'freehand')
+        ? "bg-orange-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+    if (modeMarkerBtn) modeMarkerBtn.className = (mode === 'marker')
+        ? "bg-blue-600 text-white font-extrabold text-[11px] sm:text-xs px-2 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+
+    const promptEl = document.getElementById('editPromptText');
+    if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    editStep = 0;
+    cancelActiveFreehandStroke(true);
+
+    const route = savedRoutes[selectedRouteIdx];
+
+    if (mode === 'path') {
+        if (promptEl) {
+            promptEl.className = "bg-emerald-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "🖐️ 按住節點可拖曳微調，點擊「+」插入轉折點，點擊節點可刪除或修剪頭尾";
+        }
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+    } else if (mode === 'freehand') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        if (promptEl) {
+            promptEl.className = "bg-orange-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "✍️ 可自由雙指/滾輪縮放！單指從頭尾畫線延伸，或點選舊節點畫線連回另一舊節點剪接";
+        }
+        renderFreehandSpliceNodes(route);
+    } else if (mode === 'marker') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        clearPathEditMarkers();
+        if (promptEl) {
+            promptEl.className = "bg-blue-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "📍 請點擊地圖軌跡，選擇音樂開關區段『起點 (A點)』或新增語音提醒/站牌";
+        }
+    }
+    updateUndoFreehandBtnUI();
+    if (route) updateEditorLiveStatsUI(route);
+}
+
+if (modeMarkerBtn) modeMarkerBtn.onclick = () => setEditSubMode('marker');
+if (modePathBtn) modePathBtn.onclick = () => setEditSubMode('path');
+if (modeFreehandBtn) modeFreehandBtn.onclick = () => setEditSubMode('freehand');
+
+if (btnUndoFreehand) {
+    btnUndoFreehand.onclick = () => {
+        if (!isEditingMode || freehandUndoStack.length === 0) return;
+        const route = savedRoutes[selectedRouteIdx];
+        if (!route) return;
+        const prevState = freehandUndoStack.pop();
+        route.points = prevState.points;
+        route.events = prevState.events;
+        selectedEditNodeIdx = (prevState.selectedEditNodeIdx !== undefined && prevState.selectedEditNodeIdx < route.points.length)
+            ? prevState.selectedEditNodeIdx
+            : -1;
+        cancelActiveFreehandStroke(true);
+        syncRouteMarkersAndIndicesAfterSpline(route);
+        vibrate(30);
+        updateRouteLayers(route.points);
+        renderEditableRouteMarkers(route);
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+        updateUndoFreehandBtnUI();
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `↩️ 已復原上一步！（剩餘可復原 ${freehandUndoStack.length} 步，總距離 ${route.distance} km）`;
+        }
+    };
+}
+
+// 綁定地圖容器的手繪延伸／剪接事件（嚴格遵守：絕不鎖定 touchZoomRotate 與 scrollZoom，僅在 e.touches.length === 1 單指觸控時畫線，偵測到 e.touches.length >= 2 雙指觸控時立刻中斷畫線並交還地圖縮放平移）
 (function setupFreehandSplineDrawing() {
     const canvasContainer = map.getCanvasContainer();
 
@@ -2121,6 +2778,8 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
 
     function handleStrokeStart(clientX, clientY, rawEvent) {
         if (!isEditingMode || editSubMode !== 'freehand') return;
+        ensureEditorMapZoomEnabled();
+
         const targetEl = rawEvent?.target;
         if (targetEl && targetEl.closest && targetEl.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker')) {
             return;
@@ -2132,7 +2791,7 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         const lngLat = getLngLatFromClientXY(clientX, clientY);
         const pts = route.points;
 
-        // 起點吸附：計算與當前編輯路線所有節點的最近距離（< 40 公尺自動吸附）
+        // 計算與當前編輯路線所有節點的最近距離
         let minStartDistM = Infinity;
         let closestStartIdx = -1;
         for (let i = 0; i < pts.length; i++) {
@@ -2143,26 +2802,40 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
             }
         }
 
-        const promptEl = document.getElementById('editPromptText');
-        if (minStartDistM >= 40 || closestStartIdx === -1) {
-            if (promptEl) {
-                promptEl.innerText = "⚠️ 起點距離原路線超過 40m！請在路線附近按住開始滑動";
-            }
+        // 若使用者已先點選了某個舊節點 (freehandSpliceStartIdx)，或手指在路線節點 45 公尺內按下，啟動單指手繪
+        let activeStartIdx = -1;
+        if (minStartDistM <= 45 && closestStartIdx !== -1) {
+            activeStartIdx = closestStartIdx;
+        } else if (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length) {
+            activeStartIdx = freehandSpliceStartIdx;
+        } else {
+            // 若在遠離路線的空白處單指滑動，保留地圖拖曳平移能力，不強行鎖死地圖
+            try { map.dragPan.enable(); } catch (e) {}
             return;
         }
 
-        isFreehandDrawing = true;
-        freehandStartIndex = closestStartIdx;
-        const snapPt = pts[closestStartIdx];
-        freehandStrokeCoords = [[Number(snapPt.lng.toFixed(6)), Number(snapPt.lat.toFixed(6))]];
+        // 單指開始在路線上畫線時，暫時停用單指 dragPan 避免畫面跟著單指跑，但保持 touchZoomRotate 與 scrollZoom 開啟
+        try { map.dragPan.disable(); } catch (e) {}
+        ensureEditorMapZoomEnabled();
 
-        if (minStartDistM >= 3.5) {
+        isFreehandDrawing = true;
+        freehandStartIndex = activeStartIdx;
+        const snapPt = pts[activeStartIdx];
+
+        if (freehandSpliceStartIdx === activeStartIdx && freehandDraftCoords.length >= 2) {
+            freehandStrokeCoords = [...freehandDraftCoords];
+        } else {
+            freehandStrokeCoords = [[Number(snapPt.lng.toFixed(6)), Number(snapPt.lat.toFixed(6))]];
+        }
+
+        if (getDistanceKm(snapPt.lng, snapPt.lat, lngLat.lng, lngLat.lat) * 1000 >= 3.5) {
             freehandStrokeCoords.push([Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]);
         }
         updateFreehandTempLayer(freehandStrokeCoords);
 
+        const promptEl = document.getElementById('editPromptText');
         if (promptEl) {
-            promptEl.innerText = "✍️ 正在手繪軌跡... 放開手指後將自動吸附銜接原路線";
+            promptEl.innerText = "✍️ 正在手繪新路徑... 連回另一舊節點可剪除中間舊路，或向頭尾外拉延伸";
         }
     }
 
@@ -2176,10 +2849,8 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         const [lastLng, lastLat] = freehandStrokeCoords[freehandStrokeCoords.length - 1];
         const distM = getDistanceKm(lastLng, lastLat, curLng, curLat) * 1000;
 
-        // 距離過濾：每移動超過 4 公尺才記錄一個座標點，避免點位過密
         if (distM >= 4) {
             if (distM > 10) {
-                // 若快速滑動跨距較大，自動以 5 公尺間距補點保持均勻密度
                 const steps = Math.ceil(distM / 5);
                 for (let s = 1; s <= steps; s++) {
                     const t = s / steps;
@@ -2198,14 +2869,13 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     function handleStrokeEnd() {
         if (!isFreehandDrawing) return;
         isFreehandDrawing = false;
-        updateFreehandTempLayer([]);
+        try { map.dragPan.enable(); } catch (e) {}
+        ensureEditorMapZoomEnabled();
 
         const route = savedRoutes[selectedRouteIdx];
         const promptEl = document.getElementById('editPromptText');
         if (!route || !Array.isArray(route.points) || route.points.length < 2 || freehandStrokeCoords.length < 2) {
-            if (promptEl && editSubMode === 'freehand') {
-                promptEl.innerText = "手指在路線附近按住滑動，放開後自動銜接原路線";
-            }
+            updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
             freehandStrokeCoords = [];
             freehandStartIndex = -1;
             return;
@@ -2215,7 +2885,6 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         const startIndex = freehandStartIndex;
         const [endLng, endLat] = freehandStrokeCoords[freehandStrokeCoords.length - 1];
 
-        // 計算手繪總長度，過濾誤觸微移
         let strokeLenM = 0;
         for (let i = 1; i < freehandStrokeCoords.length; i++) {
             strokeLenM += getDistanceKm(
@@ -2223,10 +2892,9 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
                 freehandStrokeCoords[i][0], freehandStrokeCoords[i][1]
             ) * 1000;
         }
+        // 若滑動距離極短 (< 6m)，視為單純點選節點而非畫線
         if (strokeLenM < 6) {
-            if (promptEl && editSubMode === 'freehand') {
-                promptEl.innerText = "手指在路線附近按住滑動，放開後自動銜接原路線";
-            }
+            updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
             freehandStrokeCoords = [];
             freehandStartIndex = -1;
             return;
@@ -2243,111 +2911,26 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
             }
         }
 
-        // 先備份現有時刻站牌座標，避免替換區段時遺失
-        const preservedStops = pts
-            .filter(p => p.is_stop)
-            .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
-
-        // 情境 A（局部改道 / 切西瓜）：終點距離原路線小於 40 公尺
-        if (minEndDistM < 40 && closestEndIdx !== -1) {
-            freehandUndoStack.push({
-                points: JSON.parse(JSON.stringify(route.points)),
-                events: JSON.parse(JSON.stringify(route.events || []))
-            });
-
-            const isForward = (startIndex <= closestEndIdx);
-            const idxStart = Math.min(startIndex, closestEndIdx);
-            const idxEnd = Math.max(startIndex, closestEndIdx);
-
-            const orderedCoords = isForward
-                ? [...freehandStrokeCoords]
-                : [...freehandStrokeCoords].reverse();
-
-            // 強制首尾精準吸附至原路線節點，確保新舊路線完美無縫相連
-            orderedCoords[0] = [Number(pts[idxStart].lng.toFixed(6)), Number(pts[idxStart].lat.toFixed(6))];
-            const endSnapCoord = [Number(pts[idxEnd].lng.toFixed(6)), Number(pts[idxEnd].lat.toFixed(6))];
-            const lastDrawn = orderedCoords[orderedCoords.length - 1];
-            if (getDistanceKm(lastDrawn[0], lastDrawn[1], endSnapCoord[0], endSnapCoord[1]) * 1000 > 0.5) {
-                orderedCoords.push(endSnapCoord);
-            } else {
-                orderedCoords[orderedCoords.length - 1] = endSnapCoord;
-            }
-
-            const densified = densifyRoadCoordinates(orderedCoords, 5);
-            const inheritedMusic = Boolean(pts[idxStart]?.musicActive);
-            const newSegmentPoints = densified.map(([lng, lat]) => ({
-                lng,
-                lat,
-                time: Date.now(),
-                musicActive: inheritedMusic,
-                music: inheritedMusic,
-                bearing: 0
-            }));
-
-            pts.splice(idxStart, idxEnd - idxStart + 1, ...newSegmentPoints);
-            syncRouteMarkersAndIndicesAfterSpline(route, preservedStops);
-            vibrate([40, 30, 40]);
-            updateRouteLayers(route.points);
-            renderEditableRouteMarkers(route);
-            updateUndoFreehandBtnUI();
-
-            if (promptEl) {
-                promptEl.innerText = "✅ 已完成局部改道並自動縫合原路線！（可按「↩️ 復原手繪」退回）";
-            }
+        // 情境 A（剪接替換）：終點連回原路線上另一個舊節點（距離 < 45 公尺且非同一點）➔ 自動剪除兩舊節點之間的多餘舊路徑並無縫替換
+        if (minEndDistM < 45 && closestEndIdx !== -1 && closestEndIdx !== startIndex) {
+            applySpliceBetweenNodes(route, startIndex, closestEndIdx, freehandStrokeCoords);
+            freehandSpliceStartIdx = -1;
+            freehandDraftCoords = [];
+            updateFreehandTempLayer([]);
         }
-        // 情境 B（路線延伸）：起點吸附在原路線開頭或結尾附近（前後 5 個點內），且終點距離原路線 >= 40 公尺
-        else if (minEndDistM >= 40 && (startIndex <= 4 || startIndex >= pts.length - 5)) {
-            freehandUndoStack.push({
-                points: JSON.parse(JSON.stringify(route.points)),
-                events: JSON.parse(JSON.stringify(route.events || []))
-            });
-
-            const distToHead = startIndex;
-            const distToTail = (pts.length - 1) - startIndex;
-            const inheritedMusic = Boolean(pts[startIndex]?.musicActive);
-
-            if (distToTail <= distToHead) {
-                // 往路線尾端延伸
-                const alignedCoords = [...freehandStrokeCoords];
-                alignedCoords[0] = [Number(pts[startIndex].lng.toFixed(6)), Number(pts[startIndex].lat.toFixed(6))];
-                const densified = densifyRoadCoordinates(alignedCoords, 5);
-                const newTailPoints = densified.map(([lng, lat]) => ({
-                    lng,
-                    lat,
-                    time: Date.now(),
-                    musicActive: inheritedMusic,
-                    music: inheritedMusic,
-                    bearing: 0
-                }));
-                pts.splice(startIndex, pts.length - startIndex, ...newTailPoints);
-            } else {
-                // 往路線開頭延伸（反轉手繪陣列使其順向接入 startIndex）
-                const reversedCoords = [...freehandStrokeCoords].reverse();
-                reversedCoords[reversedCoords.length - 1] = [Number(pts[startIndex].lng.toFixed(6)), Number(pts[startIndex].lat.toFixed(6))];
-                const densified = densifyRoadCoordinates(reversedCoords, 5);
-                const newHeadPoints = densified.map(([lng, lat]) => ({
-                    lng,
-                    lat,
-                    time: Date.now(),
-                    musicActive: inheritedMusic,
-                    music: inheritedMusic,
-                    bearing: 0
-                }));
-                pts.splice(0, startIndex + 1, ...newHeadPoints);
-            }
-
-            syncRouteMarkersAndIndicesAfterSpline(route, preservedStops);
-            vibrate([40, 30, 40]);
-            updateRouteLayers(route.points);
-            renderEditableRouteMarkers(route);
-            updateUndoFreehandBtnUI();
-
+        // 情境 B（頭尾延伸）：從路線頭尾端點附近（前後 6 點內）向外畫線延伸
+        else if (startIndex <= 5 || startIndex >= pts.length - 6) {
+            applyExtendFromEndpoint(route, startIndex, freehandStrokeCoords);
+            updateFreehandTempLayer([]);
+        }
+        // 情境 C（分段剪接草稿）：從路線中段某個舊節點畫出新路徑但尚未連回另一舊節點，保留草稿讓使用者可雙指縮放平移後再點選目標舊節點完成剪接
+        else {
+            freehandSpliceStartIdx = startIndex;
+            freehandDraftCoords = [...freehandStrokeCoords];
+            updateFreehandTempLayer(freehandDraftCoords);
+            renderFreehandSpliceNodes(route);
             if (promptEl) {
-                promptEl.innerText = "✅ 已完成路線延伸！（可按「↩️ 復原手繪」退回）";
-            }
-        } else {
-            if (promptEl) {
-                promptEl.innerText = "⚠️ 終點距離原路線超過 40m！局部改道請連回原路線，或從起終點延伸";
+                promptEl.innerText = `✂️ 已從節點 #${startIndex + 1} 畫出新路徑草稿！可雙指縮放後點選路線上另一個舊節點完成剪接替換`;
             }
         }
 
@@ -2355,39 +2938,25 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         freehandStartIndex = -1;
     }
 
-    // 雙指平移與防誤觸狀態鎖
-    let isMultiTouchLocked = false;
-    let lastTwoFingerCenter = null;
+    let isMultiTouchGestureActive = false;
 
-    // 觸控事件監聽
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isEditingMode || editSubMode !== 'freehand') return;
+        ensureEditorMapZoomEnabled();
         if (!e.touches) return;
 
-        // 偵測到雙指（或多指）觸控：立即取消未完成的單指手繪草稿，並初始化雙指中點以供拖動平移地圖
-        if (e.touches.length === 2) {
-            isMultiTouchLocked = true;
-            if (isFreehandDrawing) cancelActiveFreehandStroke();
-            const promptEl = document.getElementById('editPromptText');
-            if (promptEl) {
-                promptEl.innerText = "手指在路線附近按住滑動，放開後自動銜接原路線";
+        // 只要偵測到雙指觸控 (e.touches.length >= 2)，立刻中斷當前單指畫線判定，將控制權 100% 交還給地圖執行雙指平移與縮放！
+        if (e.touches.length >= 2) {
+            isMultiTouchGestureActive = true;
+            if (isFreehandDrawing) {
+                cancelActiveFreehandStroke(false);
             }
-            lastTwoFingerCenter = {
-                x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-                y: (e.touches[0].clientY + e.touches[1].clientY) / 2
-            };
+            try { map.dragPan.enable(); } catch (err) {}
+            ensureEditorMapZoomEnabled();
             return;
         }
 
-        if (e.touches.length > 2) {
-            isMultiTouchLocked = true;
-            lastTwoFingerCenter = null;
-            if (isFreehandDrawing) cancelActiveFreehandStroke();
-            return;
-        }
-
-        // 防誤觸保護：若剛進行過雙指操作且尚未全部手指離開螢幕，禁止觸發單指畫線
-        if (isMultiTouchLocked) return;
+        if (isMultiTouchGestureActive) return;
 
         if (e.touches.length === 1) {
             const touch = e.touches[0];
@@ -2399,33 +2968,20 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
         if (!isEditingMode || editSubMode !== 'freehand') return;
         if (!e.touches) return;
 
-        // 雙指同方向滑動：即時計算雙指中點位移量 (dx, dy) 並呼叫 map.panBy 平移地圖（同時保留雙指縮放）
-        if (e.touches.length === 2) {
-            isMultiTouchLocked = true;
-            if (isFreehandDrawing) cancelActiveFreehandStroke();
-            const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-            const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-            if (lastTwoFingerCenter) {
-                const dx = centerX - lastTwoFingerCenter.x;
-                const dy = centerY - lastTwoFingerCenter.y;
-                if (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2) {
-                    map.panBy([-dx, -dy], { animate: false });
-                }
+        // 雙指觸控時立刻中斷單指畫線，絕不攔截事件、絕不呼叫 map.panBy，讓 MapLibre 原生 touchZoomRotate 順暢執行雙指縮放與平移
+        if (e.touches.length >= 2) {
+            isMultiTouchGestureActive = true;
+            if (isFreehandDrawing) {
+                cancelActiveFreehandStroke(false);
             }
-            lastTwoFingerCenter = { x: centerX, y: centerY };
+            try { map.dragPan.enable(); } catch (err) {}
+            ensureEditorMapZoomEnabled();
             return;
         }
 
-        if (e.touches.length > 2) {
-            isMultiTouchLocked = true;
-            lastTwoFingerCenter = null;
-            if (isFreehandDrawing) cancelActiveFreehandStroke();
-            return;
-        }
+        if (isMultiTouchGestureActive || !isFreehandDrawing) return;
 
-        // 防誤觸保護：雙指放開剩單指在螢幕上時，不觸發手繪
-        if (isMultiTouchLocked || !isFreehandDrawing) return;
-
+        // 僅在單指觸控 (e.touches.length === 1) 且正在畫線時執行畫線
         if (e.touches.length === 1) {
             if (e.cancelable) e.preventDefault();
             const touch = e.touches[0];
@@ -2436,21 +2992,17 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     canvasContainer.addEventListener('touchend', (e) => {
         if (!isEditingMode || editSubMode !== 'freehand') {
             if (!e.touches || e.touches.length === 0) {
-                isMultiTouchLocked = false;
-                lastTwoFingerCenter = null;
+                isMultiTouchGestureActive = false;
             }
             return;
         }
 
-        if (!e.touches || e.touches.length < 2) {
-            lastTwoFingerCenter = null;
-        }
-
-        // 若處於雙指操作鎖定狀態，需等兩根手指「完全離開螢幕 (touches.length === 0)」才解除鎖定
-        if (isMultiTouchLocked) {
-            if (isFreehandDrawing) cancelActiveFreehandStroke();
+        if (isMultiTouchGestureActive) {
+            if (isFreehandDrawing) cancelActiveFreehandStroke(false);
             if (!e.touches || e.touches.length === 0) {
-                isMultiTouchLocked = false;
+                isMultiTouchGestureActive = false;
+                try { map.dragPan.enable(); } catch (err) {}
+                ensureEditorMapZoomEnabled();
             }
             return;
         }
@@ -2461,14 +3013,15 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = []) {
     }, { passive: true });
 
     canvasContainer.addEventListener('touchcancel', (e) => {
-        lastTwoFingerCenter = null;
-        if (isFreehandDrawing) cancelActiveFreehandStroke();
+        if (isFreehandDrawing) cancelActiveFreehandStroke(false);
         if (!e.touches || e.touches.length === 0) {
-            isMultiTouchLocked = false;
+            isMultiTouchGestureActive = false;
         }
+        try { map.dragPan.enable(); } catch (err) {}
+        ensureEditorMapZoomEnabled();
     }, { passive: true });
 
-    // 滑鼠事件監聽
+    // 滑鼠單擊拖曳畫線（滾輪縮放 map.scrollZoom 全程保持啟用）
     canvasContainer.addEventListener('mousedown', (e) => {
         if (!isEditingMode || editSubMode !== 'freehand' || e.button !== 0) return;
         handleStrokeStart(e.clientX, e.clientY, e);
@@ -2489,8 +3042,12 @@ document.getElementById('editRouteBtn').onclick = () => {
     const route = savedRoutes[selectedRouteIdx];
     if (!route) return;
 
-    isEditingMode = true; editStep = 0;
+    isEditingMode = true;
+    editStep = 0;
+    selectedEditNodeIdx = -1;
     freehandUndoStack = [];
+    freehandSpliceStartIdx = -1;
+    freehandDraftCoords = [];
     originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
     originalPointsBackup = JSON.parse(JSON.stringify(route.points || [])); 
 
@@ -2498,7 +3055,8 @@ document.getElementById('editRouteBtn').onclick = () => {
     document.getElementById('editRouteBar').classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = `編輯：${route.name}`;
 
-    setEditSubMode('marker');
+    ensureEditorMapZoomEnabled();
+    setEditSubMode('path');
     renderEditableRouteMarkers(route);
 };
 
@@ -2541,6 +3099,10 @@ function renderEditableRouteMarkers(route) {
             
             const m = new maplibregl.Marker({ element: markerEl, draggable: true }).setLngLat([p.lng, p.lat]).addTo(map);
 
+            m.on('dragstart', () => {
+                pushEditUndoSnapshot(route);
+            });
+
             m.on('dragend', () => {
                 const newLngLat = m.getLngLat();
                 let minDist = Infinity, newIdx = idx;
@@ -2570,6 +3132,7 @@ function renderEditableRouteMarkers(route) {
                     const newTime = document.getElementById('editStopTimeInput').value;
                     const newName = document.getElementById('editStopNameInput').value;
                     if (newTime && newName) {
+                        pushEditUndoSnapshot(route);
                         route.points[idx].scheduled_time = newTime; 
                         route.points[idx].stop_name = newName;
                         modal.classList.add('hidden');
@@ -2579,6 +3142,7 @@ function renderEditableRouteMarkers(route) {
 
                 document.getElementById('btnDeleteStop').onclick = () => {
                     if (confirm(`確定要刪除【${p.stop_name}】這個站牌嗎？`)) {
+                        pushEditUndoSnapshot(route);
                         delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
                         modal.classList.add('hidden');
                         renderEditableRouteMarkers(route);
@@ -2844,6 +3408,8 @@ function enterManualDrawMode() {
     isManualDrawFetching = false;
     manualDrawActionSeq++;
 
+    ensureEditorMapZoomEnabled();
+    try { map.dragPan.enable(); } catch (e) {}
     updateManualMusicSwitchUI();
     setCameraFollow(false);
 
@@ -2853,7 +3419,7 @@ function enterManualDrawMode() {
     document.getElementById('topBackBtn').classList.add('hidden');
 
     if (manualDrawTopBanner) manualDrawTopBanner.classList.remove('hidden');
-    if (manualDrawPromptText) manualDrawPromptText.textContent = '請依序點擊地圖上的起點與轉彎路口';
+    if (manualDrawPromptText) manualDrawPromptText.textContent = '請依序點擊地圖上的起點與轉彎路口（支援雙指與滾輪縮放）';
     if (manualDrawUI) manualDrawUI.classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = '✏️ 手拉畫路線';
 
@@ -2891,7 +3457,7 @@ if (btnManualUndo) {
         }
         if (manualDrawPromptText) {
             manualDrawPromptText.textContent = manualDrawSteps.length === 0
-                ? '請依序點擊地圖上的起點與轉彎路口'
+                ? '請依序點擊地圖上的起點與轉彎路口（支援雙指與滾輪縮放）'
                 : '已復原上一步，請點擊下一個轉彎路口';
         }
         renderManualDrawPreview();
@@ -2935,14 +3501,20 @@ if (btnManualSave) {
         const estElapsedSec = Math.max(10, Math.round((totalDistKm / 20) * 3600));
         const mins = Math.floor(estElapsedSec / 60), secs = estElapsedSec % 60;
         const nowId = Date.now();
+        const trimmedName = name.trim();
+
+        const existingMatch = savedRoutes.find(r => !r?.isPendingPreview && isSameRouteIdentity(r, { name: trimmedName }));
+        const nextVer = existingMatch ? (getRouteVersion(existingMatch) + 1) : 1;
 
         const newRoute = {
-            id: nowId,
-            originId: nowId,
-            routeId: generateRouteId(),
-            name: name.trim(),
+            id: existingMatch?.id || nowId,
+            originId: existingMatch?.originId || nowId,
+            routeId: existingMatch?.routeId || generateRouteId(),
+            name: trimmedName,
             author,
-            date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            routeVersion: nextVer,
+            updatedAt: nowId,
+            date: new Date(nowId).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
             createdAt: new Date(nowId).toISOString(),
             distance: totalDistKm.toFixed(2),
             timeStr: `${mins}m ${secs}s`,
@@ -2952,14 +3524,10 @@ if (btnManualSave) {
             warnings: []
         };
 
-        savedRoutes.unshift(newRoute);
-        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
-        try {
-            localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-        } catch (e) {}
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+        const savedItem = upsertLocalRouteFromCloud(newRoute);
+        persistSavedRoutesToStorage();
 
-        // 退出手拉模式並直接進入該路線的預覽詳情頁（可立即事後編輯、補加黃色提醒點或開始導航）
+        // 退出手拉模式並直接進入該路線的預覽詳情頁（可立即點擊「編輯」進行拖曳微調、手繪剪接或刪除多餘路線）
         isManualDrawingMode = false;
         manualDrawSteps = [];
         isManualDrawFetching = false;
@@ -2967,7 +3535,8 @@ if (btnManualSave) {
         if (manualDrawTopBanner) manualDrawTopBanner.classList.add('hidden');
         if (manualDrawUI) manualDrawUI.classList.add('hidden');
 
-        window.openRouteDetail(0);
+        const targetIdx = Math.max(0, savedRoutes.findIndex(r => r === savedItem || isSameRouteIdentity(r, savedItem)));
+        window.openRouteDetail(targetIdx);
     };
 }
 
@@ -3043,7 +3612,12 @@ map.on('click', (e) => {
     }
     if (!isEditingMode) return;
     const route = savedRoutes[selectedRouteIdx];
-    if (!route) return;
+    if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
+
+    const origTarget = e.originalEvent?.target;
+    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker')) {
+        return;
+    }
 
     if (editSubMode === 'marker') {
         let minDist = Infinity, closestIdx = -1;
@@ -3057,7 +3631,6 @@ map.on('click', (e) => {
         if (editStep === 0) {
             editStartIndex = closestIdx; 
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
-            // 🚀 流程翻轉：點擊 A 點後，直接跳出大選單！不用先選 B 點！
             const el = document.createElement('div');
             el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 選擇位置中...</div>`;
             tempMarkerA = new maplibregl.Marker({ element: el }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
@@ -3065,7 +3638,7 @@ map.on('click', (e) => {
             window.currentEditData = { route, editStartIndex };
             document.getElementById('customActionModal').classList.remove('hidden');
         } else if (editStep === 1) {
-            // 🚀 這裡是專門留給「音樂開關」選 B 點用的
+            pushEditUndoSnapshot(route);
             let editEndIndex = closestIdx;
             let start = Math.min(editStartIndex, editEndIndex);
             let end = Math.max(editStartIndex, editEndIndex);
@@ -3077,18 +3650,7 @@ map.on('click', (e) => {
                 route.points[i].music = turnOn;
             }
             
-            let newEvents = (route.events || []).filter(ev => ev.type === 'alert'); 
-            let currentMusic = route.points[0].musicActive;
-            if (currentMusic) newEvents.push({ type: 'on', lng: route.points[0].lng, lat: route.points[0].lat, ptIdx: 0 });
-            
-            for (let i = 1; i < route.points.length; i++) {
-                if (route.points[i].musicActive !== currentMusic) {
-                    currentMusic = route.points[i].musicActive;
-                    let evtType = currentMusic ? 'on' : 'off';
-                    newEvents.push({ type: evtType, lng: route.points[i].lng, lat: route.points[i].lat, ptIdx: i, bearing: route.points[i].bearing || 0 });
-                }
-            }
-            route.events = newEvents;
+            syncRouteMarkersAndIndicesAfterSpline(route);
 
             if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
             editStep = 0;
@@ -3096,12 +3658,7 @@ map.on('click', (e) => {
             updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         }
     } else if (editSubMode === 'path') {
-        const bbox = [ [e.point.x - 20, e.point.y - 20], [e.point.x + 20, e.point.y + 20] ];
-        const features = map.queryRenderedFeatures(bbox, { layers: ['bg-route-line', 'route-silent-line', 'route-music-line'] });
-        
-        if (features.length === 0) { alert("請確實點擊在『軌跡線條』上才能進行編輯喔！"); return; }
-
-        // 🚀 1. 先尋找點擊位置附近有沒有「現有的轉角節點」
+        // 點擊軌跡線條時：自動選取最近的節點（若距離過遠則不動作），並展開快速修剪選單
         let minDistToNode = Infinity;
         let closestNodeIdx = -1;
         for (let i = 0; i < route.points.length; i++) {
@@ -3112,56 +3669,66 @@ map.on('click', (e) => {
             }
         }
 
-        let targetPoint = null;
-        let isExistingNode = false;
+        if (minDistToNode > 45 || closestNodeIdx === -1) return;
 
-        // 🚀 2. 智慧判定：如果點擊位置距離某個現有轉角很近 (20公尺內)，就直接抓取那個舊轉角！
-        if (minDistToNode <= 20) {
-            targetPoint = route.points[closestNodeIdx];
-            isExistingNode = true;
-        } else {
-            // 🚀 3. 如果附近沒有轉角 (點在長直線中間)，就執行原本的插入新點邏輯
-            let bestScore = Infinity, insertIndex = -1;
-            for (let i = 0; i < route.points.length - 1; i++) {
-                const d1 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat);
-                const d2 = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i+1].lng, route.points[i+1].lat);
-                const segL = getDistanceKm(route.points[i].lng, route.points[i].lat, route.points[i+1].lng, route.points[i+1].lat);
-                const score = (d1 + d2) - segL;
-                if (score < bestScore) { bestScore = score; insertIndex = i + 1; }
+        route.points[closestNodeIdx].isKeyNode = true;
+        selectedEditNodeIdx = closestNodeIdx;
+        vibrate(20);
+        renderPathEditNodes(route);
+        updateNodeTrimPanelUI(route);
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：可按住拖曳位置，或使用下方修剪選單刪除多餘路線`;
+        }
+    } else if (editSubMode === 'freehand') {
+        // 「手繪延伸／剪接」模式下點擊地圖：
+        // 1. 若點擊處靠近路線既有節點 (< 30m)，視同點選該舊節點（設定剪接起點或完成剪接替換）
+        const pts = route.points;
+        let minDistM = Infinity;
+        let closestIdx = -1;
+        for (let i = 0; i < pts.length; i++) {
+            const dM = getDistanceKm(e.lngLat.lng, e.lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
+            if (dM < minDistM) {
+                minDistM = dM;
+                closestIdx = i;
             }
-            
-            const inheritedMusic = Boolean(route.points[insertIndex-1].musicActive);
-            targetPoint = { lng: e.lngLat.lng, lat: e.lngLat.lat, musicActive: inheritedMusic, music: inheritedMusic };
-            route.points.splice(insertIndex, 0, targetPoint);
         }
 
-        updateRouteLayers(route.points);
+        if (minDistM <= 28 && closestIdx !== -1) {
+            handleFreehandNodeClick(route, closestIdx);
+            return;
+        }
 
-        // 防止同一個節點重複疊加多個 DOM Marker
-        if (pathEditMarkers.some(m => m._targetPoint === targetPoint)) return;
-        
-        // 創造編輯圓點 (舊轉角用橘色，新插入的點用綠色，方便凱哥辨識！)
-        const el = document.createElement('div');
-        el.className = isExistingNode 
-            ? 'w-5 h-5 bg-white border-[5px] border-amber-500 rounded-full shadow-md cursor-grab active:cursor-grabbing' 
-            : 'w-5 h-5 bg-white border-[5px] border-emerald-500 rounded-full shadow-md cursor-grab active:cursor-grabbing';
-        
-        const m = new maplibregl.Marker({ element: el, draggable: true })
-            .setLngLat([targetPoint.lng, targetPoint.lat])
-            .addTo(map);
-        m._targetPoint = targetPoint;
-            
-        m.on('drag', () => {
-            const lngLat = m.getLngLat();
-            targetPoint.lng = lngLat.lng; 
-            targetPoint.lat = lngLat.lat;
-            updateRouteLayers(route.points, 30); 
-        });
-        m.on('dragend', () => {
-            updateRouteLayers(route.points);
-        });
-        
-        pathEditMarkers.push(m);
+        const clickCoord = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))];
+
+        // 2. 若尚未選取舊節點，或目前選取的是頭尾端點 (0 或 pts.length - 1)，點擊地圖空白處直接從頭尾加點延伸！
+        if (freehandSpliceStartIdx === -1 || freehandSpliceStartIdx === pts.length - 1 || freehandSpliceStartIdx === 0) {
+            let anchorIdx = freehandSpliceStartIdx;
+            if (anchorIdx === -1) {
+                const dHead = getDistanceKm(clickCoord[0], clickCoord[1], pts[0].lng, pts[0].lat);
+                const dTail = getDistanceKm(clickCoord[0], clickCoord[1], pts[pts.length - 1].lng, pts[pts.length - 1].lat);
+                anchorIdx = (dHead < dTail * 0.6) ? 0 : (pts.length - 1);
+            }
+            const anchorPt = pts[anchorIdx];
+            applyExtendFromEndpoint(route, anchorIdx, [
+                [Number(anchorPt.lng.toFixed(6)), Number(anchorPt.lat.toFixed(6))],
+                clickCoord
+            ]);
+            return;
+        }
+
+        // 3. 若已選取某個中段舊節點 A，點擊地圖空白處則依序累積剪接路徑草稿點，待點選另一舊節點 B 時一併剪除替換
+        if (freehandDraftCoords.length === 0) {
+            const startPt = pts[freehandSpliceStartIdx];
+            freehandDraftCoords.push([Number(startPt.lng.toFixed(6)), Number(startPt.lat.toFixed(6))]);
+        }
+        freehandDraftCoords.push(clickCoord);
+        updateFreehandTempLayer(freehandDraftCoords);
+        vibrate(20);
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `✍️ 已加入新路徑折點（共 ${freehandDraftCoords.length - 1} 點），請再點選路線上另一個舊節點完成剪接替換`;
+        }
     }
 });
 
@@ -3172,29 +3739,27 @@ window.handleRouteAction = function(action) {
     const { route, editStartIndex } = window.currentEditData;
 
     if (action === '1' || action === '2') {
-        // 🚀 動作 1&2 (音樂開關)：需要區段，所以進入 step 1 等待使用者點選 B 點
         window.currentEditData.action = action;
         editStep = 1; 
         document.getElementById('editPromptText').innerText = "🎵 已選擇音樂動作！請點選軌跡另一處作為『區段終點 (B點)』";
-        return; // 直接中斷離開，等待使用者點擊地圖 B 點！
+        return;
     } 
     else if (action === '3') {
-        // 🚀 動作 3 (黃色提醒)：開啟支援實景拍照與自動壓縮的專用設定彈窗
+        pushEditUndoSnapshot(route);
         openAlertModalForCreate(route, editStartIndex);
         return;
     } 
     else if (action === '5') {
-        // 🚀 動作 5 (時刻站牌)：單點作業，直接秒殺處理！
         const time = prompt("請輸入表定時間 (格式如 17:30)：", "17:00");
         const name = prompt("請輸入站點名稱 (如：火車站前)：", "新增定點");
         if (time && name) {
+            pushEditUndoSnapshot(route);
             route.points[editStartIndex].is_stop = true;
             route.points[editStartIndex].scheduled_time = time;
             route.points[editStartIndex].stop_name = name;
         }
     }
     
-    // 🌟 單點作業處理完畢，或是按了取消，一律收尾重置！
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     editStep = 0;
     document.getElementById('editPromptText').innerText = "🛠️ 標記完成！請點擊地圖軌跡選擇下一個『目標點』";
@@ -3203,35 +3768,38 @@ window.handleRouteAction = function(action) {
 
 document.getElementById('saveEditBtn').onclick = () => {
     isEditingMode = false;
+    selectedEditNodeIdx = -1;
     clearPathEditMarkers();
-    cancelActiveFreehandStroke();
+    cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
-    if (btnUndoFreehand) btnUndoFreehand.classList.add('hidden');
+    updateUndoFreehandBtnUI();
+    updateNodeTrimPanelUI(null);
     try { map.dragPan.enable(); } catch (e) {}
+    ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     document.getElementById('editRouteBar').classList.add('hidden');
 
     const editedRoute = savedRoutes[selectedRouteIdx];
     if (editedRoute && Array.isArray(editedRoute.points) && editedRoute.points.length >= 2) {
-        let recalcDistKm = 0;
-        for (let i = 1; i < editedRoute.points.length; i++) {
-            recalcDistKm += getDistanceKm(
-                editedRoute.points[i - 1].lng,
-                editedRoute.points[i - 1].lat,
-                editedRoute.points[i].lng,
-                editedRoute.points[i].lat
-            );
-        }
-        editedRoute.distance = recalcDistKm.toFixed(2);
+        // 自動重新計算總距離 (km) 與各語音標記點的對應路徑索引
+        syncRouteMarkersAndIndicesAfterSpline(editedRoute, null, true);
+
+        // 儲存自動升版：routeVersion + 1、更新 updatedAt 時間戳，並原地覆蓋本機舊檔
+        const nowTs = Date.now();
+        editedRoute.routeVersion = getRouteVersion(editedRoute) + 1;
+        editedRoute.updatedAt = nowTs;
+        editedRoute.date = new Date(nowTs).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        savedRoutes[selectedRouteIdx] = editedRoute;
     }
 
-    try {
-        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
-    } catch (e) {}
-
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
+    deduplicateSavedRoutes(false);
+    persistSavedRoutesToStorage().then(() => {
+        renderHistoryList();
         document.getElementById('topBackBtn').classList.remove('hidden');
-        window.openRouteDetail(selectedRouteIdx); 
+        window.openRouteDetail(selectedRouteIdx);
+        if (editedRoute) {
+            showNavAlert('✅', `已儲存「${editedRoute.name}」並自動升版為 v${editedRoute.routeVersion}！`, 'bg-emerald-600');
+        }
     }).catch((err) => {
         alert("儲存失敗！可能是手機儲存空間不足，請清理後再試。");
         console.error(err);
@@ -3240,16 +3808,20 @@ document.getElementById('saveEditBtn').onclick = () => {
 
 document.getElementById('cancelEditBtn').onclick = () => {
     isEditingMode = false;
+    selectedEditNodeIdx = -1;
     clearPathEditMarkers();
-    cancelActiveFreehandStroke();
+    cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
-    if (btnUndoFreehand) btnUndoFreehand.classList.add('hidden');
+    updateUndoFreehandBtnUI();
+    updateNodeTrimPanelUI(null);
     try { map.dragPan.enable(); } catch (e) {}
+    ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     document.getElementById('editRouteBar').classList.add('hidden');
     
     savedRoutes[selectedRouteIdx].events = originalEventsBackup;
     savedRoutes[selectedRouteIdx].points = originalPointsBackup;
+    syncRouteMarkersAndIndicesAfterSpline(savedRoutes[selectedRouteIdx]);
     
     document.getElementById('topBackBtn').classList.remove('hidden');
     window.openRouteDetail(selectedRouteIdx);
@@ -3267,11 +3839,14 @@ function backToMain() {
         window.tacticalTimer = null;
     }
     isEditingMode = false;
+    selectedEditNodeIdx = -1;
     clearPathEditMarkers();
-    cancelActiveFreehandStroke();
+    cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
-    if (btnUndoFreehand) btnUndoFreehand.classList.add('hidden');
+    updateUndoFreehandBtnUI();
+    updateNodeTrimPanelUI(null);
     try { map.dragPan.enable(); } catch (e) {}
+    ensureEditorMapZoomEnabled();
     isManualDrawingMode = false;
     manualDrawSteps = [];
     isManualDrawFetching = false;

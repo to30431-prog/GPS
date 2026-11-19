@@ -554,16 +554,16 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用清晰的日間 OpenFreeMap liberty 亮色樣式，並強制所有路名、地名、地標文字永遠與螢幕水平直立 viewport） ---
-const OPENFREEMAP_DAY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用清晰的日間 OpenFreeMap liberty 亮色樣式，純中文路名並強制所有文字永遠與螢幕水平直立 viewport） ---
+const OPENFREEMAP_LIBERTY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
-const VIEWPORT_SYMBOL_ALIGNMENT_LAYOUT = {
-    'text-rotation-alignment': 'viewport',
-    'icon-rotation-alignment': 'viewport',
-    'text-pitch-alignment': 'viewport',
-    'icon-pitch-alignment': 'viewport',
-    'text-keep-upright': true
-};
+const PURE_CHINESE_TEXT_FIELD = [
+    'coalesce',
+    ['get', 'name:zh-Hant'],
+    ['get', 'name:zh'],
+    ['get', 'name:nonlatin'],
+    ['get', 'name']
+];
 
 // 記錄最後一次繪製的路線 GeoJSON 資料，確保底圖載入後無縫繪製所有路線圖層
 let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
@@ -572,7 +572,7 @@ let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 
 const map = new maplibregl.Map({
     container: 'map',
-    style: OPENFREEMAP_DAY_STYLE_URL,
+    style: 'https://tiles.openfreemap.org/styles/liberty',
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
@@ -855,7 +855,7 @@ function ensureCustomRouteSourcesAndLayers() {
 
 // ==========================================
 // 🗺️ 地圖路名、地名、地標文字與自訂符號圖層永遠與手機螢幕水平對齊 (viewport + text-keep-upright: true)
-// 徹底防止「車頭朝上」旋轉地圖時文字或圖標跟著傾斜、顛倒
+// 並將 liberty 底圖預設的中英雙語路名改為清爽純中文、隱藏黃色公路盾牌
 // ==========================================
 function fixSymbolTextAlignment() {
     try {
@@ -864,13 +864,30 @@ function fixSymbolTextAlignment() {
 
         style.layers.forEach(layer => {
             if (layer.type === 'symbol') {
+                const lid = String(layer.id || '');
+
+                // 隱藏黃色公路編號盾牌圖層，維持畫面清爽乾淨
+                if (lid.includes('shield')) {
+                    try {
+                        map.setLayoutProperty(lid, 'visibility', 'none');
+                    } catch (e) {}
+                    return;
+                }
+
                 try {
-                    map.setLayoutProperty(layer.id, 'text-rotation-alignment', 'viewport');
-                    map.setLayoutProperty(layer.id, 'icon-rotation-alignment', 'viewport');
-                    map.setLayoutProperty(layer.id, 'text-pitch-alignment', 'viewport');
-                    map.setLayoutProperty(layer.id, 'icon-pitch-alignment', 'viewport');
-                    map.setLayoutProperty(layer.id, 'text-keep-upright', true);
+                    map.setLayoutProperty(lid, 'text-rotation-alignment', 'viewport');
+                    map.setLayoutProperty(lid, 'icon-rotation-alignment', 'viewport');
+                    map.setLayoutProperty(lid, 'text-pitch-alignment', 'viewport');
+                    map.setLayoutProperty(lid, 'icon-pitch-alignment', 'viewport');
+                    map.setLayoutProperty(lid, 'text-keep-upright', true);
                 } catch (e) {}
+
+                // 將底圖所有路名、地名、POI 文字統一設為純中文（移除英文拼接）
+                if (lid !== 'custom-route-symbols-layer' && !lid.includes('one_way_arrow') && layer.layout && layer.layout['text-field']) {
+                    try {
+                        map.setLayoutProperty(lid, 'text-field', PURE_CHINESE_TEXT_FIELD);
+                    } catch (e) {}
+                }
             }
         });
     } catch (e) {

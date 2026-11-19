@@ -554,8 +554,116 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用極簡清爽的日間 OpenFreeMap positron 亮色樣式，無 3D 建築、無黃色馬路、放大顯示門牌，並強制所有文字永遠與螢幕水平直立 viewport） ---
-const OPENFREEMAP_POSITRON_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
+// --- 1. 初始化 MapLibre GL 向量／圖磚旋轉地圖（支援 6 種免費免 Key 圖層隨時切換、localStorage 記憶偏好，並強制所有文字永遠與螢幕水平直立 viewport） ---
+const MAP_LAYER_STORAGE_KEY = 'selectedMapLayer';
+
+function buildNlscRasterStyle(tileUrl, layerTitle) {
+    return {
+        version: 8,
+        name: layerTitle,
+        glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
+        sources: {
+            'nlsc-raster-tiles': {
+                type: 'raster',
+                tiles: [tileUrl],
+                tileSize: 256,
+                maxzoom: 19,
+                attribution: '© 內政部國土測繪中心 NLSC'
+            }
+        },
+        layers: [
+            {
+                id: 'nlsc-raster-base-layer',
+                type: 'raster',
+                source: 'nlsc-raster-tiles',
+                minzoom: 0,
+                maxzoom: 22
+            }
+        ]
+    };
+}
+
+const MAP_LAYER_PRESETS = [
+    {
+        id: 'voyager',
+        name: '清爽彩色（推薦）',
+        shortName: '清爽彩色',
+        desc: 'Carto Voyager 清爽彩色向量',
+        icon: '🌤️',
+        isVector: true,
+        pureChineseOverride: false,
+        getStyle: () => 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'
+    },
+    {
+        id: 'positron',
+        name: '極簡灰白',
+        shortName: '極簡灰白',
+        desc: 'OpenFreeMap 極簡灰白向量',
+        icon: '⚪',
+        isVector: true,
+        pureChineseOverride: true,
+        getStyle: () => 'https://tiles.openfreemap.org/styles/positron'
+    },
+    {
+        id: 'liberty',
+        name: '標準立體',
+        shortName: '標準立體',
+        desc: 'OpenFreeMap 標準立體向量',
+        icon: '🏙️',
+        isVector: true,
+        pureChineseOverride: true,
+        getStyle: () => 'https://tiles.openfreemap.org/styles/liberty'
+    },
+    {
+        id: 'bright',
+        name: '雙語路牌',
+        shortName: '雙語路牌',
+        desc: 'OpenFreeMap 中英雙語路牌',
+        icon: '🪧',
+        isVector: true,
+        pureChineseOverride: false,
+        getStyle: () => 'https://tiles.openfreemap.org/styles/bright'
+    },
+    {
+        id: 'nlsc_emap',
+        name: '門牌詳細（國土測繪）',
+        shortName: '門牌詳細',
+        desc: '內政部臺灣通用電子地圖',
+        icon: '🏠',
+        isVector: false,
+        pureChineseOverride: false,
+        getStyle: () => buildNlscRasterStyle(
+            'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
+            '門牌詳細（國土測繪）'
+        )
+    },
+    {
+        id: 'nlsc_photo2',
+        name: '衛星實景（國土測繪）',
+        shortName: '衛星實景',
+        desc: '內政部正射影像航照圖',
+        icon: '🛰️',
+        isVector: false,
+        pureChineseOverride: false,
+        getStyle: () => buildNlscRasterStyle(
+            'https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}',
+            '衛星實景（國土測繪）'
+        )
+    }
+];
+
+function getSavedMapLayerPreset() {
+    try {
+        const savedId = localStorage.getItem(MAP_LAYER_STORAGE_KEY);
+        if (savedId) {
+            const found = MAP_LAYER_PRESETS.find(item => item.id === savedId);
+            if (found) return found;
+        }
+    } catch (e) {}
+    return MAP_LAYER_PRESETS[0]; // 預設：清爽彩色（推薦）
+}
+
+let currentMapLayerPreset = getSavedMapLayerPreset();
 
 const PURE_CHINESE_TEXT_FIELD = [
     'coalesce',
@@ -565,14 +673,14 @@ const PURE_CHINESE_TEXT_FIELD = [
     ['get', 'name']
 ];
 
-// 記錄最後一次繪製的路線 GeoJSON 資料，確保底圖載入後無縫繪製所有路線圖層
+// 記錄最後一次繪製的路線 GeoJSON 資料，確保切換任何底圖樣式 (map.setStyle) 後自動無縫重繪所有自訂路線圖層
 let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 
 const map = new maplibregl.Map({
     container: 'map',
-    style: 'https://tiles.openfreemap.org/styles/positron',
+    style: currentMapLayerPreset.getStyle(),
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
@@ -700,12 +808,13 @@ function getDynamicZoomBySpeed(speedKmh) {
 
 // ==========================================
 // 🛣️ 自訂路線圖層（保留「音樂開（綠色）／音樂關（藍色）／已行駛（半透明淺灰）」分段顏色與俐落外框邊線 line-casing）
+// 支援在任何底圖切換 (map.setStyle) 後自動重建並無縫還原所有路線與標記資料
 // ==========================================
 function ensureCustomRouteSourcesAndLayers() {
     if (!map) return;
 
     try {
-        // 0. 在 positron 樣式上補齊放大時的門牌號碼圖層 (housenumber-label)
+        // 0. 在 OpenFreeMap (openmaptiles) 樣式上補齊放大時的門牌號碼圖層 (housenumber-label)
         if (map.getSource('openmaptiles') && !map.getLayer('housenumber-label')) {
             map.addLayer({
                 id: 'housenumber-label',
@@ -860,7 +969,7 @@ function ensureCustomRouteSourcesAndLayers() {
                     'icon-pitch-alignment': 'viewport',
                     'text-keep-upright': true,
                     'text-field': ['get', 'label'],
-                    'text-font': ['Noto Sans Bold'],
+                    'text-font': ['Noto Sans Regular'],
                     'text-size': 12,
                     'text-offset': [0, 1.2]
                 },
@@ -882,19 +991,18 @@ function ensureCustomRouteSourcesAndLayers() {
 
 // ==========================================
 // 🗺️ 地圖路名、地名、地標文字與自訂符號圖層永遠與手機螢幕水平對齊 (viewport + text-keep-upright: true)
-// 並將底圖預設的中英雙語路名改為清爽純中文、隱藏公路編號盾牌
 // ==========================================
 function fixSymbolTextAlignment() {
     try {
         const style = map.getStyle();
         if (!style || !style.layers) return;
+        const usePureChinese = Boolean(currentMapLayerPreset?.pureChineseOverride);
 
         style.layers.forEach(layer => {
             if (layer.type === 'symbol') {
                 const lid = String(layer.id || '');
 
-                // 隱藏公路編號盾牌圖層，維持畫面清爽乾淨
-                if (lid.includes('shield')) {
+                if (usePureChinese && lid.includes('shield')) {
                     try {
                         map.setLayoutProperty(lid, 'visibility', 'none');
                     } catch (e) {}
@@ -909,8 +1017,8 @@ function fixSymbolTextAlignment() {
                     map.setLayoutProperty(lid, 'text-keep-upright', true);
                 } catch (e) {}
 
-                // 將底圖所有路名、地名、POI 文字統一設為純中文（保留門牌號碼與自訂圖層）
                 if (
+                    usePureChinese &&
                     lid !== 'custom-route-symbols-layer' &&
                     lid !== 'housenumber-label' &&
                     !lid.includes('one_way_arrow') &&
@@ -928,14 +1036,158 @@ function fixSymbolTextAlignment() {
     }
 }
 
+// 確保所有 DOM Marker（黃色垃圾車、橘黃色警示膠囊、起終點、隊友雷達）在底圖切換後完整保留且座標不偏移
+function ensureDomMarkersIntactAfterStyleSwitch() {
+    try {
+        if (vehicleMarker) {
+            const el = vehicleMarker.getElement();
+            if (el && !el.isConnected) {
+                vehicleMarker.addTo(map);
+            }
+            vehicleMarker.setLngLat(vehicleVisualLngLat || lastKnownLngLat).setRotation(vehicleVisualHeading || currentHeading);
+        }
+        if (typeof domMarkers !== 'undefined' && Array.isArray(domMarkers)) {
+            domMarkers.forEach(m => {
+                if (m && typeof m.getElement === 'function') {
+                    const el = m.getElement();
+                    if (el && !el.isConnected) m.addTo(map);
+                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+                }
+            });
+        }
+        if (typeof editNodeMarkers !== 'undefined' && Array.isArray(editNodeMarkers)) {
+            editNodeMarkers.forEach(m => {
+                if (m && typeof m.getElement === 'function') {
+                    const el = m.getElement();
+                    if (el && !el.isConnected) m.addTo(map);
+                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+                }
+            });
+        }
+        if (typeof manualDrawMarkers !== 'undefined' && Array.isArray(manualDrawMarkers)) {
+            manualDrawMarkers.forEach(m => {
+                if (m && typeof m.getElement === 'function') {
+                    const el = m.getElement();
+                    if (el && !el.isConnected) m.addTo(map);
+                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+                }
+            });
+        }
+    } catch (e) {}
+}
+
+let isRestoringCustomStyleLayers = false;
+function restoreCustomLayersAndAlignmentAfterStyleLoad() {
+    if (isRestoringCustomStyleLayers) return;
+    isRestoringCustomStyleLayers = true;
+    try {
+        ensureCustomRouteSourcesAndLayers();
+        map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON || emptyGeoJSON());
+        map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
+        map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
+        if (currentMapLayerPreset?.isVector) {
+            fixSymbolTextAlignment();
+        }
+        ensureDomMarkersIntactAfterStyleSwitch();
+    } finally {
+        isRestoringCustomStyleLayers = false;
+    }
+}
+
+// ==========================================
+// 🗺️ 右上角「圖層」切換面板渲染與切換邏輯（含 localStorage 記憶偏好）
+// ==========================================
+function renderMapLayerMenuOptions() {
+    const listEl = document.getElementById('mapLayerOptionList');
+    const badgeEl = document.getElementById('currentMapLayerBadge');
+    if (badgeEl && currentMapLayerPreset) {
+        badgeEl.textContent = currentMapLayerPreset.shortName;
+    }
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+    MAP_LAYER_PRESETS.forEach(preset => {
+        const isSelected = (preset.id === currentMapLayerPreset?.id);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = isSelected
+            ? 'w-full text-left px-3 py-2 rounded-xl bg-emerald-50 border-2 border-emerald-500 text-emerald-900 flex items-center justify-between gap-2 transition-all active:scale-95'
+            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-95';
+
+        btn.innerHTML = `
+            <div class="flex items-center gap-2.5 min-w-0">
+                <span class="text-base flex-shrink-0">${preset.icon}</span>
+                <div class="min-w-0">
+                    <div class="text-xs font-black truncate ${isSelected ? 'text-emerald-800' : 'text-gray-800'}">${preset.name}</div>
+                    <div class="text-[10px] font-bold truncate ${isSelected ? 'text-emerald-600' : 'text-gray-400'}">${preset.desc}</div>
+                </div>
+            </div>
+            ${isSelected ? '<i class="fa-solid fa-circle-check text-emerald-600 text-sm flex-shrink-0"></i>' : ''}
+        `;
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            switchMapBaseLayer(preset.id);
+            document.getElementById('mapLayerMenuPanel')?.classList.add('hidden');
+        });
+        listEl.appendChild(btn);
+    });
+}
+
+function switchMapBaseLayer(layerId) {
+    const targetPreset = MAP_LAYER_PRESETS.find(item => item.id === layerId);
+    if (!targetPreset || !map) return;
+
+    currentMapLayerPreset = targetPreset;
+    try {
+        localStorage.setItem(MAP_LAYER_STORAGE_KEY, targetPreset.id);
+    } catch (e) {}
+
+    renderMapLayerMenuOptions();
+
+    // 切換底圖後，監聽 map.once('style.load') 自動重繪所有自訂路線圖層與文字水平設定
+    map.once('style.load', () => {
+        restoreCustomLayersAndAlignmentAfterStyleLoad();
+    });
+
+    try {
+        map.setStyle(targetPreset.getStyle());
+    } catch (e) {
+        console.error('切換底圖圖層時發生錯誤:', e);
+    }
+}
+
+(function initMapLayerSwitcherUI() {
+    const switchBtn = document.getElementById('mapLayerSwitchBtn');
+    const menuPanel = document.getElementById('mapLayerMenuPanel');
+    const wrapper = document.getElementById('mapLayerSwitcherWrapper');
+
+    renderMapLayerMenuOptions();
+
+    if (switchBtn && menuPanel) {
+        switchBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            renderMapLayerMenuOptions();
+            menuPanel.classList.toggle('hidden');
+        });
+    }
+
+    // 點擊面板外部任意處自動關閉圖層選單
+    document.addEventListener('pointerdown', (e) => {
+        if (!menuPanel || menuPanel.classList.contains('hidden')) return;
+        if (wrapper && !wrapper.contains(e.target)) {
+            menuPanel.classList.add('hidden');
+        }
+    });
+})();
+
 map.on('load', () => {
     // 僅有黃色清運車輛 Marker (vehicleMarker) 保留 rotationAlignment: 'map' 隨車頭方位角旋轉
     vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
     vehicleVisualLngLat = [...lastKnownLngLat];
     vehicleVisualHeading = currentHeading;
 
-    ensureCustomRouteSourcesAndLayers();
-    fixSymbolTextAlignment();
+    restoreCustomLayersAndAlignmentAfterStyleLoad();
 
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
@@ -946,12 +1198,7 @@ map.on('load', () => {
 });
 
 map.on('style.load', () => {
-    ensureCustomRouteSourcesAndLayers();
-    fixSymbolTextAlignment();
-});
-map.on('styledata', () => {
-    ensureCustomRouteSourcesAndLayers();
-    fixSymbolTextAlignment();
+    restoreCustomLayersAndAlignmentAfterStyleLoad();
 });
 
 function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
@@ -1315,24 +1562,40 @@ function getRouteSegmentBearing(pts, idx) {
     return typeof pts[clamped]?.bearing === 'number' ? pts[clamped].bearing : 0;
 }
 
-// 進度鎖定追蹤器：計算車輛目前在路線座標陣列中的 currentTrackIndex，防止去回程重疊路口跳號
-function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, isMoving) {
+// 進度鎖定追蹤器（前方滑動視窗 Sliding Window）：
+// 僅從目前 prevTrackIndex 往後搜尋一小段合理範圍（最多往後 30 個節點且沿線距離 150 公尺內），
+// 嚴禁搜尋整條路線全部節點，徹底防止「原路進出／巷口設終點 E、裡面繞圈」在巷口直接跳號到回程或終點
+function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, isMoving, cumMeters = null) {
     if (!Array.isArray(pts) || pts.length === 0) return { trackIndex: 0, minDistMeters: Infinity };
     const maxIdx = pts.length - 1;
-    const startIdx = Math.max(0, prevTrackIndex - 3);
-    const endIdx = Math.min(maxIdx, prevTrackIndex + 45);
+    const startIdx = Math.min(Math.max(0, prevTrackIndex), maxIdx);
+    const maxWindowNodeIdx = Math.min(maxIdx, startIdx + 30);
+    const MAX_WINDOW_ALONG_METERS = 150;
 
-    let bestLocalIdx = prevTrackIndex;
+    let bestLocalIdx = startIdx;
     let bestLocalScore = Infinity;
     let bestLocalDist = Infinity;
+    let accumulatedAlongMeters = 0;
 
-    for (let i = startIdx; i <= endIdx; i++) {
+    for (let i = startIdx; i <= maxWindowNodeIdx; i++) {
+        if (i > startIdx) {
+            if (Array.isArray(cumMeters) && cumMeters.length === pts.length) {
+                accumulatedAlongMeters = Math.max(0, (cumMeters[i] || 0) - (cumMeters[startIdx] || 0));
+            } else {
+                accumulatedAlongMeters += getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat) * 1000;
+            }
+            // 至少允許檢查緊鄰的下一個節點 (startIdx + 1)，超過沿線 150 公尺則停止往後擴張視窗
+            if (i > startIdx + 1 && accumulatedAlongMeters > MAX_WINDOW_ALONG_METERS) {
+                break;
+            }
+        }
+
         const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
-        let penalty = 0;
+        let penalty = (i - startIdx) * 0.25; // 微小順序權重：同距離時優先推進較近序號節點，不跨圈跳躍
         if (isMoving) {
             const segB = getRouteSegmentBearing(pts, i);
             const angDiff = Math.abs(getAngleDiff(vehicleHeading, segB));
-            if (angDiff > 60) penalty = 35; // 逆向或垂直重疊路段加權懲罰，避免跳到回程
+            if (angDiff > 60) penalty += 35; // 逆向或垂直重疊路段加權懲罰，避免跳到回程
         }
         const score = d + penalty;
         if (score < bestLocalScore) {
@@ -1342,43 +1605,17 @@ function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, is
         }
     }
 
-    if (bestLocalDist <= 40) {
+    // 僅在車輛位於前方滑動視窗軌跡附近 (<= 35m) 時推進 currentTrackIndex，絕不全域跳號
+    if (bestLocalDist <= 35) {
         return {
-            trackIndex: Math.max(prevTrackIndex, bestLocalIdx),
+            trackIndex: Math.max(startIdx, bestLocalIdx),
             minDistMeters: bestLocalDist
         };
     }
 
-    // 若偏離局部視窗超過 40m（例如中途切入路線），進行全路線搜尋並優先匹配同向路段
-    let bestGlobalIdx = prevTrackIndex;
-    let bestGlobalScore = Infinity;
-    let bestGlobalDist = Infinity;
-    for (let i = 0; i <= maxIdx; i++) {
-        const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
-        let penalty = 0;
-        if (isMoving) {
-            const segB = getRouteSegmentBearing(pts, i);
-            const angDiff = Math.abs(getAngleDiff(vehicleHeading, segB));
-            if (angDiff > 60) penalty = 30;
-        }
-        const score = d + penalty;
-        if (score < bestGlobalScore) {
-            bestGlobalScore = score;
-            bestGlobalIdx = i;
-            bestGlobalDist = d;
-        }
-    }
-
-    if (bestGlobalDist <= 35) {
-        return {
-            trackIndex: bestGlobalIdx,
-            minDistMeters: bestGlobalDist
-        };
-    }
-
     return {
-        trackIndex: prevTrackIndex,
-        minDistMeters: Math.min(bestLocalDist, bestGlobalDist)
+        trackIndex: startIdx,
+        minDistMeters: bestLocalDist
     };
 }
 
@@ -5191,8 +5428,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        // 即時計算路線進度索引 currentTrackIndex（含去回程方向權重保護）
-        const progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary);
+        // 即時計算路線進度索引 currentTrackIndex（採用前方滑動視窗 Sliding Window：往後最多 30 節點且沿線 150m 內，防止原路進出巷口跳號）
+        const progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary, followCumMeters);
         currentTrackIndex = progressInfo.trackIndex;
         const minDist = progressInfo.minDistMeters;
         let isOffRoute = true;
@@ -5240,11 +5477,33 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        if (!hasAnnouncedEnd) {
-            const distToEnd = getDistanceKm(lng, lat, pts[pts.length-1].lng, pts[pts.length-1].lat) * 1000;
-            if (distToEnd <= 40 || currentTrackIndex >= pts.length - 3) {
+        if (!hasAnnouncedEnd && pts.length >= 2) {
+            const totalPoints = pts.length;
+            const totalRouteMeters = Array.isArray(followCumMeters) && followCumMeters.length === totalPoints
+                ? (followCumMeters[totalPoints - 1] || 0)
+                : 0;
+            const traveledMeters = Array.isArray(followCumMeters) && followCumMeters.length === totalPoints
+                ? (followCumMeters[currentTrackIndex] || 0)
+                : 0;
+            const remainingRouteMeters = Math.max(0, totalRouteMeters - traveledMeters);
+
+            // 條件 1（節點進度門檻）：currentTrackIndex 已進入整條路線最後尾段（>= totalPoints - 15 或剩餘軌跡長度 < 80m，且至少已完成後半段路線）
+            const minTailIndex = totalPoints > 20
+                ? (totalPoints - 15)
+                : Math.max(1, Math.ceil(totalPoints * 0.75));
+            const isAtRouteTail = (
+                currentTrackIndex >= minTailIndex ||
+                (totalRouteMeters > 80 && remainingRouteMeters < 80 && currentTrackIndex >= Math.ceil(totalPoints * 0.6))
+            );
+
+            // 條件 2（實際距離門檻）：車輛與終點 E 的實際直線距離 < 25 公尺
+            const distToEnd = getDistanceKm(lng, lat, pts[totalPoints - 1].lng, pts[totalPoints - 1].lat) * 1000;
+
+            // 雙重鎖定：必須同時滿足「已進入路線尾段進度」與「距終點 E < 25m」才可播報導航結束
+            if (isAtRouteTail && distToEnd < 25) {
                 speakText("已抵達路線終點，本次清運任務結束，辛苦了！");
-                hasAnnouncedEnd = true; document.getElementById('tacticalTimePanel').classList.add('hidden');
+                hasAnnouncedEnd = true;
+                document.getElementById('tacticalTimePanel').classList.add('hidden');
             }
         }
 

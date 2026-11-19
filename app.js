@@ -554,8 +554,8 @@ localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     }
 }).catch((err) => console.log("讀取路線失敗:", err));
 
-// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用清晰的日間 OpenFreeMap liberty 亮色樣式，純中文路名並強制所有文字永遠與螢幕水平直立 viewport） ---
-const OPENFREEMAP_LIBERTY_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+// --- 1. 初始化 MapLibre GL 向量旋轉地圖（全天候固定採用極簡清爽的日間 OpenFreeMap positron 亮色樣式，無 3D 建築、無黃色馬路、放大顯示門牌，並強制所有文字永遠與螢幕水平直立 viewport） ---
+const OPENFREEMAP_POSITRON_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 
 const PURE_CHINESE_TEXT_FIELD = [
     'coalesce',
@@ -572,7 +572,7 @@ let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 
 const map = new maplibregl.Map({
     container: 'map',
-    style: 'https://tiles.openfreemap.org/styles/liberty',
+    style: 'https://tiles.openfreemap.org/styles/positron',
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
@@ -705,6 +705,33 @@ function ensureCustomRouteSourcesAndLayers() {
     if (!map) return;
 
     try {
+        // 0. 在 positron 樣式上補齊放大時的門牌號碼圖層 (housenumber-label)
+        if (map.getSource('openmaptiles') && !map.getLayer('housenumber-label')) {
+            map.addLayer({
+                id: 'housenumber-label',
+                type: 'symbol',
+                source: 'openmaptiles',
+                'source-layer': 'housenumber',
+                minzoom: 17,
+                layout: {
+                    'text-rotation-alignment': 'viewport',
+                    'icon-rotation-alignment': 'viewport',
+                    'text-pitch-alignment': 'viewport',
+                    'icon-pitch-alignment': 'viewport',
+                    'text-keep-upright': true,
+                    'text-field': '{housenumber}',
+                    'text-font': ['Noto Sans Regular'],
+                    'text-size': 10.5,
+                    'text-padding': 4
+                },
+                paint: {
+                    'text-color': '#64748b',
+                    'text-halo-color': 'rgba(255,255,255,0.95)',
+                    'text-halo-width': 1.8
+                }
+            });
+        }
+
         // 1. 已行駛路段（半透明淺灰色 + 柔和外框）
         if (!map.getSource('bg-route')) {
             map.addSource('bg-route', { type: 'geojson', data: cachedBgRouteGeoJSON || emptyGeoJSON() });
@@ -855,7 +882,7 @@ function ensureCustomRouteSourcesAndLayers() {
 
 // ==========================================
 // 🗺️ 地圖路名、地名、地標文字與自訂符號圖層永遠與手機螢幕水平對齊 (viewport + text-keep-upright: true)
-// 並將 liberty 底圖預設的中英雙語路名改為清爽純中文、隱藏黃色公路盾牌
+// 並將底圖預設的中英雙語路名改為清爽純中文、隱藏公路編號盾牌
 // ==========================================
 function fixSymbolTextAlignment() {
     try {
@@ -866,7 +893,7 @@ function fixSymbolTextAlignment() {
             if (layer.type === 'symbol') {
                 const lid = String(layer.id || '');
 
-                // 隱藏黃色公路編號盾牌圖層，維持畫面清爽乾淨
+                // 隱藏公路編號盾牌圖層，維持畫面清爽乾淨
                 if (lid.includes('shield')) {
                     try {
                         map.setLayoutProperty(lid, 'visibility', 'none');
@@ -882,8 +909,14 @@ function fixSymbolTextAlignment() {
                     map.setLayoutProperty(lid, 'text-keep-upright', true);
                 } catch (e) {}
 
-                // 將底圖所有路名、地名、POI 文字統一設為純中文（移除英文拼接）
-                if (lid !== 'custom-route-symbols-layer' && !lid.includes('one_way_arrow') && layer.layout && layer.layout['text-field']) {
+                // 將底圖所有路名、地名、POI 文字統一設為純中文（保留門牌號碼與自訂圖層）
+                if (
+                    lid !== 'custom-route-symbols-layer' &&
+                    lid !== 'housenumber-label' &&
+                    !lid.includes('one_way_arrow') &&
+                    layer.layout &&
+                    layer.layout['text-field']
+                ) {
                     try {
                         map.setLayoutProperty(lid, 'text-field', PURE_CHINESE_TEXT_FIELD);
                     } catch (e) {}

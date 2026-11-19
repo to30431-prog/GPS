@@ -1781,14 +1781,34 @@ function openAlertPopupCard(route, ev, eventIdx, pinEl) {
     }).setLngLat([ev.lng, ev.lat]).addTo(map);
 }
 
+function formatCompactAlertShortText(rawNote) {
+    const clean = String(rawNote || '提醒').trim() || '提醒';
+    const chars = Array.from(clean);
+    return chars.length > 5 ? `${chars.slice(0, 5).join('')}...` : clean;
+}
+
 function createCompactAlertPinMarker(route, ev, eventIdx) {
     const markerEl = document.createElement('div');
     markerEl.className = 'alert-compact-pin';
-    markerEl.title = '點擊展開警示內容';
-    const camDotHtml = ev.photo
-        ? '<span class="alert-compact-cam-dot"><i class="fa-solid fa-camera"></i></span>'
-        : '';
-    markerEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i>${camDotHtml}`;
+    markerEl.title = '點擊展開完整警示內容';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'text-xs leading-none flex-shrink-0';
+    iconSpan.textContent = '⚠️';
+    markerEl.appendChild(iconSpan);
+
+    const textSpan = document.createElement('span');
+    textSpan.textContent = formatCompactAlertShortText(ev.note);
+    markerEl.appendChild(textSpan);
+
+    if (ev.photo) {
+        const thumbImg = document.createElement('img');
+        thumbImg.src = ev.photo;
+        thumbImg.alt = '縮圖';
+        thumbImg.className = 'alert-compact-thumb';
+        markerEl.appendChild(thumbImg);
+    }
+
     markerEl.onclick = (e) => {
         e.stopPropagation();
         openAlertPopupCard(route, ev, eventIdx, markerEl);

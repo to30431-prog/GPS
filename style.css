@@ -46,19 +46,21 @@ html, body {
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
 
-/* ⚠️ 橘黃色語音／警示標記點：預設 28px x 28px 精簡圓形圖示 ＋ 點擊展開 220px 自動換行完整氣泡卡片 */
+/* ⚠️ 橘黃色語音／警示標記點：精簡文字（最多 5 字）＋ 22x22 內嵌照片縮圖小膠囊 ＋ 點擊展開 220px 自動換行完整氣泡卡片 */
 .alert-compact-pin {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 7px;
+    border-radius: 999px;
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     border: 2px solid #ffffff;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
     color: #ffffff;
-    font-size: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+    white-space: nowrap;
     cursor: pointer;
     position: relative;
     box-sizing: border-box;
@@ -66,29 +68,22 @@ html, body {
     z-index: 25;
 }
 .alert-compact-pin:active {
-    transform: scale(0.9);
+    transform: scale(0.93);
 }
 .alert-compact-pin.is-active {
-    transform: scale(1.12);
+    transform: scale(1.06);
     box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 3px 8px rgba(0, 0, 0, 0.45);
     z-index: 35;
 }
-.alert-compact-cam-dot {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
-    background: #2563eb;
-    border: 1.5px solid #ffffff;
-    color: #ffffff;
-    font-size: 7px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-    pointer-events: none;
+.alert-compact-thumb {
+    width: 22px;
+    height: 22px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid #ffffff;
+    flex-shrink: 0;
+    display: block;
+    background: rgba(0, 0, 0, 0.15);
 }
 
 .alert-popup-wrapper {

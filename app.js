@@ -376,6 +376,75 @@ function formatRouteUpdateTimeText(r) {
     }
 }
 
+function normalizeRouteBaseName(name) {
+    return String(name || '')
+        .trim()
+        .replace(/\s*[\(（]?[vV]\d+(\.\d+)?[\)）]?$/i, '')
+        .trim()
+        .toLowerCase();
+}
+
+function isSameRouteIdentity(routeA, routeB) {
+    if (!routeA || !routeB) return false;
+    if (Boolean(routeA.isPendingPreview) !== Boolean(routeB.isPendingPreview)) return false;
+
+    const rIdA = String(routeA.routeId || '').trim();
+    const rIdB = String(routeB.routeId || '').trim();
+    if (rIdA && rIdB && rIdA === rIdB) return true;
+
+    const idA = routeA.id !== undefined && routeA.id !== null ? String(routeA.id).trim() : '';
+    const idB = routeB.id !== undefined && routeB.id !== null ? String(routeB.id).trim() : '';
+    const origA = routeA.originId !== undefined && routeA.originId !== null ? String(routeA.originId).trim() : '';
+    const origB = routeB.originId !== undefined && routeB.originId !== null ? String(routeB.originId).trim() : '';
+
+    if (idA && idB && idA === idB) return true;
+    if (origA && origB && origA === origB) return true;
+    if (idA && origB && idA === origB) return true;
+    if (origA && idB && origA === idB) return true;
+
+    const nameA = String(routeA.name || '').trim().toLowerCase();
+    const nameB = String(routeB.name || '').trim().toLowerCase();
+    if (nameA && nameB && nameA === nameB) return true;
+
+    const baseA = normalizeRouteBaseName(routeA.name);
+    const baseB = normalizeRouteBaseName(routeB.name);
+    if (baseA && baseB && baseA === baseB) return true;
+
+    return false;
+}
+
+function pickPreferredRouteDuplicate(existingRoute, candidateRoute) {
+    const verA = getRouteVersion(existingRoute);
+    const verB = getRouteVersion(candidateRoute);
+    const updA = getRouteUpdatedAt(existingRoute);
+    const updB = getRouteUpdatedAt(candidateRoute);
+
+    let winner = existingRoute;
+    if (verB > verA) {
+        winner = candidateRoute;
+    } else if (verB === verA) {
+        if (updB > updA) {
+            winner = candidateRoute;
+        } else if (updB === updA) {
+            const evA = Array.isArray(existingRoute?.events) ? existingRoute.events.length : 0;
+            const evB = Array.isArray(candidateRoute?.events) ? candidateRoute.events.length : 0;
+            if (evB > evA) winner = candidateRoute;
+        }
+    }
+
+    const cleanName = String(winner.name || existingRoute.name || '').trim().replace(/\s+[vV]\d+(\.\d+)?$/i, '').trim() || String(winner.name || existingRoute.name || '').trim();
+
+    return {
+        ...winner,
+        id: existingRoute.id || winner.id || Date.now(),
+        originId: existingRoute.originId || existingRoute.id || winner.originId || winner.id || Date.now(),
+        routeId: winner.routeId || existingRoute.routeId || generateRouteId(),
+        name: cleanName,
+        routeVersion: Math.max(verA, verB),
+        updatedAt: Math.max(updA, updB)
+    };
+}
+
 function ensureRoutesHaveRouteId(routes) {
     if (!Array.isArray(routes)) return false;
     let mutated = false;
@@ -400,22 +469,73 @@ function ensureRoutesHaveRouteId(routes) {
     return mutated;
 }
 
-// 🚀 自動搬家與讀取大容量資料庫（自動補發唯一 routeId、routeVersion 與 updatedAt，並啟動背景雲端版本比對）
+function persistSavedRoutesToStorage() {
+    try {
+        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+    } catch (e) {}
+    const countEl = document.getElementById('historyCount');
+    if (countEl) countEl.innerText = savedRoutes.length;
+    return localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
+}
+
+// 🧹 自動去重過濾器：清除名稱與距離重複或同 ID／同名的重複路線，保留 routeVersion 較高或 updatedAt 較新的那一筆，並保留原排序位置與本機 id
+function deduplicateSavedRoutes(persistIfChanged = true) {
+    if (!Array.isArray(savedRoutes)) return false;
+    let mutated = ensureRoutesHaveRouteId(savedRoutes);
+
+    const uniqueRoutes = [];
+    for (let i = 0; i < savedRoutes.length; i++) {
+        const current = savedRoutes[i];
+        if (!current || !current.name) {
+            mutated = true;
+            continue;
+        }
+        const curName = String(current.name || '').trim().toLowerCase();
+        const curDist = String(current.distance || '0.00').trim();
+
+        const matchIdx = uniqueRoutes.findIndex(existing => {
+            if (Boolean(existing.isPendingPreview) !== Boolean(current.isPendingPreview)) return false;
+            const exName = String(existing.name || '').trim().toLowerCase();
+            const exDist = String(existing.distance || '0.00').trim();
+            if (curName && exName && curName === exName && curDist === exDist) return true;
+            return isSameRouteIdentity(existing, current);
+        });
+
+        if (matchIdx !== -1) {
+            uniqueRoutes[matchIdx] = pickPreferredRouteDuplicate(uniqueRoutes[matchIdx], current);
+            mutated = true;
+        } else {
+            uniqueRoutes.push(current);
+        }
+    }
+
+    if (mutated) {
+        savedRoutes.splice(0, savedRoutes.length, ...uniqueRoutes);
+        if (persistIfChanged) {
+            persistSavedRoutesToStorage();
+        }
+    } else {
+        const countEl = document.getElementById('historyCount');
+        if (countEl) countEl.innerText = savedRoutes.length;
+    }
+    return mutated;
+}
+
+// 🚀 自動搬家與讀取大容量資料庫（自動補發唯一 routeId、routeVersion、updatedAt、自動去重清理，並啟動背景雲端版本比對）
 localforage.getItem('yinggeCleanRoutes_v2').then((value) => {
     const oldStorage = localStorage.getItem('yinggeCleanRoutes_v2');
     if (value && value.length > 0) {
         savedRoutes = value;
     } else if (oldStorage) {
-        savedRoutes = JSON.parse(oldStorage);
-        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-            localStorage.removeItem('yinggeCleanRoutes_v2');
-            console.log("✅ 舊路線已成功搬移至大容量資料庫！");
-        });
+        try {
+            savedRoutes = JSON.parse(oldStorage) || [];
+        } catch (e) {
+            savedRoutes = [];
+        }
     }
-    if (ensureRoutesHaveRouteId(savedRoutes)) {
-        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+    if (! deduplicateSavedRoutes(true)) {
+        persistSavedRoutesToStorage();
     }
-    document.getElementById('historyCount').innerText = savedRoutes.length;
     if (typeof checkCloudRouteUpdatesInBackground === 'function') {
         checkCloudRouteUpdatesInBackground(true);
     }
@@ -1541,6 +1661,11 @@ function renderHistoryList() {
     const list = document.getElementById('historyList');
     if (!list) return;
     list.innerHTML = '';
+
+    // 每次讀取並渲染「鶯歌清運路線庫」本機清單時，自動執行去重過濾並寫回儲存空間清除重複殘留
+    if (typeof deduplicateSavedRoutes === 'function') {
+        deduplicateSavedRoutes(true);
+    }
 
     if (typeof syncRouteUpdateBadgesAndAllBar === 'function') {
         syncRouteUpdateBadgesAndAllBar(false);
@@ -4430,14 +4555,11 @@ document.getElementById('importRouteInput').onchange = (e) => {
         try {
             const route = JSON.parse(event.target.result);
             if (!route.points || !route.name) throw new Error("格式不對");
-            route.originId = route.originId || route.id || Date.now();
-            route.routeId = route.routeId || generateRouteId();
-            route.id = Date.now(); 
-            savedRoutes.unshift(route);
-            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-            renderHistoryList();
-            alert(`✅ 成功匯入【${route.author || '熱心隊員'}】精心製作的路線：${route.name}`);
+            const savedRoute = upsertLocalRouteFromCloud(route);
+            persistSavedRoutesToStorage().then(() => {
+                renderHistoryList();
+                alert(`✅ 成功匯入【${savedRoute.author || '熱心隊員'}】精心製作的路線：${savedRoute.name}`);
+            });
         } catch (err) { alert('❌ 匯入失敗！請確認您選擇的是正確的路線檔案 (.txt)。'); }
         e.target.value = ''; 
     };
@@ -4472,21 +4594,42 @@ function getRouteTimestampKey(r) {
     return String(r.routeId || r.originId || r.id || r.uploadedAt || r.date || '').trim();
 }
 
-// 尋找與本機路線對應的雲端正式庫路線（依 routeId 或同名比對）
+// 雲端清單自動去重（若雲端存在同名或同 ID 的重複節點，僅保留版本較高或更新時間較新的那一筆）
+function deduplicateCloudRoutesList(cloudList) {
+    if (!Array.isArray(cloudList)) return [];
+    const uniqueCloud = [];
+    for (let i = 0; i < cloudList.length; i++) {
+        const item = cloudList[i];
+        if (!item || !item.name) continue;
+        const matchIdx = uniqueCloud.findIndex(existing => isSameRouteIdentity(existing, item));
+        if (matchIdx !== -1) {
+            const verA = getRouteVersion(uniqueCloud[matchIdx]);
+            const verB = getRouteVersion(item);
+            const updA = getRouteUpdatedAt(uniqueCloud[matchIdx]);
+            const updB = getRouteUpdatedAt(item);
+            if (verB > verA || (verB === verA && updB > updA)) {
+                uniqueCloud[matchIdx] = item;
+            }
+        } else {
+            uniqueCloud.push(item);
+        }
+    }
+    return uniqueCloud;
+}
+
+// 尋找與本機路線對應的雲端正式庫路線（依原路線 id、routeId 或相同名稱 name.trim() 比對）
 function findMatchingCloudRoute(localRoute, cloudList = cachedCloudRoutes) {
     if (!localRoute || localRoute.isPendingPreview || !Array.isArray(cloudList) || cloudList.length === 0) return null;
-    const lRouteId = (localRoute.routeId || '').trim();
-    const lName = (localRoute.name || '').trim().toLowerCase();
-
-    if (lRouteId) {
-        const byId = cloudList.find(cr => (cr.routeId || '').trim() === lRouteId);
-        if (byId) return byId;
-    }
-    if (lName) {
-        const byName = cloudList.find(cr => (cr.name || '').trim().toLowerCase() === lName);
-        if (byName) return byName;
-    }
-    return null;
+    const matches = cloudList.filter(cr => isSameRouteIdentity(localRoute, cr));
+    if (matches.length === 0) return null;
+    // 若雲端有多筆相符，取版本最高、時間最新的一筆
+    return matches.reduce((best, cur) => {
+        const bestVer = getRouteVersion(best);
+        const curVer = getRouteVersion(cur);
+        if (curVer > bestVer) return cur;
+        if (curVer === bestVer && getRouteUpdatedAt(cur) > getRouteUpdatedAt(best)) return cur;
+        return best;
+    }, matches[0]);
 }
 
 // 判斷本機路線是否在雲端有新版本（routeVersion 比對）
@@ -4565,7 +4708,7 @@ async function checkCloudRouteUpdatesInBackground(shouldShowTopToast = false) {
             const tB = getRouteUpdatedAt(b);
             return tB - tA;
         });
-        cachedCloudRoutes = rawShared;
+        cachedCloudRoutes = deduplicateCloudRoutesList(rawShared);
         syncRouteUpdateBadgesAndAllBar(shouldShowTopToast);
         if (historyModal && !historyModal.classList.contains('hidden')) {
             renderHistoryList();
@@ -4577,45 +4720,41 @@ async function checkCloudRouteUpdatesInBackground(shouldShowTopToast = false) {
     }
 }
 
-// 單條路線一鍵升級至雲端最新版
+// 單條路線一鍵升級至雲端最新版（原地覆蓋 In-Place Overwrite，保留原排序位置與本機 id）
 function applySingleCloudRouteUpdate(localIdx, cloudRoute) {
-    if (localIdx < 0 || localIdx >= savedRoutes.length || !cloudRoute) return;
-    const oldVer = getRouteVersion(savedRoutes[localIdx]);
-    const updatedLocal = cloneCloudRouteForLocal(cloudRoute);
-    savedRoutes[localIdx] = updatedLocal;
+    if (!cloudRoute) return;
+    const targetBefore = (localIdx >= 0 && localIdx < savedRoutes.length) ? savedRoutes[localIdx] : null;
+    const oldVer = targetBefore ? getRouteVersion(targetBefore) : 1;
+    const updatedLocal = upsertLocalRouteFromCloud(cloudRoute, localIdx);
 
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-        try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+    persistSavedRoutesToStorage().then(() => {
         syncRouteUpdateBadgesAndAllBar(false);
         renderHistoryList();
         if (cloudRoutesModal && !cloudRoutesModal.classList.contains('hidden')) {
             renderCloudRoutesList();
         }
-        showNavAlert('✅', `已將「${updatedLocal.name}」由 v${oldVer} 更新至 v${updatedLocal.routeVersion} 最新版！`, 'bg-emerald-600');
+        showNavAlert('✅', `已將「${updatedLocal.name}」由 v${oldVer} 原地覆蓋更新至 v${updatedLocal.routeVersion} 最新版！`, 'bg-emerald-600');
     });
 }
 
-// 多條路線一鍵全部更新至雲端最新版
+// 多條路線一鍵全部更新至雲端最新版（原地覆蓋 In-Place Overwrite，保留原排序位置與本機 id）
 function applyAllCloudRouteUpdates() {
     const updatableList = syncRouteUpdateBadgesAndAllBar(false);
     if (updatableList.length === 0) return;
 
     updatableList.forEach(item => {
-        if (item.localIdx >= 0 && item.localIdx < savedRoutes.length && item.cloudRoute) {
-            savedRoutes[item.localIdx] = cloneCloudRouteForLocal(item.cloudRoute);
+        if (item.cloudRoute) {
+            upsertLocalRouteFromCloud(item.cloudRoute, item.localIdx);
         }
     });
 
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-        try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+    persistSavedRoutesToStorage().then(() => {
         syncRouteUpdateBadgesAndAllBar(false);
         renderHistoryList();
         if (cloudRoutesModal && !cloudRoutesModal.classList.contains('hidden')) {
             renderCloudRoutesList();
         }
-        showNavAlert('✅', `已完成一鍵更新！共 ${updatableList.length} 條路線升級為雲端最新版`, 'bg-emerald-600');
+        showNavAlert('✅', `已完成一鍵更新！共 ${updatableList.length} 條路線原地升級為雲端最新版`, 'bg-emerald-600');
     });
 }
 
@@ -4624,36 +4763,21 @@ document.getElementById('btnUpdateAllLocalRoutes')?.addEventListener('click', ()
 });
 
 function isRouteAlreadyInLocal(cloudRoute) {
-    const cRouteId = (cloudRoute.routeId || '').trim();
-    const cName = (cloudRoute.name || '').trim().toLowerCase();
+    if (!cloudRoute) return false;
     const cVer = getRouteVersion(cloudRoute);
-    const cId = cloudRoute.originId || cloudRoute.id;
-    const cDate = (cloudRoute.date || '').trim();
-    const cUpload = (cloudRoute.uploadedAt || '').trim();
+    const cUpd = getRouteUpdatedAt(cloudRoute);
 
     return savedRoutes.some(local => {
-        if (local.isPendingPreview) return false;
-        const lRouteId = (local.routeId || '').trim();
-        const lName = (local.name || '').trim().toLowerCase();
+        if (!local || local.isPendingPreview) return false;
+        if (!isSameRouteIdentity(local, cloudRoute)) return false;
         const lVer = getRouteVersion(local);
-        const lUpload = (local.uploadedAt || '').trim();
-        const lDate = (local.date || '').trim();
-        const lId = local.originId || local.id;
-
-        if (cRouteId && lRouteId && cRouteId === lRouteId) {
-            // 若雲端版本號大於本機版本號，代表雲端有新版，允許匯入覆蓋更新
-            if (cVer > lVer) return false;
-            if (cUpload && lUpload && cUpload !== lUpload && cVer >= lVer) return false;
-            return true;
-        }
-        if (lName !== cName) return false;
+        const lUpd = getRouteUpdatedAt(local);
+        // 若雲端版本號大於本機版本號，或同版本但雲端更新時間較新，代表雲端有新版可覆蓋更新
         if (cVer > lVer) return false;
-        if (cId && lId && String(cId) === String(lId)) return true;
-        if (cId && local.id && String(cId) === String(local.id)) return true;
-        if (cloudRoute.id && lId && String(cloudRoute.id) === String(lId)) return true;
-        if (cUpload && lUpload && cUpload === lUpload) return true;
-        if (cDate && lDate && cDate === lDate) return true;
-        return false;
+        if (cVer === lVer && cloudRoute.uploadedAt && local.uploadedAt && cloudRoute.uploadedAt !== local.uploadedAt && cUpd > lUpd) {
+            return false;
+        }
+        return true;
     });
 }
 
@@ -4995,13 +5119,13 @@ async function fetchCloudRoutes() {
             fetchRawFirebaseList(FIREBASE_PENDING_URL).catch(() => [])
         ]);
 
-        // 排序正式庫（由新到舊）
+        // 排序正式庫（由新到舊）並自動去重
         rawShared.sort((a, b) => {
             const tA = getRouteUpdatedAt(a);
             const tB = getRouteUpdatedAt(b);
             return tB - tA;
         });
-        cachedCloudRoutes = rawShared;
+        cachedCloudRoutes = deduplicateCloudRoutesList(rawShared);
 
         // 排序待審核區（由新到舊）
         rawPending.sort((a, b) => {
@@ -5289,39 +5413,67 @@ function renderCloudRoutesList() {
     });
 }
 
-function cloneCloudRouteForLocal(cr) {
+function cloneCloudRouteForLocal(cr, existingLocal = null) {
+    const rawName = String(cr.name || existingLocal?.name || '未命名路線').trim();
+    const cleanName = rawName.replace(/\s+[vV]\d+(\.\d+)?$/i, '').trim() || rawName;
     return {
-        routeId: cr.routeId || generateRouteId(),
-        id: cr.id || Date.now() + Math.floor(Math.random() * 1000),
-        originId: cr.originId || cr.id || Date.now(),
-        name: cr.name,
-        author: cr.author || '熱心隊員',
+        routeId: cr.routeId || existingLocal?.routeId || generateRouteId(),
+        id: existingLocal?.id || cr.id || (Date.now() + Math.floor(Math.random() * 1000)),
+        originId: existingLocal?.originId || existingLocal?.id || cr.originId || cr.id || Date.now(),
+        name: cleanName,
+        author: cr.author || existingLocal?.author || '熱心隊員',
         routeVersion: getRouteVersion(cr),
         updatedAt: getRouteUpdatedAt(cr),
-        date: cr.date || cr.uploadedAtText || new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-        uploadedAt: cr.uploadedAt || '',
-        uploadedAtText: cr.uploadedAtText || '',
-        distance: cr.distance || '0.00',
-        timeStr: cr.timeStr || '0m 0s',
+        date: cr.date || cr.uploadedAtText || existingLocal?.date || new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        uploadedAt: cr.uploadedAt || existingLocal?.uploadedAt || '',
+        uploadedAtText: cr.uploadedAtText || existingLocal?.uploadedAtText || '',
+        distance: cr.distance || existingLocal?.distance || '0.00',
+        timeStr: cr.timeStr || existingLocal?.timeStr || '0m 0s',
         points: JSON.parse(JSON.stringify(cr.points || [])),
         events: JSON.parse(JSON.stringify(cr.events || []))
     };
 }
 
-function upsertLocalRouteFromCloud(cr) {
-    const newRoute = cloneCloudRouteForLocal(cr);
-    const existingIdx = savedRoutes.findIndex(local =>
-        !local.isPendingPreview && (
-            (local.routeId && newRoute.routeId && local.routeId === newRoute.routeId) ||
-            ((local.name || '').trim().toLowerCase() === (newRoute.name || '').trim().toLowerCase())
-        )
-    );
-    if (existingIdx !== -1) {
-        savedRoutes[existingIdx] = newRoute;
-    } else {
-        savedRoutes.unshift(newRoute);
+// 原地覆蓋（In-Place Overwrite）：先以「原路線 id / routeId」或「相同的路線名稱（name.trim()）」比對本機清單
+// 若已存在則直接 savedRoutes[index] = updatedRoute 原地替換（保留原本排序位置與本機 id），嚴禁重複新增；僅在完全找不到同名／同 ID 路線時才新增
+function upsertLocalRouteFromCloud(cr, preferredLocalIdx = -1) {
+    const matchingIndices = [];
+    for (let i = 0; i < savedRoutes.length; i++) {
+        const local = savedRoutes[i];
+        if (!local || local.isPendingPreview) continue;
+        if (isSameRouteIdentity(local, cr)) {
+            matchingIndices.push(i);
+        }
     }
-    return newRoute;
+
+    let targetIdx = -1;
+    if (matchingIndices.length > 0) {
+        // 優先保留最早出現的原始排序位置（若有多筆歷史殘留重複，以第一筆位置為準並清除後續重複項）
+        targetIdx = matchingIndices[0];
+    } else if (preferredLocalIdx >= 0 && preferredLocalIdx < savedRoutes.length && !savedRoutes[preferredLocalIdx]?.isPendingPreview) {
+        targetIdx = preferredLocalIdx;
+    }
+
+    let savedItem;
+    if (targetIdx !== -1) {
+        const existingLocal = savedRoutes[targetIdx];
+        savedItem = cloneCloudRouteForLocal(cr, existingLocal);
+        savedRoutes[targetIdx] = savedItem;
+
+        // 若本機清單曾有其餘同名/同 ID 的重複殘留項，一併從後往前移除
+        for (let k = matchingIndices.length - 1; k >= 0; k--) {
+            const dupIdx = matchingIndices[k];
+            if (dupIdx !== targetIdx) {
+                savedRoutes.splice(dupIdx, 1);
+            }
+        }
+    } else {
+        savedItem = cloneCloudRouteForLocal(cr, null);
+        savedRoutes.unshift(savedItem);
+    }
+
+    deduplicateSavedRoutes(false);
+    return savedItem;
 }
 
 function importSingleCloudRoute(cloudIdx) {
@@ -5334,12 +5486,13 @@ function importSingleCloudRoute(cloudIdx) {
         return;
     }
 
+    const hadExisting = savedRoutes.some(local => !local?.isPendingPreview && isSameRouteIdentity(local, cr));
     const newRoute = upsertLocalRouteFromCloud(cr);
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+    persistSavedRoutesToStorage().then(() => {
+        syncRouteUpdateBadgesAndAllBar(false);
         renderHistoryList();
         renderCloudRoutesList();
-        alert(`✅ 成功匯入【${newRoute.author}】分享的路線：${newRoute.name}`);
+        alert(`✅ 成功${hadExisting ? '原地覆蓋更新' : '下載匯入'}【${newRoute.author}】分享的路線：${newRoute.name} (v${newRoute.routeVersion})`);
     });
 }
 
@@ -5349,7 +5502,7 @@ importAllCloudBtn.onclick = () => {
     let addedCount = 0;
     let skippedCount = 0;
 
-    // 由舊到新依序處理，確保最新路線維持在最上方
+    // 由舊到新依序處理，已存在者原地覆蓋、全新路線維持最新在最上方
     [...cachedCloudRoutes].reverse().forEach(cr => {
         if (isRouteAlreadyInLocal(cr)) {
             skippedCount++;
@@ -5360,16 +5513,16 @@ importAllCloudBtn.onclick = () => {
     });
 
     if (addedCount === 0) {
-        alert(`ℹ️ 雲端共 ${skippedCount} 條路線皆已存在於本機，無須重複匯入！`);
+        alert(`ℹ️ 雲端共 ${skippedCount} 條路線皆已存在於本機且為最新版，無須重複匯入！`);
         renderCloudRoutesList();
         return;
     }
 
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => {
-        document.getElementById('historyCount').innerText = savedRoutes.length;
+    persistSavedRoutesToStorage().then(() => {
+        syncRouteUpdateBadgesAndAllBar(false);
         renderHistoryList();
         renderCloudRoutesList();
-        alert(`✅ 一鍵匯入完成！\n成功新增/更新 ${addedCount} 條路線${skippedCount > 0 ? `（已自動略過 ${skippedCount} 條重複路線）` : ''}。`);
+        alert(`✅ 一鍵匯入/更新完成！\n成功新增或原地覆蓋 ${addedCount} 條路線${skippedCount > 0 ? `（已自動略過 ${skippedCount} 條已是最新版的路線）` : ''}。`);
     });
 };
 

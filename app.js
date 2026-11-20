@@ -1,11 +1,11 @@
 // ==========================================
 // 🔑 雲端路線庫管理員密碼與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.26';
+const APP_VERSION = 'v3.27';
 window.APP_VERSION = APP_VERSION;
 const ADMIN_PASSWORD = '5201314';
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.26
+// 確保畫面上所有版本號膠囊同步顯示為 v3.27
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -46,7 +46,7 @@ let lastRouteLayerRenderTime = 0;
 // ==========================================
 // ⚙️ v3.1 動態導航與車隊系統參數（與 Firebase system_config 雙向即時同步，讀取不到時自動套用預設值）
 // ==========================================
-const ALLOWED_AI_DISPATCH_MODELS = ['gemini-3.5-flash-lite', 'gemini-4-hydrogen'];
+const ALLOWED_AI_DISPATCH_MODELS = ['gemini-3.6-flash', 'gemini-4-hydrogen'];
 
 const DEFAULT_SYSTEM_CONFIG = {
     radarIntervalSec: 5,
@@ -62,7 +62,7 @@ const DEFAULT_SYSTEM_CONFIG = {
     maxSpeedKmh: 160,
     minLockSpeedKmh: 4,
     announcementText: '',
-    aiDispatchModel: 'gemini-3.5-flash-lite',
+    aiDispatchModel: 'gemini-3.6-flash',
     aiApiKeys: [],
     activeAiKeyId: ''
 };
@@ -1619,26 +1619,185 @@ document.getElementById('voiceToggleBtn').onclick = () => {
 
 function vibrate(pattern) { if ('vibrate' in navigator) navigator.vibrate(pattern); }
 
-// 優化軌跡圖層更新：合併連續同狀態線段，大幅減少 GeoJSON Feature 物件數量，防止長時間跑車或重播時手機發熱卡頓
+// ==========================================
+// 🛣️ 來回重複路段「往右側平行偏移（雙線分離顯示）」視覺座標引擎
+// - 資料與距離維持真實道路中心線座標不變（不汙染 route.points 與距離計算）
+// - 在 MapLibre 路線圖層與編輯/手繪節點渲染時，自動偵測同一條路線上與既有線段重疊或反向折返（距離 < 15m）的路段，
+//   依該段行進方向往右側平行偏移（約 5.5px 隨地圖縮放比例適度錯開），讓去程與回程雙線並排清楚可辨識
+// ==========================================
+function pointToSegmentDistMeters(pLng, pLat, aLng, aLat, bLng, bLat) {
+    const cosLat = Math.cos(((pLat + aLat) * 0.5 * Math.PI) / 180);
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * cosLat;
+
+    const px = (pLng - aLng) * mPerDegLng;
+    const py = (pLat - aLat) * mPerDegLat;
+    const bx = (bLng - aLng) * mPerDegLng;
+    const by = (bLat - aLat) * mPerDegLat;
+
+    const lenSq = bx * bx + by * by;
+    if (lenSq <= 0.0001) {
+        return Math.hypot(px, py);
+    }
+    const t = Math.max(0, Math.min(1, (px * bx + py * by) / lenSq));
+    const projX = t * bx;
+    const projY = t * by;
+    return Math.hypot(px - projX, py - projY);
+}
+
+function computeVisualRightOffsetCoords(points) {
+    if (!Array.isArray(points) || points.length === 0) return [];
+    const n = points.length;
+    if (n < 2) {
+        return points.map(p => ({ lng: p.lng, lat: p.lat, dLng: 0, dLat: 0, isOffset: false }));
+    }
+
+    // 1. 計算累積里程 (cumM) 與每個點的穩定前進方向角 (bearings)
+    const cumM = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+        cumM[i] = cumM[i - 1] + getDistanceKm(points[i - 1].lng, points[i - 1].lat, points[i].lng, points[i].lat) * 1000;
+    }
+
+    const bearings = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+        let found = false;
+        for (let k = i + 1; k < n; k++) {
+            const dM = cumM[k] - cumM[i];
+            if (dM >= 1.2) {
+                bearings[i] = getBearing(points[i].lng, points[i].lat, points[k].lng, points[k].lat);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (let k = i - 1; k >= 0; k--) {
+                const dM = cumM[i] - cumM[k];
+                if (dM >= 1.2) {
+                    bearings[i] = getBearing(points[k].lng, points[k].lat, points[i].lng, points[i].lat);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found && typeof points[i].bearing === 'number') {
+            bearings[i] = points[i].bearing;
+        }
+    }
+
+    // 2. 偵測每個節點是否與先前已走過的線段重疊或反向折返（距離 < 15m）
+    const rawOverlapLevel = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+        const pI = points[i];
+        const bI = bearings[i];
+        let isOverlappingEarlier = false;
+
+        for (let j = 0; j < i - 1; j++) {
+            const pathGapM = cumM[i] - cumM[j + 1];
+            if (pathGapM < 10) break;
+
+            // 快速經緯度 Bounding Box 過濾（約 22m 範圍）
+            if (Math.abs(pI.lat - points[j].lat) > 0.00022 && Math.abs(pI.lat - points[j + 1].lat) > 0.00022) continue;
+            if (Math.abs(pI.lng - points[j].lng) > 0.00025 && Math.abs(pI.lng - points[j + 1].lng) > 0.00025) continue;
+
+            const segDistM = pointToSegmentDistMeters(
+                pI.lng, pI.lat,
+                points[j].lng, points[j].lat,
+                points[j + 1].lng, points[j + 1].lat
+            );
+
+            if (segDistM < 15) {
+                const angleDiff = getAngleDiff(bI, bearings[j]);
+                // 若為反向折返 (angleDiff >= 90°)，只要路徑間隔 >= 10m 即判定為回程折返；
+                // 若為同向重疊 (angleDiff < 90°)，路徑間隔 >= 42m 判定為重疊繞回
+                if ((angleDiff >= 90 && pathGapM >= 10) || pathGapM >= 42) {
+                    isOverlappingEarlier = true;
+                    break;
+                }
+            }
+        }
+
+        if (isOverlappingEarlier) {
+            rawOverlapLevel[i] = 1;
+        }
+    }
+
+    // 3. 針對短暫 1~2 點缺口進行填補並做平滑過渡，避免路口或折返頂點出現鋸齒跳動
+    const filledLevel = [...rawOverlapLevel];
+    for (let i = 1; i < n - 1; i++) {
+        if (filledLevel[i] === 0 && filledLevel[i - 1] === 1 && filledLevel[i + 1] === 1) {
+            filledLevel[i] = 1;
+        }
+    }
+    const smoothFactor = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+        const prev = filledLevel[Math.max(0, i - 1)];
+        const curr = filledLevel[i];
+        const next = filledLevel[Math.min(n - 1, i + 1)];
+        smoothFactor[i] = prev * 0.22 + curr * 0.56 + next * 0.22;
+    }
+
+    // 4. 依當前地圖縮放層級換算約 5.5px 對應的實際公尺偏移量（限制於 3.6m ~ 8.5m 之間）
+    let currentZoom = 16.8;
+    try {
+        if (typeof map !== 'undefined' && map && typeof map.getZoom === 'function') {
+            currentZoom = map.getZoom();
+        }
+    } catch (e) {}
+    const metersPerPx = (156543.03392 * Math.cos((24.95 * Math.PI) / 180)) / Math.pow(2, currentZoom + 1);
+    const baseOffsetMeters = Math.max(3.6, Math.min(8.5, metersPerPx * 5.8));
+
+    const result = new Array(n);
+    for (let i = 0; i < n; i++) {
+        const pt = points[i];
+        const factor = smoothFactor[i];
+        if (factor <= 0.02) {
+            result[i] = { lng: pt.lng, lat: pt.lat, dLng: 0, dLat: 0, isOffset: false };
+            continue;
+        }
+
+        const offsetM = baseOffsetMeters * factor;
+        const rightRad = (((bearings[i] + 90) % 360) * Math.PI) / 180;
+        const eastM = offsetM * Math.sin(rightRad);
+        const northM = offsetM * Math.cos(rightRad);
+
+        const dLat = northM / 111320;
+        const cosLat = Math.max(0.2, Math.cos((pt.lat * Math.PI) / 180));
+        const dLng = eastM / (111320 * cosLat);
+
+        result[i] = {
+            lng: Number((pt.lng + dLng).toFixed(6)),
+            lat: Number((pt.lat + dLat).toFixed(6)),
+            dLng,
+            dLat,
+            isOffset: true
+        };
+    }
+
+    return result;
+}
+
+// 優化軌跡圖層更新：合併連續同狀態線段，並套用來回重複路段右側平行偏移視覺座標
 function buildRouteLayerFeatures(points) {
     const musicFeatures = [], silentFeatures = [];
     if (Array.isArray(points) && points.length >= 2) {
-        let currentCoords = [[points[0].lng, points[0].lat]];
+        const visualPts = computeVisualRightOffsetCoords(points);
+        let currentCoords = [[visualPts[0].lng, visualPts[0].lat]];
         let currentIsMusic = Boolean(points[1].musicActive);
 
         for (let i = 1; i < points.length; i++) {
             const pt = points[i];
+            const vPt = visualPts[i];
             const isMusic = Boolean(pt.musicActive);
             if (isMusic === currentIsMusic) {
-                currentCoords.push([pt.lng, pt.lat]);
+                currentCoords.push([vPt.lng, vPt.lat]);
             } else {
                 if (currentCoords.length >= 2) {
                     const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: currentCoords } };
                     if (currentIsMusic) musicFeatures.push(feature);
                     else silentFeatures.push(feature);
                 }
-                const prevPt = points[i - 1];
-                currentCoords = [[prevPt.lng, prevPt.lat], [pt.lng, pt.lat]];
+                const prevVPt = visualPts[i - 1];
+                currentCoords = [[prevVPt.lng, prevVPt.lat], [vPt.lng, vPt.lat]];
                 currentIsMusic = isMusic;
             }
         }
@@ -2237,7 +2396,7 @@ function addPinMarker(lngLat, htmlContent) {
     domMarkers.push(m);
 }
 
-// --- 4. 紀錄路線（v3.26 三欄防誤觸橫排：左欄停止紀錄長按 1 秒＋確認 ｜ 中欄 GPS 精度隔離牆 ｜ 右欄音樂開關高頻盲操） ---
+// --- 4. 紀錄路線（v3.27 三欄防誤觸橫排：左欄停止紀錄長按 1 秒＋確認 ｜ 中欄 GPS 精度隔離牆 ｜ 右欄音樂開關高頻盲操） ---
 const musicToggleBtn = document.getElementById('musicToggleBtn');
 const stopRecordBtn = document.getElementById('stopRecordBtn');
 const stopRecordProgressFill = document.getElementById('stopRecordProgressFill');
@@ -3392,6 +3551,7 @@ function updateEditorLiveStatsUI(route) {
 
 let activeNodeTrimBubbleMarker = null;
 let activeNodeTrimBubblePlacedBelow = false;
+let isNodeTrimDrawerExpanded = false;
 
 function removeActiveNodeTrimBubble() {
     if (activeNodeTrimBubbleMarker) {
@@ -3403,16 +3563,20 @@ function removeActiveNodeTrimBubble() {
 function updateNodeTrimPanelUI(route) {
     removeActiveNodeTrimBubble();
     if (!isEditingMode || editSubMode !== 'path' || !route || !Array.isArray(route.points) || selectedEditNodeIdx < 0 || selectedEditNodeIdx >= route.points.length) {
+        isNodeTrimDrawerExpanded = false;
         return;
     }
 
     const pt = route.points[selectedEditNodeIdx];
     if (!pt || typeof pt.lng !== 'number' || typeof pt.lat !== 'number') return;
 
+    const visualPts = computeVisualRightOffsetCoords(route.points);
+    const vPt = visualPts[selectedEditNodeIdx] || pt;
+
     // 判斷節點是否靠近螢幕上緣（y < 140px 時自動改為彈出在節點正下方）
     let placeBelow = false;
     try {
-        const screenPt = map.project([pt.lng, pt.lat]);
+        const screenPt = map.project([vPt.lng, vPt.lat]);
         if (screenPt && screenPt.y < 140) {
             placeBelow = true;
         }
@@ -3422,64 +3586,92 @@ function updateNodeTrimPanelUI(route) {
     const wrapperEl = document.createElement('div');
     wrapperEl.className = 'node-trim-bubble-wrapper';
 
-    const cardEl = document.createElement('div');
-    cardEl.className = 'node-trim-bubble-card';
-    cardEl.innerHTML = `
-        <span class="text-amber-300 font-black text-[11px] px-1.5 select-none">#${selectedEditNodeIdx + 1}</span>
-        <span class="text-slate-500 text-[10px] select-none">｜</span>
-        <button type="button" data-trim-act="delete" class="text-white hover:text-amber-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-amber-600/85 hover:bg-amber-600 transition-all">🗑️ 刪點</button>
-        <span class="text-slate-500 text-[10px] select-none">｜</span>
-        <button type="button" data-trim-act="before" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪前</button>
-        <span class="text-slate-500 text-[10px] select-none">｜</span>
-        <button type="button" data-trim-act="after" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪後</button>
-        <span class="text-slate-500 text-[10px] select-none">｜</span>
-        <button type="button" data-trim-act="close" class="text-slate-300 hover:text-white active:scale-90 font-black text-xs w-5 h-5 rounded-full bg-slate-700/90 flex items-center justify-center transition-all" title="收起">✕</button>
-    `;
-
     const arrowEl = document.createElement('div');
     arrowEl.className = placeBelow ? 'node-trim-bubble-arrow-up' : 'node-trim-bubble-arrow-down';
-
-    if (placeBelow) {
-        wrapperEl.appendChild(arrowEl);
-        wrapperEl.appendChild(cardEl);
-    } else {
-        wrapperEl.appendChild(cardEl);
-        wrapperEl.appendChild(arrowEl);
-    }
 
     // 阻止氣泡點擊穿透至底層地圖
     ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'pointerdown'].forEach(evtName => {
         wrapperEl.addEventListener(evtName, (ev) => ev.stopPropagation());
     });
 
-    cardEl.querySelector('[data-trim-act="delete"]')?.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        executeDeleteSingleSelectedNode();
-    });
-    cardEl.querySelector('[data-trim-act="before"]')?.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        executeTrimBeforeSelectedNode();
-    });
-    cardEl.querySelector('[data-trim-act="after"]')?.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        executeTrimAfterSelectedNode();
-    });
-    cardEl.querySelector('[data-trim-act="close"]')?.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        selectedEditNodeIdx = -1;
-        const curRoute = getActiveWorkingRoute();
-        updateNodeTrimPanelUI(curRoute);
-        if (curRoute) renderPathEditNodes(curRoute);
-    });
+    if (!isNodeTrimDrawerExpanded) {
+        // 1. 預設收合為迷你小膠囊抽屜鈕（例如：✂️ #89 ▸），完全不遮擋周圍路線視野
+        const miniBtn = document.createElement('button');
+        miniBtn.type = 'button';
+        miniBtn.className = 'node-trim-mini-pill';
+        miniBtn.title = '點擊展開節點修剪抽屜';
+        miniBtn.innerHTML = `<span>✂️ #${selectedEditNodeIdx + 1}</span><span class="text-amber-400 text-[10px] ml-0.5">▸</span>`;
+        miniBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            isNodeTrimDrawerExpanded = true;
+            vibrate(15);
+            const curRoute = getActiveWorkingRoute();
+            updateNodeTrimPanelUI(curRoute);
+        });
+
+        if (placeBelow) {
+            wrapperEl.appendChild(arrowEl);
+            wrapperEl.appendChild(miniBtn);
+        } else {
+            wrapperEl.appendChild(miniBtn);
+            wrapperEl.appendChild(arrowEl);
+        }
+    } else {
+        // 2. 點擊小膠囊後才向旁滑開展開完整的修剪抽屜（🗑️ 刪點 ｜ ✂️ 刪前 ｜ ✂️ 刪後 ｜ ◂ 收合）
+        const cardEl = document.createElement('div');
+        cardEl.className = 'node-trim-bubble-card';
+        cardEl.innerHTML = `
+            <span class="text-amber-300 font-black text-[11px] px-1.5 select-none">#${selectedEditNodeIdx + 1}</span>
+            <span class="text-slate-500 text-[10px] select-none">｜</span>
+            <button type="button" data-trim-act="delete" class="text-white hover:text-amber-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-amber-600/85 hover:bg-amber-600 transition-all">🗑️ 刪點</button>
+            <span class="text-slate-500 text-[10px] select-none">｜</span>
+            <button type="button" data-trim-act="before" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪前</button>
+            <span class="text-slate-500 text-[10px] select-none">｜</span>
+            <button type="button" data-trim-act="after" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪後</button>
+            <span class="text-slate-500 text-[10px] select-none">｜</span>
+            <button type="button" data-trim-act="collapse" class="text-amber-200 hover:text-white active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-slate-700/90 hover:bg-slate-600 flex items-center justify-center transition-all" title="收合回迷你小膠囊">◂ 收合</button>
+        `;
+
+        if (placeBelow) {
+            wrapperEl.appendChild(arrowEl);
+            wrapperEl.appendChild(cardEl);
+        } else {
+            wrapperEl.appendChild(cardEl);
+            wrapperEl.appendChild(arrowEl);
+        }
+
+        cardEl.querySelector('[data-trim-act="delete"]')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            isNodeTrimDrawerExpanded = false;
+            executeDeleteSingleSelectedNode();
+        });
+        cardEl.querySelector('[data-trim-act="before"]')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            isNodeTrimDrawerExpanded = false;
+            executeTrimBeforeSelectedNode();
+        });
+        cardEl.querySelector('[data-trim-act="after"]')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            isNodeTrimDrawerExpanded = false;
+            executeTrimAfterSelectedNode();
+        });
+        cardEl.querySelector('[data-trim-act="collapse"]')?.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            isNodeTrimDrawerExpanded = false;
+            vibrate(10);
+            const curRoute = getActiveWorkingRoute();
+            updateNodeTrimPanelUI(curRoute);
+        });
+    }
 
     activeNodeTrimBubbleMarker = new maplibregl.Marker({
         element: wrapperEl,
         anchor: placeBelow ? 'top' : 'bottom',
-        offset: placeBelow ? [0, 14] : [0, -14],
+        offset: placeBelow ? [0, 12] : [0, -12],
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     })
-        .setLngLat([pt.lng, pt.lat])
+        .setLngLat([vPt.lng, vPt.lat])
         .addTo(map);
 }
 
@@ -3665,8 +3857,9 @@ function renderPathEditNodes(route) {
 
     const pts = route.points;
     const keyIndices = computeRouteKeyNodeIndices(pts);
+    const visualPts = computeVisualRightOffsetCoords(pts);
 
-    // 1. 渲染兩關鍵節點之間的「+ 虛擬中點」
+    // 1. 渲染兩關鍵節點之間的「+ 虛擬中點」（跟隨右側平行偏移後的視覺線條位置，插入時仍寫入真實道路中心線座標）
     for (let k = 0; k < keyIndices.length - 1; k++) {
         const idxA = keyIndices[k];
         const idxB = keyIndices[k + 1];
@@ -3677,6 +3870,13 @@ function renderPathEditNodes(route) {
 
         const midLng = Number(((ptA.lng + ptB.lng) / 2).toFixed(6));
         const midLat = Number(((ptA.lat + ptB.lat) / 2).toFixed(6));
+
+        const vA = visualPts[idxA] || ptA;
+        const vB = visualPts[idxB] || ptB;
+        const midIdxForVis = Math.floor((idxA + idxB) / 2);
+        const vMid = (idxB - idxA > 1 && visualPts[midIdxForVis])
+            ? visualPts[midIdxForVis]
+            : { lng: Number(((vA.lng + vB.lng) / 2).toFixed(6)), lat: Number(((vA.lat + vB.lat) / 2).toFixed(6)) };
 
         const midEl = document.createElement('button');
         midEl.type = 'button';
@@ -3712,6 +3912,7 @@ function renderPathEditNodes(route) {
             }
 
             selectedEditNodeIdx = newSelectedIdx;
+            isNodeTrimDrawerExpanded = false;
             syncRouteMarkersAndIndicesAfterSpline(route);
             vibrate(25);
             updateRouteLayers(route.points);
@@ -3731,15 +3932,19 @@ function renderPathEditNodes(route) {
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         })
-            .setLngLat([midLng, midLat])
+            .setLngLat([vMid.lng, vMid.lat])
             .addTo(map);
         pathEditMarkers.push(midMarker);
     }
 
-    // 2. 渲染可拖曳、可點擊修剪的關鍵節點
+    // 2. 渲染可拖曳、可點擊修剪的關鍵節點（跟隨右側平行偏移後的視覺位置顯示，拖曳時自動還原扣回偏移量以保存真實道路中心線座標）
     keyIndices.forEach((ptIdx, kPos) => {
         const pt = pts[ptIdx];
         if (!pt) return;
+        const vPt = visualPts[ptIdx] || { lng: pt.lng, lat: pt.lat, dLng: 0, dLat: 0 };
+        const initDLng = vPt.dLng || 0;
+        const initDLat = vPt.dLat || 0;
+
         const isSelected = (ptIdx === selectedEditNodeIdx);
         const isEndpoint = (ptIdx === 0 || ptIdx === pts.length - 1);
 
@@ -3755,7 +3960,7 @@ function renderPathEditNodes(route) {
         } else {
             el.className = 'w-5 h-5 bg-white border-[5px] border-emerald-600 hover:border-amber-500 rounded-full shadow-md cursor-grab active:cursor-grabbing z-20';
         }
-        el.title = `節點 #${ptIdx + 1}（按住拖曳位置，點擊開啟修剪選單）`;
+        el.title = `節點 #${ptIdx + 1}（按住拖曳位置，點擊顯示 ✂️ 迷你修剪小膠囊）`;
 
         const m = new maplibregl.Marker({
             element: el,
@@ -3764,20 +3969,23 @@ function renderPathEditNodes(route) {
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         })
-            .setLngLat([pt.lng, pt.lat])
+            .setLngLat([vPt.lng, vPt.lat])
             .addTo(map);
         m._ptIdx = ptIdx;
 
         m.on('dragstart', () => {
             pushEditUndoSnapshot(route);
             selectedEditNodeIdx = ptIdx;
+            // 拖曳時自動收起回迷你小膠囊，確保拖曳微調時視野零遮擋
+            isNodeTrimDrawerExpanded = false;
             updateNodeTrimPanelUI(route);
         });
 
         m.on('drag', () => {
             const lngLat = m.getLngLat();
-            const newLng = Number(lngLat.lng.toFixed(6));
-            const newLat = Number(lngLat.lat.toFixed(6));
+            // 扣除視覺平行偏移量，確保實際寫入 route.points 的座標維持真實道路座標
+            const newLng = Number((lngLat.lng - initDLng).toFixed(6));
+            const newLat = Number((lngLat.lat - initDLat).toFixed(6));
             pt.lng = newLng;
             pt.lat = newLat;
             pt.isKeyNode = true;
@@ -3803,12 +4011,17 @@ function renderPathEditNodes(route) {
             }
 
             updateRouteLayers(route.points, 25);
+            if (isNodeTrimDrawerExpanded) {
+                isNodeTrimDrawerExpanded = false;
+                updateNodeTrimPanelUI(route);
+            }
             if (activeNodeTrimBubbleMarker && selectedEditNodeIdx === ptIdx) {
-                activeNodeTrimBubbleMarker.setLngLat([newLng, newLat]);
+                activeNodeTrimBubbleMarker.setLngLat([lngLat.lng, lngLat.lat]);
             }
         });
 
         m.on('dragend', () => {
+            isNodeTrimDrawerExpanded = false;
             syncRouteMarkersAndIndicesAfterSpline(route);
             updateRouteLayers(route.points);
             renderEditableRouteMarkers(route);
@@ -3823,12 +4036,13 @@ function renderPathEditNodes(route) {
         el.addEventListener('click', (ev) => {
             ev.stopPropagation();
             selectedEditNodeIdx = ptIdx;
+            isNodeTrimDrawerExpanded = false; // 點選節點時預設收合為 ✂️ #N ▸ 迷你小膠囊
             vibrate(20);
             renderPathEditNodes(route);
             updateNodeTrimPanelUI(route);
             const promptEl = document.getElementById('editPromptText');
             if (promptEl) {
-                promptEl.innerText = `🎯 已選取節點 #${ptIdx + 1}：可直接於節點懸浮氣泡刪點或修剪頭尾`;
+                promptEl.innerText = `🎯 已選取節點 #${ptIdx + 1}：點擊上方「✂️ #${ptIdx + 1} ▸」可展開修剪抽屜`;
             }
         });
 
@@ -3843,10 +4057,12 @@ function renderFreehandSpliceNodes(route) {
 
     const pts = route.points;
     const keyIndices = computeRouteKeyNodeIndices(pts);
+    const visualPts = computeVisualRightOffsetCoords(pts);
 
     keyIndices.forEach(ptIdx => {
         const pt = pts[ptIdx];
         if (!pt) return;
+        const vPt = visualPts[ptIdx] || pt;
         const isSpliceStart = (ptIdx === freehandSpliceStartIdx);
         const isHead = (ptIdx === 0);
         const isTail = (ptIdx === pts.length - 1);
@@ -3875,7 +4091,7 @@ function renderFreehandSpliceNodes(route) {
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         })
-            .setLngLat([pt.lng, pt.lat])
+            .setLngLat([vPt.lng, vPt.lat])
             .addTo(map);
         pathEditMarkers.push(m);
     });
@@ -4859,26 +5075,45 @@ function buildManualRouteFromSteps() {
 
 function renderManualDrawPreview() {
     const { points, events, totalDistKm } = buildManualRouteFromSteps();
+    const visualPts = computeVisualRightOffsetCoords(points);
     clearDomMarkers();
     updateRouteLayers(points);
 
     if (manualDrawSteps.length >= 1) {
-        const startLngLat = points.length > 0
-            ? [points[0].lng, points[0].lat]
+        const startLngLat = visualPts.length > 0
+            ? [visualPts[0].lng, visualPts[0].lat]
             : manualDrawSteps[0].clickLngLat;
         addPinMarker(startLngLat, '<div class="pin-s pointer-events-none"><span>S</span></div>');
     }
 
-    // 標示各個手拉點擊節點與終點
+    // 標示各個手拉點擊節點與終點（若該段為來回重複路段，節點圖示同步對齊右側平行偏移線條）
+    let cumulativePtIdx = 0;
     for (let i = 1; i < manualDrawSteps.length; i++) {
         const coords = manualDrawSteps[i].densifiedCoords || [];
-        const endCoord = coords.length > 0 ? coords[coords.length - 1] : manualDrawSteps[i].clickLngLat;
+        cumulativePtIdx = Math.min(points.length - 1, cumulativePtIdx + Math.max(1, coords.length - 1));
+        const rawEndCoord = coords.length > 0 ? coords[coords.length - 1] : manualDrawSteps[i].clickLngLat;
+        let displayEndCoord = rawEndCoord;
+        if (visualPts.length > 0) {
+            // 找出對應此步驟終點的最近軌跡點並套用相同視覺偏移
+            let bestIdx = cumulativePtIdx;
+            let minD = Infinity;
+            for (let k = Math.max(0, cumulativePtIdx - 8); k < points.length; k++) {
+                const d = getDistanceKm(rawEndCoord[0], rawEndCoord[1], points[k].lng, points[k].lat);
+                if (d <= minD) {
+                    minD = d;
+                    bestIdx = k;
+                }
+            }
+            if (visualPts[bestIdx]) {
+                displayEndCoord = [visualPts[bestIdx].lng, visualPts[bestIdx].lat];
+            }
+        }
         const isLast = (i === manualDrawSteps.length - 1);
         const isMusic = Boolean(manualDrawSteps[i].musicActive);
         if (isLast) {
-            addPinMarker(endCoord, `<div class="w-6 h-6 rounded-full ${isMusic ? 'bg-green-600' : 'bg-blue-600'} text-white font-black text-[11px] border-2 border-white shadow-lg flex items-center justify-center pointer-events-none">${i}</div>`);
+            addPinMarker(displayEndCoord, `<div class="w-6 h-6 rounded-full ${isMusic ? 'bg-green-600' : 'bg-blue-600'} text-white font-black text-[11px] border-2 border-white shadow-lg flex items-center justify-center pointer-events-none">${i}</div>`);
         } else {
-            addPinMarker(endCoord, `<div class="w-4 h-4 rounded-full bg-white border-[4px] ${isMusic ? 'border-green-600' : 'border-blue-600'} shadow pointer-events-none"></div>`);
+            addPinMarker(displayEndCoord, `<div class="w-4 h-4 rounded-full bg-white border-[4px] ${isMusic ? 'border-green-600' : 'border-blue-600'} shadow pointer-events-none"></div>`);
         }
     }
 
@@ -5256,11 +5491,15 @@ map.on('click', (e) => {
             updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         }
     } else if (editSubMode === 'path') {
-        // 點擊軌跡線條時：自動選取最近的節點並彈出跟隨節點的迷你懸浮修剪氣泡；若點擊地圖空白處則收起氣泡並取消選取
+        // 點擊軌跡線條時：自動選取最近的節點（同時比對真實座標與右側平行偏移後的視覺座標）並顯示預設收合的迷你小膠囊抽屜鈕
+        const visualPts = computeVisualRightOffsetCoords(route.points);
         let minDistToNode = Infinity;
         let closestNodeIdx = -1;
         for (let i = 0; i < route.points.length; i++) {
-            const d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat) * 1000;
+            const dRaw = getDistanceKm(e.lngLat.lng, e.lngLat.lat, route.points[i].lng, route.points[i].lat) * 1000;
+            const vPt = visualPts[i] || route.points[i];
+            const dVis = getDistanceKm(e.lngLat.lng, e.lngLat.lat, vPt.lng, vPt.lat) * 1000;
+            const d = Math.min(dRaw, dVis);
             if (d < minDistToNode) {
                 minDistToNode = d;
                 closestNodeIdx = i;
@@ -5270,6 +5509,7 @@ map.on('click', (e) => {
         if (minDistToNode > 38 || closestNodeIdx === -1) {
             if (selectedEditNodeIdx !== -1) {
                 selectedEditNodeIdx = -1;
+                isNodeTrimDrawerExpanded = false;
                 renderPathEditNodes(route);
                 updateNodeTrimPanelUI(route);
                 const promptEl = document.getElementById('editPromptText');
@@ -5282,21 +5522,26 @@ map.on('click', (e) => {
 
         route.points[closestNodeIdx].isKeyNode = true;
         selectedEditNodeIdx = closestNodeIdx;
+        isNodeTrimDrawerExpanded = false;
         vibrate(20);
         renderPathEditNodes(route);
         updateNodeTrimPanelUI(route);
         const promptEl = document.getElementById('editPromptText');
         if (promptEl) {
-            promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：可直接於節點懸浮氣泡刪點或修剪頭尾`;
+            promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：點擊上方「✂️ #${closestNodeIdx + 1} ▸」可展開修剪抽屜`;
         }
     } else if (editSubMode === 'freehand') {
         // 「手繪延伸／剪接」模式下點擊地圖：
-        // 1. 若點擊處靠近路線既有節點 (< 30m)，視同點選該舊節點（設定剪接起點或完成剪接替換）
+        // 1. 若點擊處靠近路線既有節點 (< 30m，含右側平行偏移視覺位置)，視同點選該舊節點（設定剪接起點或完成剪接替換）
         const pts = route.points;
+        const visualPts = computeVisualRightOffsetCoords(pts);
         let minDistM = Infinity;
         let closestIdx = -1;
         for (let i = 0; i < pts.length; i++) {
-            const dM = getDistanceKm(e.lngLat.lng, e.lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
+            const dRaw = getDistanceKm(e.lngLat.lng, e.lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
+            const vPt = visualPts[i] || pts[i];
+            const dVis = getDistanceKm(e.lngLat.lng, e.lngLat.lat, vPt.lng, vPt.lat) * 1000;
+            const dM = Math.min(dRaw, dVis);
             if (dM < minDistM) {
                 minDistM = dM;
                 closestIdx = i;
@@ -9955,7 +10200,7 @@ fetchAndRenderFleetRadar = async function() {
     checkAndApplyRadarInterval();
 };
 
-// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發管理員設定驗證 ---
+// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發開發者模式驗證 ---
 (function setupAdminTitleTrigger() {
     const versionBadgeEl = document.getElementById('appVersionBadge');
     if (versionBadgeEl) {
@@ -10021,8 +10266,8 @@ document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () 
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
 });
 
-// --- 10.9 管理員設定面板表單渲染與雙向同步（含 v3.26 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
-let selectedAdminAiModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+// --- 10.9 開發者模式設定面板表單渲染與雙向同步（含 v3.27 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
+let selectedAdminAiModel = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
 let editingAdminAiKeys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
 let editingActiveAiKeyId = systemNavConfig.activeAiKeyId || '';
 
@@ -10037,7 +10282,7 @@ function maskGeminiApiKey(rawKey) {
 function highlightAdminAiModelBtn(activeModel) {
     const modelToSelect = ALLOWED_AI_DISPATCH_MODELS.includes(activeModel)
         ? activeModel
-        : 'gemini-3.5-flash-lite';
+        : 'gemini-3.6-flash';
     selectedAdminAiModel = modelToSelect;
 
     const btns = document.querySelectorAll('.admin-ai-model-btn');
@@ -10048,12 +10293,12 @@ function highlightAdminAiModelBtn(activeModel) {
             btn.className = 'admin-ai-model-btn bg-violet-600 text-white border-2 border-violet-600 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between shadow-sm pointer-events-auto cursor-pointer';
             btn.innerHTML = m === 'gemini-4-hydrogen'
                 ? `<div><div class="text-xs font-black">gemini-4-hydrogen</div><div class="text-[10px] font-bold opacity-90">進階：強理解力版（複雜派工單深度解析）</div></div><i class="fa-solid fa-circle-check text-sm"></i>`
-                : `<div><div class="text-xs font-black">gemini-3.5-flash-lite</div><div class="text-[10px] font-bold opacity-90">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-solid fa-circle-check text-sm"></i>`;
+                : `<div><div class="text-xs font-black">gemini-3.6-flash</div><div class="text-[10px] font-bold opacity-90">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-solid fa-circle-check text-sm"></i>`;
         } else {
             btn.className = 'admin-ai-model-btn bg-white hover:bg-violet-50 text-gray-800 border-2 border-gray-200 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between pointer-events-auto cursor-pointer';
             btn.innerHTML = m === 'gemini-4-hydrogen'
                 ? `<div><div class="text-xs font-black">gemini-4-hydrogen</div><div class="text-[10px] font-bold text-gray-500">進階：強理解力版（複雜派工單深度解析）</div></div><i class="fa-regular fa-circle text-sm text-gray-300"></i>`
-                : `<div><div class="text-xs font-black">gemini-3.5-flash-lite</div><div class="text-[10px] font-bold text-gray-500">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-regular fa-circle text-sm text-gray-300"></i>`;
+                : `<div><div class="text-xs font-black">gemini-3.6-flash</div><div class="text-[10px] font-bold text-gray-500">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-regular fa-circle text-sm text-gray-300"></i>`;
         }
     });
 
@@ -10315,7 +10560,7 @@ function populateAdminSettingsForm(cfg) {
     highlightAdminIntervalBtn(c.radarIntervalSec);
 
     // 同步 AI 模型與多組 API Key 清單
-    selectedAdminAiModel = c.aiDispatchModel || 'gemini-3.5-flash-lite';
+    selectedAdminAiModel = c.aiDispatchModel || 'gemini-3.6-flash';
     editingAdminAiKeys = normalizeAiApiKeysArray(c.aiApiKeys);
     editingActiveAiKeyId = c.activeAiKeyId || (editingAdminAiKeys[0]?.id || '');
     highlightAdminAiModelBtn(selectedAdminAiModel);
@@ -10616,7 +10861,7 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
 })();
 
 // ==========================================
-// 🛋️ 11. 家具模式（單一共用作業空間 ＋ ✨ Gemini AI 智慧批次派工插針 ＋ 🔥 純木頭垃圾車支援火紅標記系統 v3.26）
+// 🛋️ 11. 家具模式（單一共用作業空間 ＋ ✨ Gemini AI 智慧批次派工插針 ＋ 🔥 純木頭垃圾車支援火紅標記系統 v3.27）
 // - 徹底移除所有「第 1/2/3 組」分組邏輯與文案，改為全隊單一共用作業空間
 // - Firebase 路徑簡化為：furniture_collab/{YYYY-MM-DD}/active
 // - 按下右下角「🗑️ 清空」時，提示訊息顯示為：「🗑️ 已清空家具定位針與路線」
@@ -10858,7 +11103,7 @@ function updateFurniturePanelUI() {
 
     if (undoBtn) undoBtn.disabled = (pinsCount === 0);
     if (clearBtn) clearBtn.disabled = (pinsCount === 0 && furnitureActiveData.routeCoords.length === 0);
-    if (autoOsrmBtn) autoOsrmBtn.disabled = (pinsCount < 2);
+    if (autoOsrmBtn) autoOsrmBtn.disabled = (pinsCount < 1);
     if (manualConnectBtn) {
         manualConnectBtn.disabled = (pinsCount < 2);
         if (isFurnitureManualConnecting) {
@@ -11409,12 +11654,56 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
 })();
 
 // ==========================================
-// 🤖 串聯方式 1：自動沿路串（OSRM 依序將 1 -> 2 -> 3... 串成實際道路軌跡，失敗自動 fallback 直線）
+// 🤖 串聯方式 1：自動沿路串（OSRM 以目前車輛即時 GPS 位置為起點，依最順路順序串接所有插針）
 // ==========================================
+async function resolveVehicleOriginForFurnitureOsrm() {
+    // 1. 優先使用目前已取得的即時有效 GPS 座標
+    if (typeof lastValidGpsLng === 'number' && typeof lastValidGpsLat === 'number' && !isNaN(lastValidGpsLng) && !isNaN(lastValidGpsLat)) {
+        return { lng: Number(lastValidGpsLng.toFixed(6)), lat: Number(lastValidGpsLat.toFixed(6)), source: 'gps' };
+    }
+
+    // 2. 嘗試即時向瀏覽器請求一次最新 GPS 座標（2.2 秒超時防卡死）
+    if ('geolocation' in navigator) {
+        try {
+            const pos = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    maximumAge: 15000,
+                    timeout: 2200
+                });
+            });
+            if (pos && pos.coords && typeof pos.coords.longitude === 'number' && typeof pos.coords.latitude === 'number') {
+                const lng = Number(pos.coords.longitude.toFixed(6));
+                const lat = Number(pos.coords.latitude.toFixed(6));
+                lastValidGpsLng = lng;
+                lastValidGpsLat = lat;
+                lastKnownLngLat = [lng, lat];
+                if (vehicleMarker) {
+                    try { vehicleMarker.setLngLat([lng, lat]); } catch (e) {}
+                }
+                return { lng, lat, source: 'gps' };
+            }
+        } catch (e) {}
+    }
+
+    // 3. 若無即時 GPS 定位，退回使用目前車輛圖示位置 / 地圖中心點或第一支針座標
+    if (Array.isArray(lastKnownLngLat) && lastKnownLngLat.length === 2 && typeof lastKnownLngLat[0] === 'number' && typeof lastKnownLngLat[1] === 'number') {
+        return { lng: Number(lastKnownLngLat[0].toFixed(6)), lat: Number(lastKnownLngLat[1].toFixed(6)), source: 'vehicle_marker' };
+    }
+    if (map && typeof map.getCenter === 'function') {
+        const c = map.getCenter();
+        if (c && typeof c.lng === 'number' && typeof c.lat === 'number') {
+            return { lng: Number(c.lng.toFixed(6)), lat: Number(c.lat.toFixed(6)), source: 'map_center' };
+        }
+    }
+    const p0 = furnitureActiveData.pins[0];
+    return { lng: Number(p0.lng.toFixed(6)), lat: Number(p0.lat.toFixed(6)), source: 'first_pin' };
+}
+
 let isFurnitureOsrmBusy = false;
 document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click', async () => {
     if (isFurnitureOsrmBusy) return;
-    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 2) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 1) return;
 
     if (isFurnitureManualConnecting) {
         stopFurnitureManualConnectMode(false);
@@ -11427,14 +11716,50 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
     }
-    showFurnitureToast(`🤖 正在計算 1 ➔ ${furnitureActiveData.pins.length} 號針的道路軌跡...`);
+    showFurnitureToast('🤖 正在定位目前車輛位置並規劃最順路順序...');
 
     try {
-        const combinedCoords = [[furnitureActiveData.pins[0].lng, furnitureActiveData.pins[0].lat]];
+        const origin = await resolveVehicleOriginForFurnitureOsrm();
 
-        for (let i = 0; i < furnitureActiveData.pins.length - 1; i++) {
-            const pA = furnitureActiveData.pins[i];
-            const pB = furnitureActiveData.pins[i + 1];
+        // 以目前車輛位置 (origin) 為出發點，採用最近鄰順路演算法重新排列所有插針順序 (#1 -> #2 -> #3...)
+        const remainingPins = [...furnitureActiveData.pins];
+        const orderedPins = [];
+        let curLng = origin.lng;
+        let curLat = origin.lat;
+
+        while (remainingPins.length > 0) {
+            let bestIdx = 0;
+            let bestDist = Infinity;
+            for (let i = 0; i < remainingPins.length; i++) {
+                const d = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx = i;
+                }
+            }
+            const nextPin = remainingPins.splice(bestIdx, 1)[0];
+            orderedPins.push(nextPin);
+            curLng = nextPin.lng;
+            curLat = nextPin.lat;
+        }
+
+        furnitureActiveData.pins = orderedPins;
+
+        // 建立完整途經點：由目前車輛位置出發 -> 第 1 支針 -> 第 2 支針 -> ...
+        const waypoints = [];
+        const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, orderedPins[0].lng, orderedPins[0].lat) * 1000;
+        if (distOriginToFirstM >= 12) {
+            waypoints.push({ lng: origin.lng, lat: origin.lat });
+        }
+        orderedPins.forEach(p => {
+            waypoints.push({ lng: p.lng, lat: p.lat });
+        });
+
+        const combinedCoords = [[waypoints[0].lng, waypoints[0].lat]];
+
+        for (let i = 0; i < waypoints.length - 1; i++) {
+            const pA = waypoints[i];
+            const pB = waypoints[i + 1];
             const { coords } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat);
             const densified = densifyRoadCoordinates(coords, 8);
             for (let k = 1; k < densified.length; k++) {
@@ -11451,12 +11776,12 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
 
         renderAllFurnitureMapElements();
         await syncActiveFurnitureToFirebase(false);
-        showFurnitureToast(`✅ 已完成自動沿路串聯（共 ${furnitureActiveData.distanceKm} km）`);
+        showFurnitureToast(`✅ 已從目前車輛位置自動串接最優路線（共 ${furnitureActiveData.distanceKm} km）`);
     } finally {
         isFurnitureOsrmBusy = false;
         if (btn) {
             btn.innerHTML = origHtml;
-            btn.disabled = (furnitureActiveData.pins.length < 2);
+            btn.disabled = (furnitureActiveData.pins.length < 1);
         }
     }
 });
@@ -11880,7 +12205,7 @@ async function testSingleGeminiApiKey(apiKey, modelName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 apiKey,
-                model: modelName || 'gemini-3.5-flash-lite'
+                model: modelName || 'gemini-3.6-flash'
             })
         }, 20000);
 
@@ -11903,8 +12228,8 @@ async function testSingleGeminiApiKey(apiKey, modelName) {
 
     // 靜態託管環境下直接透過瀏覽器端測試 Gemini REST API (含 google_search 聯網工具)
     const candidateRestModels = modelName === 'gemini-4-hydrogen'
-        ? ['gemini-2.5-pro', 'gemini-2.5-flash']
-        : ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
+        ? ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash']
+        : ['gemini-3.6-flash', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
 
     let lastStatus = 500;
     let lastReason = '未知錯誤';
@@ -11971,8 +12296,8 @@ ${dispatchText.trim()}
 [{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
     const candidateRestModels = modelName === 'gemini-4-hydrogen'
-        ? ['gemini-2.5-pro', 'gemini-2.5-flash']
-        : ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
+        ? ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash']
+        : ['gemini-3.6-flash', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
 
     let lastStatus = 500;
     let lastErrText = '';
@@ -12019,7 +12344,7 @@ ${dispatchText.trim()}
 
 // 呼叫 AI 聯網解析派工單（支援多組 API Key 遇 429 自動輪替下一組，並回傳使用的 Key 備註名稱與耗時秒數）
 async function requestAiDispatchParseWithRotation(dispatchText, communities, onStatusUpdate) {
-    const selectedModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+    const selectedModel = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
     const orderedKeys = getOrderedGeminiApiKeysForDispatch();
 
     // 候選嘗試清單：若有設定自訂 API Key 則依序嘗試每一組，最後或無設定時也嘗試伺服器環境金鑰 ('')
@@ -12118,7 +12443,7 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
         }
     }
 
-    throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 聯網查詢，請至管理員設定檢查或新增 Gemini API Key');
+    throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 聯網查詢，請至開發者模式檢查或新增 Gemini API Key');
 }
 
 // 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 name 也能直接校驗並命中 Firebase 橘色水滴精確座標）
@@ -12155,7 +12480,7 @@ async function openAiDispatchModal() {
 
     if (!modal) return;
     if (modelBadge) {
-        modelBadge.textContent = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+        modelBadge.textContent = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
     }
     if (resultBox) {
         resultBox.classList.add('hidden');
@@ -12424,7 +12749,7 @@ function closeAiDispatchModal() {
             showFurnitureToast(`✨ Gemini 聯網已插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
         } catch (err) {
             showProgressStatus(
-                `🔴 Gemini 連線失敗：${err?.message || '未知連線或解析錯誤，請檢查管理員 API Key 設定'}`,
+                `🔴 Gemini 連線失敗：${err?.message || '未知連線或解析錯誤，請檢查開發者模式 API Key 設定'}`,
                 'error'
             );
         } finally {
@@ -12435,13 +12760,12 @@ function closeAiDispatchModal() {
 })();
 
 // ==========================================
-// 🔀 管理員專區「🛋️ 家具模式」與「一般收運模式」嚴格隔離切換邏輯
+// 🔀 開發者模式「🛋️ 家具模式」與「一般收運模式」嚴格隔離切換邏輯
 // ==========================================
 function syncAdminFurnitureEntryButtonUI() {
     const adminLaunchBtn = document.getElementById('btnAdminLaunchFurnitureMode');
     const adminBtnIcon = document.getElementById('adminFurnitureBtnIcon');
     const adminBtnLabel = document.getElementById('adminFurnitureBtnLabel');
-    const cloudAdminLaunchBtn = document.getElementById('btnCloudAdminLaunchFurnitureMode');
 
     if (isFurnitureModeActive) {
         if (adminLaunchBtn) {
@@ -12449,18 +12773,12 @@ function syncAdminFurnitureEntryButtonUI() {
         }
         if (adminBtnIcon) adminBtnIcon.textContent = '🚛';
         if (adminBtnLabel) adminBtnLabel.textContent = '返回一般收運';
-        if (cloudAdminLaunchBtn) {
-            cloudAdminLaunchBtn.innerHTML = '<span>🚛 返回一般收運</span>';
-        }
     } else {
         if (adminLaunchBtn) {
             adminLaunchBtn.className = 'bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1.5';
         }
         if (adminBtnIcon) adminBtnIcon.textContent = '🛋️';
         if (adminBtnLabel) adminBtnLabel.textContent = '切換家具模式';
-        if (cloudAdminLaunchBtn) {
-            cloudAdminLaunchBtn.innerHTML = '<span>🛋️ 家具模式</span>';
-        }
     }
 }
 
@@ -12591,13 +12909,6 @@ function setFurnitureModeActive(enable) {
 document.getElementById('btnAdminLaunchFurnitureMode')?.addEventListener('click', (e) => {
     e.stopPropagation();
     document.getElementById('adminSettingsModal')?.classList.add('hidden');
-    setFurnitureModeActive(!isFurnitureModeActive);
-});
-
-document.getElementById('btnCloudAdminLaunchFurnitureMode')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    document.getElementById('cloudRoutesModal')?.classList.add('hidden');
-    document.getElementById('historyModal')?.classList.add('hidden');
     setFurnitureModeActive(!isFurnitureModeActive);
 });
 

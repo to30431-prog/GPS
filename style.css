@@ -678,7 +678,7 @@ input, textarea {
 }
 
 /* ==========================================
-   ✂️ 路線編輯模式：跟隨節點的迷你懸浮修剪氣泡 (v3.26)
+   ✂️ 路線編輯模式：跟隨節點的可收合小抽屜 (v3.27)
    重要規範：傳給 new maplibregl.Marker({ element }) 的外層容器 (.node-trim-bubble-wrapper)
    嚴禁設定任何 CSS transform，確保地圖縮放或平移時錨點 100% 緊貼節點不飄移！
    ========================================== */
@@ -692,27 +692,67 @@ input, textarea {
     -webkit-user-select: none;
 }
 
+.node-trim-mini-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2.5px 7px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.86);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1.25px solid rgba(251, 191, 36, 0.72);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.36);
+    color: #fde68a;
+    font-size: 10.5px;
+    font-weight: 900;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+.node-trim-mini-pill:hover {
+    background: rgba(15, 23, 42, 0.96);
+}
+
+.node-trim-mini-pill:active {
+    transform: scale(0.93);
+}
+
 .node-trim-bubble-card {
     display: inline-flex;
     align-items: center;
     gap: 3px;
     padding: 4px 6px;
     border-radius: 999px;
-    background: rgba(15, 23, 42, 0.94);
+    background: rgba(15, 23, 42, 0.95);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    border: 1.5px solid rgba(251, 191, 36, 0.75);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.12);
+    border: 1.5px solid rgba(251, 191, 36, 0.8);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 255, 255, 0.14);
     color: #ffffff;
     white-space: nowrap;
+    animation: nodeTrimDrawerExpand 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+@keyframes nodeTrimDrawerExpand {
+    0% {
+        opacity: 0.7;
+        transform: scaleX(0.75);
+    }
+    100% {
+        opacity: 1;
+        transform: scaleX(1);
+    }
 }
 
 .node-trim-bubble-arrow-down {
     width: 0;
     height: 0;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 6px solid rgba(15, 23, 42, 0.94);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid rgba(15, 23, 42, 0.9);
     margin-top: -1px;
     filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.3));
 }
@@ -720,15 +760,15 @@ input, textarea {
 .node-trim-bubble-arrow-up {
     width: 0;
     height: 0;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-bottom: 6px solid rgba(15, 23, 42, 0.94);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 5px solid rgba(15, 23, 42, 0.9);
     margin-bottom: -1px;
     filter: drop-shadow(0 -1px 2px rgba(0, 0, 0, 0.3));
 }
 
 /* ==========================================
-   🔒 鶯歌清運路線庫列表：長按 0.5 秒防誤拉鎖定與解鎖高亮回饋 (v3.26)
+   🔒 鶯歌清運路線庫列表：長按 0.5 秒防誤拉鎖定與解鎖高亮回饋 (v3.27)
    ========================================== */
 .drag-handle {
     touch-action: pan-y;
@@ -745,3 +785,4 @@ input, textarea {
     z-index: 30;
     transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.2), box-shadow 0.15s ease;
 }
+

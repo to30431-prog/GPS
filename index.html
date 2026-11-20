@@ -8,9 +8,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
-    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.26)">
+    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.27)">
     <meta property="og:title" content="鶯歌清運路線助手 Pro Max">
-    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.26)">
+    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.27)">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -123,7 +123,7 @@
                 <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
                     <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500"></span>
                     <span id="appStatusTitle" class="cursor-pointer select-none">鶯歌清運路線助手 Pro Max</span>
-                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform" title="點擊開啟管理員設定">v3.26</span>
+                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform" title="點擊開啟開發者模式">v3.27</span>
                 </div>
             </div>
             <button id="fleetUserBadgeBtn" type="button" class="bg-white/95 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-emerald-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all" title="點擊修改您的車隊顯示名稱">
@@ -345,7 +345,7 @@
                     <i class="fa-solid fa-building"></i> 已同步社區大樓：讀取中...
                 </span>
                 <span id="aiDispatchActiveModelBadge" class="bg-white text-violet-800 border border-violet-200 px-2 py-0.5 rounded-full font-black">
-                    gemini-3.5-flash-lite
+                    gemini-3.6-flash
                 </span>
             </div>
 
@@ -489,7 +489,7 @@
                 </button>
             </div>
 
-            <!-- 第一排（單一橫排緊湊膠囊切換列）：✋拖曳 ｜ ✍️手繪 ｜ 📍語音 ｜ 📌備忘 ＋ 右側 ↩️ 上一步 -->
+            <!-- 第一排（單一橫排緊湊膠囊切換列）：✋拖曳 ｜ ✍️手繪 ｜ 📍標記 ｜ 📌備忘 ＋ 右側 ↩️ 上一步 -->
             <div class="flex items-center gap-1">
                 <div class="bg-gray-100 p-0.5 rounded-xl grid grid-cols-4 gap-0.5 flex-1 border border-gray-200 min-w-0">
                     <button id="modePathBtn" type="button" class="bg-emerald-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center">
@@ -499,7 +499,7 @@
                         ✍️手繪
                     </button>
                     <button id="modeMarkerBtn" type="button" class="text-gray-600 hover:bg-white/70 font-black text-[11px] px-1 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center">
-                        📍語音
+                        📍標記
                     </button>
                     <button id="modeCalloutBtn" type="button" class="text-gray-600 hover:bg-white/70 font-black text-[11px] px-1 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center">
                         📌備忘
@@ -799,7 +799,7 @@
                     </button>
                 </div>
             </div>
-            <!-- 🔓 管理員專屬頁籤與家具模式入口列 -->
+            <!-- 🔓 管理員專屬頁籤列（正式路線庫 ／ 待審核區） -->
             <div id="cloudAdminTabBar" class="hidden bg-white px-4 py-2 border-b border-gray-100 flex gap-1.5">
                 <button id="tabSharedRoutesBtn" type="button" class="flex-1 py-2 rounded-xl text-xs font-extrabold bg-blue-600 text-white shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1">
                     ☁️ 正式路線庫
@@ -807,9 +807,6 @@
                 <button id="tabPendingRoutesBtn" type="button" class="flex-1 py-2 rounded-xl text-xs font-extrabold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all active:scale-95 flex items-center justify-center gap-1">
                     <span>⏳ 待審核區</span>
                     <span id="pendingCountPill" class="bg-amber-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">0</span>
-                </button>
-                <button id="btnCloudAdminLaunchFurnitureMode" type="button" class="py-2 px-2.5 rounded-xl text-xs font-extrabold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap" title="進入／切換管理員家具協作模式">
-                    <span>🛋️ 家具模式</span>
                 </button>
             </div>
             <div class="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
@@ -1023,18 +1020,18 @@
         </div>
     </div>
 
-    <!-- ⚙️ 管理員隱藏設定面板（6 位數密碼驗證入口） -->
+    <!-- 🛠️ 開發者模式隱藏設定面板（6 位數密碼驗證入口） -->
     <div id="adminPasswordModal" class="hidden fixed inset-0 bg-black/70 z-[100004] flex items-center justify-center p-4 pointer-events-auto">
         <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4 border border-gray-100">
             <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl mx-auto shadow-sm">
-                🔐
+                🛠️
             </div>
-            <h3 class="text-lg font-black text-gray-900 text-center">管理員設定驗證</h3>
-            <p class="text-xs text-gray-500 text-center font-bold -mt-2">請輸入 6 位數管理員密碼</p>
+            <h3 class="text-lg font-black text-gray-900 text-center">開發者模式驗證</h3>
+            <p class="text-xs text-gray-500 text-center font-bold -mt-2">請輸入 6 位數開發者密碼</p>
             <input type="text" id="adminPasswordInput" inputmode="numeric" maxlength="6" class="bg-gray-50 border-2 border-gray-200 focus:border-amber-500 text-gray-900 text-2xl font-black rounded-2xl p-3.5 w-full outline-none transition-colors text-center tracking-[0.5em]" placeholder="● ● ● ● ● ●">
             <div id="adminPasswordError" class="hidden text-red-500 text-xs font-bold text-center">❌ 密碼錯誤，請重新輸入</div>
             <button type="button" id="btnVerifyAdminPassword" class="bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-base">
-                <i class="fa-solid fa-unlock"></i> 驗證進入
+                <i class="fa-solid fa-unlock"></i> 驗證進入開發者模式
             </button>
             <button type="button" id="btnCancelAdminPassword" class="text-gray-400 font-extrabold py-1.5 active:scale-95 text-xs">
                 取消
@@ -1042,16 +1039,16 @@
         </div>
     </div>
 
-    <!-- ⚙️ 車隊系統參數設定面板 (v3.1 完整動態參數同步) -->
+    <!-- 🛠️ 開發者模式：系統與 AI 參數設定面板 -->
     <div id="adminSettingsModal" class="hidden fixed inset-0 bg-black/75 z-[100005] flex items-center justify-center p-3 sm:p-4 pointer-events-auto">
         <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl flex flex-col border-2 border-amber-400 max-h-[90vh] overflow-hidden">
             <!-- 固定頂部標題列 -->
             <div class="px-5 py-3.5 bg-amber-50/80 border-b border-amber-200 flex items-center justify-between flex-shrink-0">
                 <div>
                     <h3 class="text-base sm:text-lg font-black text-amber-700 flex items-center gap-2">
-                        <span>⚙️</span> 管理員導航與車隊參數設定
+                        <span>🛠️</span> 開發者模式（系統與 AI 參數設定）
                     </h3>
-                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.26)</p>
+                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.27)</p>
                 </div>
                 <button type="button" id="btnCloseAdminSettings" class="w-8 h-8 rounded-full bg-white text-gray-500 hover:bg-gray-100 flex items-center justify-center active:scale-90 shadow-sm border border-amber-200 flex-shrink-0">
                     <i class="fa-solid fa-xmark"></i>
@@ -1061,11 +1058,11 @@
             <!-- 可捲動內容區塊 -->
             <div class="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
 
-                <!-- 0. 🛋️ 管理員專屬：家具模式切換入口 -->
+                <!-- 0. 🛋️ 開發者模式專屬：家具模式切換入口 -->
                 <div class="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-400 rounded-2xl p-3.5 flex items-center justify-between gap-3 shadow-sm">
                     <div class="min-w-0">
                         <div class="text-xs font-black text-amber-900 flex items-center gap-1.5">
-                            <span>🛋️ 家具模式（管理員專區）</span>
+                            <span>🛋️ 家具模式（開發者模式）</span>
                             <span class="bg-amber-200 text-amber-900 text-[10px] font-black px-1.5 py-0.5 rounded-md">AI 派工</span>
                         </div>
                         <div class="text-[11px] font-bold text-amber-700/90 mt-0.5">大型家具智慧派工插針 ＋ 純木頭垃圾車支援標記</div>
@@ -1089,9 +1086,9 @@
                     <div class="space-y-1.5">
                         <label class="text-[11px] font-extrabold text-gray-700">1. Gemini 模型選擇器（全隊共用）</label>
                         <div class="grid grid-cols-1 gap-1.5" id="adminAiModelOptions">
-                            <button type="button" data-ai-model="gemini-3.5-flash-lite" class="admin-ai-model-btn bg-violet-600 text-white border-2 border-violet-600 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between shadow-sm">
+                            <button type="button" data-ai-model="gemini-3.6-flash" class="admin-ai-model-btn bg-violet-600 text-white border-2 border-violet-600 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between shadow-sm">
                                 <div>
-                                    <div class="text-xs font-black">gemini-3.5-flash-lite</div>
+                                    <div class="text-xs font-black">gemini-3.6-flash</div>
                                     <div class="text-[10px] font-bold opacity-90">預設：極速輕量版（回應最快、省額度）</div>
                                 </div>
                                 <i class="fa-solid fa-circle-check text-sm"></i>

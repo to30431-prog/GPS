@@ -8,13 +8,13 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname)));
 
-// 根據請求的模型名稱建立對應嘗試順序（支援 gemini-3.5-flash-lite 與 gemini-4-hydrogen）
+// 根據請求的模型名稱建立對應嘗試順序（支援 gemini-3.6-flash 與 gemini-4-hydrogen）
 function getModelCandidates(requestedModel) {
-    const clean = String(requestedModel || 'gemini-3.5-flash-lite').trim();
+    const clean = String(requestedModel || 'gemini-3.6-flash').trim();
     if (clean === 'gemini-4-hydrogen') {
         return ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
     }
-    return ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-4-hydrogen'];
+    return ['gemini-3.6-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-4-hydrogen'];
 }
 
 // 從 Gemini 聯網回應文字中安全提取 JSON 陣列
@@ -44,7 +44,7 @@ app.post('/api/gemini/dispatch', async (req, res) => {
         const {
             dispatchText,
             communities = [],
-            model = 'gemini-3.5-flash-lite',
+            model = 'gemini-3.6-flash',
             apiKey: clientProvidedKey
         } = req.body || {};
 
@@ -55,7 +55,7 @@ app.post('/api/gemini/dispatch', async (req, res) => {
         const effectiveApiKey = (clientProvidedKey && String(clientProvidedKey).trim()) || process.env.GEMINI_API_KEY;
         if (!effectiveApiKey) {
             return res.status(400).json({
-                error: '400 MISSING_API_KEY：尚未設定可用的 Gemini API Key，請先於管理員面板「🤖 AI 智慧派工設定」新增 API Key。',
+                error: '400 MISSING_API_KEY：尚未設定可用的 Gemini API Key，請先於開發者模式「🤖 AI 智慧派工設定」新增 API Key。',
                 code: 'MISSING_API_KEY'
             });
         }
@@ -169,7 +169,7 @@ app.post('/api/gemini/test', async (req, res) => {
     try {
         const {
             apiKey: clientProvidedKey,
-            model = 'gemini-3.5-flash-lite'
+            model = 'gemini-3.6-flash'
         } = req.body || {};
 
         const effectiveApiKey = (clientProvidedKey && String(clientProvidedKey).trim()) || process.env.GEMINI_API_KEY;

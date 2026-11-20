@@ -1,0 +1,16 @@
+{
+  "name": "yingge-clean-route-assistant-pro-max",
+  "version": "3.27.0",
+  "description": "專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.27)",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "echo 'Static PWA build complete'",
+    "lint": "node --check app.js && node --check sw.js && node --check server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "express": "^5.2.1"
+  }
+}

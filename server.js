@@ -11,13 +11,32 @@ app.use(express.static(path.join(__dirname)));
 // 根據請求的模型名稱建立對應嘗試順序（支援 gemini-3.5-flash-lite 與 gemini-4-hydrogen）
 function getModelCandidates(requestedModel) {
     const clean = String(requestedModel || 'gemini-3.5-flash-lite').trim();
-    if (clean === 'gemini-3.5-flash-lite') {
-        return ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
-    }
     if (clean === 'gemini-4-hydrogen') {
-        return ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+        return ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
     }
-    return [clean, 'gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
+    return ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-4-hydrogen'];
+}
+
+// 從 Gemini 聯網回應文字中安全提取 JSON 陣列
+function extractJsonArrayFromText(rawText) {
+    const cleaned = String(rawText || '')
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+    try {
+        const direct = JSON.parse(cleaned);
+        if (Array.isArray(direct)) return direct;
+    } catch (e) {}
+
+    const firstBracket = cleaned.indexOf('[');
+    const lastBracket = cleaned.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket > firstBracket) {
+        const sub = cleaned.slice(firstBracket, lastBracket + 1);
+        const parsed = JSON.parse(sub);
+        if (Array.isArray(parsed)) return parsed;
+    }
+    throw new Error('AI 回傳格式非有效 JSON 陣列');
 }
 
 app.post('/api/gemini/dispatch', async (req, res) => {
@@ -30,13 +49,13 @@ app.post('/api/gemini/dispatch', async (req, res) => {
         } = req.body || {};
 
         if (!dispatchText || typeof dispatchText !== 'string' || !dispatchText.trim()) {
-            return res.status(400).json({ error: '請提供派工單文字內容' });
+            return res.status(400).json({ error: '400 Bad Request：請提供派工單文字內容', code: 'EMPTY_DISPATCH_TEXT' });
         }
 
         const effectiveApiKey = (clientProvidedKey && String(clientProvidedKey).trim()) || process.env.GEMINI_API_KEY;
         if (!effectiveApiKey) {
             return res.status(400).json({
-                error: '尚未設定可用的 Gemini API Key，請先於管理員面板「🤖 AI 智慧派工設定」新增 API Key。',
+                error: '400 MISSING_API_KEY：尚未設定可用的 Gemini API Key，請先於管理員面板「🤖 AI 智慧派工設定」新增 API Key。',
                 code: 'MISSING_API_KEY'
             });
         }
@@ -50,18 +69,18 @@ app.post('/api/gemini/dispatch', async (req, res) => {
             }
         });
 
-        const communityListJson = JSON.stringify(
-            Array.isArray(communities)
-                ? communities.map(c => ({
-                    name: String(c.title || c.name || '').trim(),
-                    lat: Number(c.lat),
-                    lng: Number(c.lng)
-                })).filter(c => c.name && !isNaN(c.lat) && !isNaN(c.lng))
-                : []
-        );
+        const validCommunities = Array.isArray(communities)
+            ? communities.map(c => ({
+                name: String(c.title || c.name || '').trim(),
+                lat: Number(c.lat),
+                lng: Number(c.lng)
+            })).filter(c => c.name && !isNaN(c.lat) && !isNaN(c.lng))
+            : [];
 
-        const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工解析助手。
-以下是全車隊目前已標註的「鶯歌區社區大樓（橘色水滴）」清單（含名稱與精準經緯度）：
+        const communityListJson = JSON.stringify(validCommunities);
+
+        const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手，具備 Google 搜尋聯網能力（Google Search Grounding）。
+以下是全車隊目前已標註的「已標註社區大樓清單（共 ${validCommunities.length} 處）」（含社區名稱與精準 WGS84 經緯度）：
 ${communityListJson}
 
 以下是使用者貼上的今日大型家具派工單文字：
@@ -69,33 +88,21 @@ ${communityListJson}
 ${dispatchText.trim()}
 """
 
-請依序解析派工單中的每一個收運點位，並嚴格回傳 JSON 陣列。
-解析規則：
-1. order：從 1 開始依序編號 (1, 2, 3...)。
-2. rawName：該站在派工單上的原始名稱或地址文字（不含多餘編號前綴）。
-3. matchedCommunity：若該站名稱與上方「已標註社區大樓清單」中的某個社區名稱相同或高度相符（例如簡稱、漏字或包含社區名），請填入清單中該社區的完整 name；若不屬於清單中的社區大樓，請填寫空字串 ""。
-4. lat 與 lng：若 matchedCommunity 有命中上方社區大樓清單，請直接填入該社區大樓的精準 lat 與 lng 數值；若未命中社區大樓，請填 0。
-5. normalizedAddress：若為門牌地址或路名地標，請自動補全為「新北市鶯歌區...」開頭的完整標準地址（並將全形數字轉為半形阿拉伯數字，例如「新北市鶯歌區建國路120號」，移除樓層如「3樓」以利地圖門牌定位）；若已命中社區大樓，可填該社區名稱。
-6. isPureWood：布林值 (true/false)。只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌(標註木頭)」、「垃圾車支援」或「需垃圾車」等關鍵字，一律設為 true，否則設為 false。
-7. note：提取該站的家具品項、數量、樓層或聯絡備註（例如「沙發1組、床墊2張」或「純木頭衣櫃」），若無則填空字串 ""。`;
+請嚴格遵照以下步驟解析每一筆派工點位並查出真實經緯度：
+1. 優先比對附帶的「已標註社區大樓清單（${validCommunities.length} 處）」：若派工單上的名稱與清單中的社區相符或高度相似（例如簡稱或漏字），直接採用清單中的精準 lat、lng，並將 source 設為 "community"。
+2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：你必須使用 Google 搜尋（google_search）上網查詢「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請透過 Google 搜尋自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
+3. 純木頭判斷 (isPureWood)：只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌/木床（標明木頭）」、「垃圾車支援」或「需垃圾車」等關鍵字，請將 isPureWood 設為 true，否則設為 false。
+4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字），每筆物件必須包含以下欄位：
+   - order：順序（數字 1, 2, 3...）
+   - name：顯示名稱（字串，若有修正錯別字請顯示修正後的正確名稱或社區名）
+   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 上網查得）
+   - lat：緯度（數字，例如 24.95421）
+   - lng：經度（數字，例如 121.34612）
+   - isPureWood：是否純木頭需垃圾車支援（布林值 true 或 false）
+   - note：家具品項與數量備註（字串，例如 "沙發1組、床墊1張"，若無則為 ""）
 
-        const responseSchema = {
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: {
-                    order: { type: Type.INTEGER, description: '站點順序 (1, 2, 3...)' },
-                    rawName: { type: Type.STRING, description: '派工單上的原始地點或社區名稱' },
-                    matchedCommunity: { type: Type.STRING, description: '命中的已標註社區大樓名稱，未命中則為空字串' },
-                    lat: { type: Type.NUMBER, description: '命中的社區大樓精準緯度，未命中則為 0' },
-                    lng: { type: Type.NUMBER, description: '命中的社區大樓精準經度，未命中則為 0' },
-                    normalizedAddress: { type: Type.STRING, description: '補全為新北市鶯歌區開頭的標準門牌地址（不含樓層）' },
-                    isPureWood: { type: Type.BOOLEAN, description: '是否提及純木頭、木頭或需垃圾車支援' },
-                    note: { type: Type.STRING, description: '家具品項或備註說明' }
-                },
-                required: ['order', 'rawName', 'matchedCommunity', 'lat', 'lng', 'normalizedAddress', 'isPureWood', 'note']
-            }
-        };
+輸出範例格式：
+[{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
         const candidates = getModelCandidates(model);
         let lastErr = null;
@@ -107,12 +114,11 @@ ${dispatchText.trim()}
                     model: candidateModel,
                     contents: promptText,
                     config: {
-                        responseMimeType: 'application/json',
-                        responseSchema
+                        tools: [{ googleSearch: {} }]
                     }
                 });
-                const rawJson = (response.text || '[]').trim();
-                const parsed = JSON.parse(rawJson);
+                const rawText = (response.text || '[]').trim();
+                const parsed = extractJsonArrayFromText(rawText);
                 usedModel = candidateModel;
                 return res.json({
                     items: Array.isArray(parsed) ? parsed : [],
@@ -122,33 +128,121 @@ ${dispatchText.trim()}
                 lastErr = err;
                 const status = err?.status || err?.httpStatusCode || (String(err?.message || '').includes('429') ? 429 : 0);
                 const msg = String(err?.message || '');
-                // 若為 429 RESOURCE_EXHAUSTED 或 API Key 無效，不需換模型重試，直接回傳讓前端切換下一組 Key
                 if (status === 429 || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
                     return res.status(429).json({
-                        error: '目前啟用的 API Key 已達額度上限 (HTTP 429)',
+                        error: `HTTP 429 RESOURCE_EXHAUSTED：API Key 額度已達上限 (${msg.slice(0, 120)})`,
                         code: 'RESOURCE_EXHAUSTED'
                     });
                 }
                 if (status === 400 && (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))) {
                     return res.status(400).json({
-                        error: 'API Key 無效，請檢查管理員面板中的金鑰設定',
+                        error: 'HTTP 400 API_KEY_INVALID：API Key 無效，請檢查金鑰是否正確',
                         code: 'API_KEY_INVALID'
                     });
                 }
-                // 若為 404 模型名稱別名差異，繼續嘗試下一個候選模型
+                if (status === 403 || msg.includes('PERMISSION_DENIED')) {
+                    return res.status(403).json({
+                        error: `HTTP 403 PERMISSION_DENIED：API Key 權限遭拒 (${msg.slice(0, 120)})`,
+                        code: 'PERMISSION_DENIED'
+                    });
+                }
             }
         }
 
-        const errMsg = lastErr?.message || 'AI 解析失敗';
-        const is429 = String(errMsg).includes('429') || String(errMsg).includes('RESOURCE_EXHAUSTED');
-        return res.status(is429 ? 429 : 500).json({
-            error: errMsg,
-            code: is429 ? 'RESOURCE_EXHAUSTED' : 'GENERATION_FAILED'
+        const errMsg = lastErr?.message || 'AI 聯網解析失敗';
+        const statusCode = lastErr?.status || lastErr?.httpStatusCode || (String(errMsg).includes('429') ? 429 : 500);
+        return res.status(statusCode).json({
+            error: `HTTP ${statusCode}：${errMsg}`,
+            code: statusCode === 429 ? 'RESOURCE_EXHAUSTED' : 'GENERATION_FAILED'
         });
     } catch (err) {
         console.error('Gemini dispatch API error:', err);
         return res.status(500).json({
-            error: err?.message || '伺服器處理 AI 派工請求失敗'
+            error: `HTTP 500：${err?.message || '伺服器處理 AI 派工請求失敗'}`
+        });
+    }
+});
+
+// ⚡ 管理員測試 API Key 與 Google Search 聯網功能端點
+app.post('/api/gemini/test', async (req, res) => {
+    const startTime = Date.now();
+    try {
+        const {
+            apiKey: clientProvidedKey,
+            model = 'gemini-3.5-flash-lite'
+        } = req.body || {};
+
+        const effectiveApiKey = (clientProvidedKey && String(clientProvidedKey).trim()) || process.env.GEMINI_API_KEY;
+        if (!effectiveApiKey) {
+            return res.status(400).json({
+                ok: false,
+                error: 'HTTP 400 MISSING_API_KEY：未提供 API Key'
+            });
+        }
+
+        const ai = new GoogleGenAI({
+            apiKey: effectiveApiKey,
+            httpOptions: {
+                headers: {
+                    'User-Agent': 'aistudio-build'
+                }
+            }
+        });
+
+        const candidates = getModelCandidates(model);
+        let lastErr = null;
+
+        for (const candidateModel of candidates) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: candidateModel,
+                    contents: '請使用 Google 搜尋查詢「新北市鶯歌區公所」的經緯度座標，並只回傳一行 JSON：{"lat":24.95,"lng":121.35}',
+                    config: {
+                        tools: [{ googleSearch: {} }]
+                    }
+                });
+                const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+                return res.json({
+                    ok: true,
+                    usedModel: candidateModel,
+                    elapsedSec,
+                    sampleText: String(response.text || '').trim().slice(0, 120)
+                });
+            } catch (err) {
+                lastErr = err;
+                const status = err?.status || err?.httpStatusCode || 0;
+                const msg = String(err?.message || '');
+                if (status === 429 || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+                    return res.status(429).json({
+                        ok: false,
+                        error: 'HTTP 429 RESOURCE_EXHAUSTED：此組 API Key 額度已滿或受速率限制'
+                    });
+                }
+                if (status === 400 && (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))) {
+                    return res.status(400).json({
+                        ok: false,
+                        error: 'HTTP 400 API_KEY_INVALID：API Key 無效或格式錯誤'
+                    });
+                }
+                if (status === 403 || msg.includes('PERMISSION_DENIED')) {
+                    return res.status(403).json({
+                        ok: false,
+                        error: `HTTP 403 PERMISSION_DENIED：權限不足 (${msg.slice(0, 100)})`
+                    });
+                }
+            }
+        }
+
+        const errMsg = lastErr?.message || '未知連線錯誤';
+        const code = lastErr?.status || lastErr?.httpStatusCode || 500;
+        return res.status(code).json({
+            ok: false,
+            error: `HTTP ${code}：${errMsg}`
+        });
+    } catch (err) {
+        return res.status(500).json({
+            ok: false,
+            error: `HTTP 500：${err?.message || '伺服器測試連線失敗'}`
         });
     }
 });

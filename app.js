@@ -1,11 +1,11 @@
 // ==========================================
 // 🔑 雲端路線庫管理員密碼與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.25';
+const APP_VERSION = 'v3.26';
 window.APP_VERSION = APP_VERSION;
 const ADMIN_PASSWORD = '5201314';
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.25
+// 確保畫面上所有版本號膠囊同步顯示為 v3.26
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -2237,32 +2237,234 @@ function addPinMarker(lngLat, htmlContent) {
     domMarkers.push(m);
 }
 
-// --- 4. 紀錄路線 ---
+// --- 4. 紀錄路線（v3.26 三欄防誤觸橫排：左欄停止紀錄長按 1 秒＋確認 ｜ 中欄 GPS 精度隔離牆 ｜ 右欄音樂開關高頻盲操） ---
 const musicToggleBtn = document.getElementById('musicToggleBtn');
+const stopRecordBtn = document.getElementById('stopRecordBtn');
+const stopRecordProgressFill = document.getElementById('stopRecordProgressFill');
+const stopRecordSubHint = document.getElementById('stopRecordSubHint');
+
 function renderMusicButtonState() {
+    if (!musicToggleBtn) return;
     const icon = document.getElementById('musicBtnIcon');
     const text = document.getElementById('musicBtnText');
+    const subHint = document.getElementById('musicBtnSubHint');
     if (musicActive) {
-        musicToggleBtn.className = "flex-1 bg-green-600 text-white font-extrabold py-2.5 px-3 rounded-2xl flex items-center justify-center gap-2 shadow-lg animate-pulse active:scale-95 transition-all";
-        icon.className = "fa-solid fa-music text-base"; text.innerText = "音樂播放中 (點擊關閉)";
+        musicToggleBtn.className = "w-full bg-green-600 text-white font-black py-2 px-1.5 rounded-2xl flex flex-col items-center justify-center shadow-lg animate-pulse active:scale-95 transition-all select-none";
+        if (icon) icon.className = "fa-solid fa-volume-high text-xs";
+        if (text) text.innerText = "🔊 音樂播放中";
+        if (subHint) {
+            subHint.innerText = "點擊切換關閉";
+            subHint.className = "text-[9px] text-green-100 font-bold leading-tight mt-0.5 truncate max-w-full";
+        }
     } else {
-        musicToggleBtn.className = "flex-1 bg-gray-700 text-white font-extrabold py-2.5 px-3 rounded-2xl flex items-center justify-center gap-2 shadow-inner active:scale-95 transition-all";
-        icon.className = "fa-solid fa-volume-xmark text-base"; text.innerText = "音樂關閉中 (點擊開啟)";
+        musicToggleBtn.className = "w-full bg-gray-700 text-white font-black py-2 px-1.5 rounded-2xl flex flex-col items-center justify-center shadow-inner active:scale-95 transition-all select-none";
+        if (icon) icon.className = "fa-solid fa-volume-xmark text-xs";
+        if (text) text.innerText = "🔇 音樂關閉中";
+        if (subHint) {
+            subHint.innerText = "點擊切換開啟";
+            subHint.className = "text-[9px] text-gray-300 font-bold leading-tight mt-0.5 truncate max-w-full";
+        }
     }
 }
 
-musicToggleBtn.onclick = () => {
+if (musicToggleBtn) {
+    musicToggleBtn.onclick = () => {
+        if (!isRecording) return;
+        musicActive = !musicActive;
+        renderMusicButtonState();
+        vibrate(25);
+        const evtType = musicActive ? 'on' : 'off';
+        musicEvents.push({ type: evtType, lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], bearing: currentHeading });
+
+        const badgeHtml = musicActive
+            ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開音樂</div>`
+            : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關音樂</div>`;
+        addPinMarker(lastKnownLngLat, badgeHtml);
+    };
+}
+
+function restoreIdleRecordingUILayout() {
+    document.getElementById('recordingTopRow')?.classList.add('hidden');
+    document.getElementById('idleTopRow')?.classList.remove('hidden');
+    document.getElementById('idleActionRow')?.classList.remove('hidden');
+    document.getElementById('startManualDrawBtn')?.classList.remove('hidden');
+    const recBtn = document.getElementById('recordBtn');
+    if (recBtn) {
+        recBtn.classList.remove('bg-red-600');
+        recBtn.classList.add('bg-green-700');
+        const iconEl = recBtn.querySelector('i');
+        if (iconEl) {
+            iconEl.classList.remove('fa-stop');
+            iconEl.classList.add('fa-play');
+        }
+    }
+    const recBtnText = document.getElementById('recordBtnText');
+    if (recBtnText) recBtnText.innerText = '開始紀錄路線';
+    const titleEl = document.getElementById('appStatusTitle');
+    if (titleEl) titleEl.innerText = '鶯歌清運路線助手 Pro Max';
+}
+
+async function stopAndSaveActiveRecording() {
     if (!isRecording) return;
-    musicActive = !musicActive;
-    renderMusicButtonState();
-    const evtType = musicActive ? 'on' : 'off';
-    musicEvents.push({ type: evtType, lng: lastKnownLngLat[0], lat: lastKnownLngLat[1], bearing: currentHeading });
-    
-    const badgeHtml = musicActive 
-        ? `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開音樂</div>`
-        : `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關音樂</div>`;
-    addPinMarker(lastKnownLngLat, badgeHtml);
-};
+
+    // 二次確認彈窗（「確定要結束紀錄並儲存路線嗎？」）
+    if (!confirm("確定要結束紀錄並儲存路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) {
+        return;
+    }
+
+    // 當有效軌跡點不足 2 點（例如靜止測試 0.00 km）時，直接停止錄製狀態、安全釋放 WakeLock 並彈出明確提示
+    if (routePoints.length < 2) {
+        isRecording = false;
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+        if (timerInterval !== null) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+        try {
+            if (wakeLock) {
+                await wakeLock.release();
+                wakeLock = null;
+            }
+        } catch (err) {
+            wakeLock = null;
+        }
+        await releaseScreenWakeLockIfIdle(true);
+
+        clearDomMarkers();
+        updateRouteLayers([]);
+        document.getElementById('distanceText').innerText = '0.00';
+        document.getElementById('timeText').innerText = '00:00:00';
+        document.getElementById('speedText').innerText = '0.0';
+
+        restoreIdleRecordingUILayout();
+        showNavAlert('移動距離過短（不足 2 個軌跡點），已取消本次紀錄');
+        startIdleGPS();
+        return;
+    }
+
+    isRecording = false;
+    if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+    if (timerInterval !== null) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+    try {
+        if (wakeLock) {
+            await wakeLock.release();
+            wakeLock = null;
+        }
+    } catch (err) {
+        wakeLock = null;
+    }
+    await releaseScreenWakeLockIfIdle(true);
+
+    restoreIdleRecordingUILayout();
+
+    const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
+    if (name) {
+        const savedAuthor = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
+        const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
+        localStorage.setItem('yinggeRouteLastAuthor', author);
+
+        const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
+        const nowId = Date.now();
+        savedRoutes.unshift({
+            id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
+            routeVersion: 1, updatedAt: nowId,
+            date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            createdAt: new Date(nowId).toISOString(),
+            distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
+            points: routePoints, events: musicEvents,
+            alerts: [], warnings: []
+        });
+        localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
+        try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
+        document.getElementById('historyCount').innerText = savedRoutes.length;
+        window.openRouteDetail(0);
+    }
+    startIdleGPS();
+}
+
+// 綁定左欄「⏹️ 停止紀錄並儲存」按鈕：長按 1 秒（顯示進度填充動畫）＋跳出二次確認彈窗雙重防誤觸保護
+(function setupStopRecordLongPressProtection() {
+    if (!stopRecordBtn) return;
+    let holdTimer = null;
+    let holdTriggered = false;
+    let isPressing = false;
+
+    function resetHoldVisual(customHint) {
+        if (holdTimer) {
+            clearTimeout(holdTimer);
+            holdTimer = null;
+        }
+        isPressing = false;
+        if (stopRecordProgressFill) {
+            stopRecordProgressFill.style.transition = 'width 120ms ease-out';
+            stopRecordProgressFill.style.width = '0%';
+        }
+        if (stopRecordSubHint) {
+            stopRecordSubHint.innerText = customHint || '長按 1 秒防誤觸';
+        }
+    }
+
+    function startHold(e) {
+        if (!isRecording) return;
+        if (e.type === 'mousedown' && e.button !== 0) return;
+        isPressing = true;
+        holdTriggered = false;
+        if (holdTimer) clearTimeout(holdTimer);
+
+        if (stopRecordSubHint) {
+            stopRecordSubHint.innerText = '⏳ 按住滿 1 秒停止...';
+        }
+        if (stopRecordProgressFill) {
+            stopRecordProgressFill.style.transition = 'none';
+            stopRecordProgressFill.style.width = '0%';
+            void stopRecordProgressFill.offsetWidth;
+            stopRecordProgressFill.style.transition = 'width 1000ms linear';
+            stopRecordProgressFill.style.width = '100%';
+        }
+
+        holdTimer = setTimeout(() => {
+            if (!isPressing || !isRecording) return;
+            holdTriggered = true;
+            vibrate([45, 30, 45]);
+            resetHoldVisual('長按 1 秒防誤觸');
+            stopAndSaveActiveRecording();
+        }, 1000);
+    }
+
+    function endHold(e) {
+        if (!isPressing) return;
+        const wasTriggered = holdTriggered;
+        resetHoldVisual(wasTriggered ? '長按 1 秒防誤觸' : '⚠️ 請按住滿 1 秒');
+        if (!wasTriggered && isRecording) {
+            vibrate(15);
+            showNavAlert('🛡️', '防誤觸保護：請按住左側「停止紀錄」滿 1 秒以結束錄製', 'bg-rose-600');
+            setTimeout(() => {
+                if (stopRecordSubHint && isRecording && !isPressing) {
+                    stopRecordSubHint.innerText = '長按 1 秒防誤觸';
+                }
+            }, 1800);
+        }
+    }
+
+    stopRecordBtn.addEventListener('touchstart', startHold, { passive: true });
+    stopRecordBtn.addEventListener('touchend', endHold, { passive: true });
+    stopRecordBtn.addEventListener('touchcancel', () => resetHoldVisual('長按 1 秒防誤觸'), { passive: true });
+    stopRecordBtn.addEventListener('mousedown', startHold);
+    stopRecordBtn.addEventListener('mouseup', endHold);
+    stopRecordBtn.addEventListener('mouseleave', () => {
+        if (isPressing && !holdTriggered) resetHoldVisual('長按 1 秒防誤觸');
+    });
+})();
 
 document.getElementById('recordBtn').onclick = async () => {
     stopIdleGPS();
@@ -2283,12 +2485,16 @@ document.getElementById('recordBtn').onclick = async () => {
         map.getSource('bg-route')?.setData(emptyGeoJSON());
         startTime = Date.now();
 
-        document.getElementById('idleTopRow').classList.add('hidden');
-        document.getElementById('recordingTopRow').classList.remove('hidden');
-        document.getElementById('startManualDrawBtn')?.classList.add('hidden');
-        document.getElementById('recordBtn').classList.replace('bg-green-700', 'bg-red-600');
-        document.getElementById('recordBtnText').innerText = '停止紀錄並儲存';
-        document.getElementById('recordBtn').querySelector('i').classList.replace('fa-play', 'fa-stop');
+        document.getElementById('idleTopRow')?.classList.add('hidden');
+        document.getElementById('idleActionRow')?.classList.add('hidden');
+        document.getElementById('recordingTopRow')?.classList.remove('hidden');
+        if (stopRecordProgressFill) {
+            stopRecordProgressFill.style.transition = 'none';
+            stopRecordProgressFill.style.width = '0%';
+        }
+        if (stopRecordSubHint) {
+            stopRecordSubHint.innerText = '長按 1 秒防誤觸';
+        }
         document.getElementById('appStatusTitle').innerText = '路線紀錄中...';
         setCameraFollow(true);
 
@@ -2366,99 +2572,7 @@ document.getElementById('recordBtn').onclick = async () => {
         }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
 
     } else {
-        // 當有效軌跡點不足 2 點（例如靜止測試 0.00 km）時，直接停止錄製狀態、安全釋放 WakeLock 並彈出明確提示
-        if (routePoints.length < 2) {
-            isRecording = false;
-            if (watchId !== null) {
-                navigator.geolocation.clearWatch(watchId);
-                watchId = null;
-            }
-            if (timerInterval !== null) {
-                clearInterval(timerInterval);
-                timerInterval = null;
-            }
-            try {
-                if (wakeLock) {
-                    await wakeLock.release();
-                    wakeLock = null;
-                }
-            } catch (err) {
-                wakeLock = null;
-            }
-            await releaseScreenWakeLockIfIdle(true);
-
-            clearDomMarkers();
-            updateRouteLayers([]);
-            document.getElementById('distanceText').innerText = '0.00';
-            document.getElementById('timeText').innerText = '00:00:00';
-            document.getElementById('speedText').innerText = '0.0';
-
-            document.getElementById('recordingTopRow').classList.add('hidden');
-            document.getElementById('idleTopRow').classList.remove('hidden');
-            document.getElementById('startManualDrawBtn')?.classList.remove('hidden');
-            document.getElementById('recordBtn').classList.replace('bg-red-600', 'bg-green-700');
-            document.getElementById('recordBtnText').innerText = '開始紀錄路線';
-            document.getElementById('recordBtn').querySelector('i').classList.replace('fa-stop', 'fa-play');
-            document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
-
-            showNavAlert('移動距離過短（不足 2 個軌跡點），已取消本次紀錄');
-            startIdleGPS();
-            return;
-        }
-
-        if (!confirm("確定要「停止紀錄並儲存」這條路線嗎？\n\n(按「取消」可返回地圖繼續錄製)")) return;
-
-        isRecording = false;
-        if (watchId !== null) {
-            navigator.geolocation.clearWatch(watchId);
-            watchId = null;
-        }
-        if (timerInterval !== null) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-        }
-        try {
-            if (wakeLock) {
-                await wakeLock.release();
-                wakeLock = null;
-            }
-        } catch (err) {
-            wakeLock = null;
-        }
-        await releaseScreenWakeLockIfIdle(true);
-
-        document.getElementById('recordingTopRow').classList.add('hidden');
-        document.getElementById('idleTopRow').classList.remove('hidden');
-        document.getElementById('startManualDrawBtn')?.classList.remove('hidden');
-        document.getElementById('recordBtn').classList.replace('bg-red-600', 'bg-green-700');
-        document.getElementById('recordBtnText').innerText = '開始紀錄路線';
-        document.getElementById('recordBtn').querySelector('i').classList.replace('fa-stop', 'fa-play');
-        document.getElementById('appStatusTitle').innerText = '鶯歌清運路線助手 Pro Max';
-
-        const defaultName = "鶯歌路線 " + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-        const name = prompt("路線紀錄完成！請輸入路線名稱（如：尖山線第一趟）：", defaultName);
-        if (name) {
-            const savedAuthor = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '凱哥';
-            const author = prompt("請輸入這條路線的創作者署名：", savedAuthor) || "熱心隊員";
-            localStorage.setItem('yinggeRouteLastAuthor', author);
-
-            const mins = Math.floor(elapsedSec / 60), secs = elapsedSec % 60;
-            const nowId = Date.now();
-            savedRoutes.unshift({
-                id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
-                routeVersion: 1, updatedAt: nowId,
-                date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                createdAt: new Date(nowId).toISOString(),
-                distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
-                points: routePoints, events: musicEvents,
-                alerts: [], warnings: []
-            });
-            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
-            try { localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes)); } catch (e) {}
-            document.getElementById('historyCount').innerText = savedRoutes.length;
-            window.openRouteDetail(0);
-        }
-        startIdleGPS();
+        await stopAndSaveActiveRecording();
     }
 };
 
@@ -2545,7 +2659,7 @@ function renderHistoryList() {
             : `<div class="text-xs text-gray-400 mt-0.5 mb-1">${r.date || ''}</div>`;
 
         card.innerHTML = `
-            <div class="drag-handle text-gray-300 w-7 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0">
+            <div class="drag-handle text-gray-300 w-7 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0" title="長按 0.5 秒解鎖拖曳排序">
                 <i class="fa-solid fa-grip-vertical text-xl"></i>
             </div>
             <div class="route-card-info flex-1 min-w-0 py-1 cursor-pointer">
@@ -2603,8 +2717,22 @@ function renderHistoryList() {
 
     if (window.sortableInstance) window.sortableInstance.destroy();
     window.sortableInstance = new Sortable(list, {
-        handle: '.drag-handle', animation: 200, ghostClass: 'opacity-50',
+        handle: '.drag-handle',
+        delay: 500, // 必須按住左側 ⋮⋮ 六點抓手滿 0.5 秒才正式解除鎖定進入拖曳排序
+        delayOnTouchOnly: false,
+        touchStartThreshold: 8, // 期間手指上下移動超過 8px 立即取消計時並改為正常捲動列表
+        animation: 200,
+        ghostClass: 'opacity-50',
+        chosenClass: 'route-card-drag-unlocked',
+        onChoose: function (evt) {
+            try { vibrate(35); } catch (e) {}
+            if (evt.item) evt.item.classList.add('route-card-drag-unlocked');
+        },
+        onUnchoose: function (evt) {
+            if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
+        },
         onEnd: function (evt) {
+            if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
             if (evt.oldIndex === evt.newIndex) return;
             const fromIdx = filteredRoutes[evt.oldIndex]?.originalIdx;
             const toIdx = filteredRoutes[evt.newIndex]?.originalIdx;
@@ -3262,30 +3390,114 @@ function updateEditorLiveStatsUI(route) {
     if (detailDistEl) detailDistEl.innerText = `${route.distance} km`;
 }
 
-function updateNodeTrimPanelUI(route) {
-    if (!nodeTrimActionPanel) return;
-    if (!isEditingMode || editSubMode !== 'path' || !route || !Array.isArray(route.points) || selectedEditNodeIdx < 0 || selectedEditNodeIdx >= route.points.length) {
-        nodeTrimActionPanel.classList.add('hidden');
-        return;
-    }
-    nodeTrimActionPanel.classList.remove('hidden');
-    const total = route.points.length;
-    let roleLabel = '';
-    if (selectedEditNodeIdx === 0) roleLabel = '（起點 S）';
-    else if (selectedEditNodeIdx === total - 1) roleLabel = '（終點 E）';
-    if (selectedNodeInfoText) {
-        selectedNodeInfoText.textContent = `🎯 已選取節點 #${selectedEditNodeIdx + 1} / 共 ${total} 點 ${roleLabel}`;
+let activeNodeTrimBubbleMarker = null;
+let activeNodeTrimBubblePlacedBelow = false;
+
+function removeActiveNodeTrimBubble() {
+    if (activeNodeTrimBubbleMarker) {
+        try { activeNodeTrimBubbleMarker.remove(); } catch (e) {}
+        activeNodeTrimBubbleMarker = null;
     }
 }
 
-if (btnCloseNodeTrimPanel) {
-    btnCloseNodeTrimPanel.onclick = () => {
+function updateNodeTrimPanelUI(route) {
+    removeActiveNodeTrimBubble();
+    if (!isEditingMode || editSubMode !== 'path' || !route || !Array.isArray(route.points) || selectedEditNodeIdx < 0 || selectedEditNodeIdx >= route.points.length) {
+        return;
+    }
+
+    const pt = route.points[selectedEditNodeIdx];
+    if (!pt || typeof pt.lng !== 'number' || typeof pt.lat !== 'number') return;
+
+    // 判斷節點是否靠近螢幕上緣（y < 140px 時自動改為彈出在節點正下方）
+    let placeBelow = false;
+    try {
+        const screenPt = map.project([pt.lng, pt.lat]);
+        if (screenPt && screenPt.y < 140) {
+            placeBelow = true;
+        }
+    } catch (e) {}
+    activeNodeTrimBubblePlacedBelow = placeBelow;
+
+    const wrapperEl = document.createElement('div');
+    wrapperEl.className = 'node-trim-bubble-wrapper';
+
+    const cardEl = document.createElement('div');
+    cardEl.className = 'node-trim-bubble-card';
+    cardEl.innerHTML = `
+        <span class="text-amber-300 font-black text-[11px] px-1.5 select-none">#${selectedEditNodeIdx + 1}</span>
+        <span class="text-slate-500 text-[10px] select-none">｜</span>
+        <button type="button" data-trim-act="delete" class="text-white hover:text-amber-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-amber-600/85 hover:bg-amber-600 transition-all">🗑️ 刪點</button>
+        <span class="text-slate-500 text-[10px] select-none">｜</span>
+        <button type="button" data-trim-act="before" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪前</button>
+        <span class="text-slate-500 text-[10px] select-none">｜</span>
+        <button type="button" data-trim-act="after" class="text-white hover:text-rose-200 active:scale-95 font-black text-[11px] px-1.5 py-0.5 rounded-full bg-rose-600/85 hover:bg-rose-600 transition-all">✂️ 刪後</button>
+        <span class="text-slate-500 text-[10px] select-none">｜</span>
+        <button type="button" data-trim-act="close" class="text-slate-300 hover:text-white active:scale-90 font-black text-xs w-5 h-5 rounded-full bg-slate-700/90 flex items-center justify-center transition-all" title="收起">✕</button>
+    `;
+
+    const arrowEl = document.createElement('div');
+    arrowEl.className = placeBelow ? 'node-trim-bubble-arrow-up' : 'node-trim-bubble-arrow-down';
+
+    if (placeBelow) {
+        wrapperEl.appendChild(arrowEl);
+        wrapperEl.appendChild(cardEl);
+    } else {
+        wrapperEl.appendChild(cardEl);
+        wrapperEl.appendChild(arrowEl);
+    }
+
+    // 阻止氣泡點擊穿透至底層地圖
+    ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'pointerdown'].forEach(evtName => {
+        wrapperEl.addEventListener(evtName, (ev) => ev.stopPropagation());
+    });
+
+    cardEl.querySelector('[data-trim-act="delete"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        executeDeleteSingleSelectedNode();
+    });
+    cardEl.querySelector('[data-trim-act="before"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        executeTrimBeforeSelectedNode();
+    });
+    cardEl.querySelector('[data-trim-act="after"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        executeTrimAfterSelectedNode();
+    });
+    cardEl.querySelector('[data-trim-act="close"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
         selectedEditNodeIdx = -1;
-        const route = getActiveWorkingRoute();
-        updateNodeTrimPanelUI(route);
-        if (route) renderPathEditNodes(route);
-    };
+        const curRoute = getActiveWorkingRoute();
+        updateNodeTrimPanelUI(curRoute);
+        if (curRoute) renderPathEditNodes(curRoute);
+    });
+
+    activeNodeTrimBubbleMarker = new maplibregl.Marker({
+        element: wrapperEl,
+        anchor: placeBelow ? 'top' : 'bottom',
+        offset: placeBelow ? [0, 14] : [0, -14],
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    })
+        .setLngLat([pt.lng, pt.lat])
+        .addTo(map);
 }
+
+// 當鏡頭移動結束後，若選取節點靠近螢幕頂部狀態改變，自動翻轉氣泡上下方向
+map.on('moveend', () => {
+    if (!activeNodeTrimBubbleMarker || !isEditingMode || editSubMode !== 'path') return;
+    const route = getActiveWorkingRoute();
+    if (!route || !Array.isArray(route.points) || selectedEditNodeIdx < 0 || selectedEditNodeIdx >= route.points.length) return;
+    const pt = route.points[selectedEditNodeIdx];
+    if (!pt) return;
+    try {
+        const screenPt = map.project([pt.lng, pt.lat]);
+        const shouldPlaceBelow = Boolean(screenPt && screenPt.y < 140);
+        if (shouldPlaceBelow !== activeNodeTrimBubblePlacedBelow) {
+            updateNodeTrimPanelUI(route);
+        }
+    } catch (e) {}
+});
 
 // 重新計算路線總距離、每個軌跡點的車頭角 bearing，並重新綁定所有語音標記點與時刻站牌的路徑索引 ptIdx
 // 若 dropTrimmedOutliers = true（例如修剪頭尾後），自動剔除距離剩餘路線超過 55 公尺的已裁切區段標記點
@@ -3591,6 +3803,9 @@ function renderPathEditNodes(route) {
             }
 
             updateRouteLayers(route.points, 25);
+            if (activeNodeTrimBubbleMarker && selectedEditNodeIdx === ptIdx) {
+                activeNodeTrimBubbleMarker.setLngLat([newLng, newLat]);
+            }
         });
 
         m.on('dragend', () => {
@@ -3613,7 +3828,7 @@ function renderPathEditNodes(route) {
             updateNodeTrimPanelUI(route);
             const promptEl = document.getElementById('editPromptText');
             if (promptEl) {
-                promptEl.innerText = `🎯 已選取節點 #${ptIdx + 1}：可於下方選單刪除此點或修剪頭尾多餘路線`;
+                promptEl.innerText = `🎯 已選取節點 #${ptIdx + 1}：可直接於節點懸浮氣泡刪點或修剪頭尾`;
             }
         });
 
@@ -3814,147 +4029,145 @@ function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
 }
 
 // ==========================================
-// ✂️ 刪除多餘路線（單點刪除 ／ 刪除此點之前 ／ 刪除此點之後）
+// ✂️ 刪除多餘路線（單點刪除 ／ 刪除此點之前 ／ 刪除此點之後 — 供跟隨節點懸浮修剪氣泡呼叫）
 // ==========================================
-if (btnDeleteSingleNode) {
-    btnDeleteSingleNode.onclick = () => {
-        const route = getActiveWorkingRoute();
-        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
-        const pts = route.points;
-        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
-        if (pts.length <= 2) {
-            alert('⚠️ 路線至少需保留 2 個軌跡點，無法再刪除節點！');
-            return;
-        }
+function executeDeleteSingleSelectedNode() {
+    const route = getActiveWorkingRoute();
+    if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+    const pts = route.points;
+    if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+    if (pts.length <= 2) {
+        alert('⚠️ 路線至少需保留 2 個軌跡點，無法再刪除節點！');
+        return;
+    }
 
-        pushEditUndoSnapshot(route);
+    pushEditUndoSnapshot(route);
 
-        // 若為密集軌跡中的關鍵轉折點，找出前後相鄰關鍵點並一併抹平該偏移區段；若為一般點則直接移除該點
-        const keyIndices = computeRouteKeyNodeIndices(pts);
-        const kPos = keyIndices.indexOf(selectedEditNodeIdx);
-        const removedNodeNum = selectedEditNodeIdx + 1;
+    // 若為密集軌跡中的關鍵轉折點，找出前後相鄰關鍵點並一併抹平該偏移區段；若為一般點則直接移除該點
+    const keyIndices = computeRouteKeyNodeIndices(pts);
+    const kPos = keyIndices.indexOf(selectedEditNodeIdx);
+    const removedNodeNum = selectedEditNodeIdx + 1;
 
-        if (kPos > 0 && kPos < keyIndices.length - 1 && (keyIndices[kPos + 1] - keyIndices[kPos - 1] > 2) && (pts.length > 45)) {
-            const prevIdx = keyIndices[kPos - 1];
-            const nextIdx = keyIndices[kPos + 1];
-            const removeCount = nextIdx - prevIdx - 1;
-            if (pts.length - removeCount >= 2) {
-                pts.splice(prevIdx + 1, removeCount);
-                selectedEditNodeIdx = Math.min(prevIdx, pts.length - 1);
-            } else {
-                pts.splice(selectedEditNodeIdx, 1);
-                selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
-            }
+    if (kPos > 0 && kPos < keyIndices.length - 1 && (keyIndices[kPos + 1] - keyIndices[kPos - 1] > 2) && (pts.length > 45)) {
+        const prevIdx = keyIndices[kPos - 1];
+        const nextIdx = keyIndices[kPos + 1];
+        const removeCount = nextIdx - prevIdx - 1;
+        if (pts.length - removeCount >= 2) {
+            pts.splice(prevIdx + 1, removeCount);
+            selectedEditNodeIdx = Math.min(prevIdx, pts.length - 1);
         } else {
             pts.splice(selectedEditNodeIdx, 1);
             selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
         }
+    } else {
+        pts.splice(selectedEditNodeIdx, 1);
+        selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
+    }
 
-        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
-        vibrate(35);
-        updateRouteLayers(route.points);
-        renderEditableRouteMarkers(route);
-        renderPathEditNodes(route);
-        updateNodeTrimPanelUI(route);
+    syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+    vibrate(35);
+    updateRouteLayers(route.points);
+    renderEditableRouteMarkers(route);
+    renderPathEditNodes(route);
+    updateNodeTrimPanelUI(route);
 
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl) {
-            promptEl.innerText = `🗑️ 已刪除偏移節點 #${removedNodeNum}（目前總距離 ${route.distance} km）`;
-        }
-    };
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `🗑️ 已刪除偏移節點 #${removedNodeNum}（目前總距離 ${route.distance} km）`;
+    }
 }
 
-if (btnTrimBeforeNode) {
-    btnTrimBeforeNode.onclick = () => {
-        const route = getActiveWorkingRoute();
-        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
-        const pts = route.points;
-        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+function executeTrimBeforeSelectedNode() {
+    const route = getActiveWorkingRoute();
+    if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+    const pts = route.points;
+    if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
 
-        if (selectedEditNodeIdx === 0) {
-            alert('ℹ️ 目前選取的已經是路線「起點 (S)」，前方沒有多餘路線可刪除！');
-            return;
-        }
-        if (pts.length - selectedEditNodeIdx < 2) {
-            alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更前面的節點。');
-            return;
-        }
+    if (selectedEditNodeIdx === 0) {
+        alert('ℹ️ 目前選取的已經是路線「起點 (S)」，前方沒有多餘路線可刪除！');
+        return;
+    }
+    if (pts.length - selectedEditNodeIdx < 2) {
+        alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更前面的節點。');
+        return;
+    }
 
-        const cutCount = selectedEditNodeIdx;
-        pushEditUndoSnapshot(route);
+    const cutCount = selectedEditNodeIdx;
+    pushEditUndoSnapshot(route);
 
-        pts.splice(0, cutCount);
-        pts[0].isKeyNode = true;
-        selectedEditNodeIdx = 0;
+    pts.splice(0, cutCount);
+    pts[0].isKeyNode = true;
+    selectedEditNodeIdx = 0;
 
-        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
-        vibrate([40, 30, 40]);
-        updateRouteLayers(route.points);
-        renderEditableRouteMarkers(route);
-        renderPathEditNodes(route);
-        updateNodeTrimPanelUI(route);
+    syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+    vibrate([40, 30, 40]);
+    updateRouteLayers(route.points);
+    renderEditableRouteMarkers(route);
+    renderPathEditNodes(route);
+    updateNodeTrimPanelUI(route);
 
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl) {
-            promptEl.innerText = `✂️ 已修剪開頭多餘路線（刪除前 ${cutCount} 點，新總距離 ${route.distance} km）`;
-        }
-    };
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `✂️ 已修剪開頭多餘路線（刪除前 ${cutCount} 點，新總距離 ${route.distance} km）`;
+    }
 }
 
-if (btnTrimAfterNode) {
-    btnTrimAfterNode.onclick = () => {
-        const route = getActiveWorkingRoute();
-        if (!isEditingMode || !route || !Array.isArray(route.points)) return;
-        const pts = route.points;
-        if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+function executeTrimAfterSelectedNode() {
+    const route = getActiveWorkingRoute();
+    if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+    const pts = route.points;
+    if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
 
-        if (selectedEditNodeIdx === pts.length - 1) {
-            alert('ℹ️ 目前選取的已經是路線「終點 (E)」，後方沒有多餘路線可刪除！');
-            return;
-        }
-        if (selectedEditNodeIdx < 1) {
-            alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更後面的節點。');
-            return;
-        }
+    if (selectedEditNodeIdx === pts.length - 1) {
+        alert('ℹ️ 目前選取的已經是路線「終點 (E)」，後方沒有多餘路線可刪除！');
+        return;
+    }
+    if (selectedEditNodeIdx < 1) {
+        alert('⚠️ 修剪後路線至少需保留 2 個軌跡點！請選擇更後面的節點。');
+        return;
+    }
 
-        const cutCount = (pts.length - 1) - selectedEditNodeIdx;
-        pushEditUndoSnapshot(route);
+    const cutCount = (pts.length - 1) - selectedEditNodeIdx;
+    pushEditUndoSnapshot(route);
 
-        pts.splice(selectedEditNodeIdx + 1, cutCount);
-        pts[pts.length - 1].isKeyNode = true;
-        selectedEditNodeIdx = pts.length - 1;
+    pts.splice(selectedEditNodeIdx + 1, cutCount);
+    pts[pts.length - 1].isKeyNode = true;
+    selectedEditNodeIdx = pts.length - 1;
 
-        syncRouteMarkersAndIndicesAfterSpline(route, null, true);
-        vibrate([40, 30, 40]);
-        updateRouteLayers(route.points);
-        renderEditableRouteMarkers(route);
-        renderPathEditNodes(route);
-        updateNodeTrimPanelUI(route);
+    syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+    vibrate([40, 30, 40]);
+    updateRouteLayers(route.points);
+    renderEditableRouteMarkers(route);
+    renderPathEditNodes(route);
+    updateNodeTrimPanelUI(route);
 
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl) {
-            promptEl.innerText = `✂️ 已修剪尾端多餘路線（刪除後 ${cutCount} 點，新總距離 ${route.distance} km）`;
-        }
-    };
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `✂️ 已修剪尾端多餘路線（刪除後 ${cutCount} 點，新總距離 ${route.distance} km）`;
+    }
 }
+
+if (btnDeleteSingleNode) btnDeleteSingleNode.onclick = executeDeleteSingleSelectedNode;
+if (btnTrimBeforeNode) btnTrimBeforeNode.onclick = executeTrimBeforeSelectedNode;
+if (btnTrimAfterNode) btnTrimAfterNode.onclick = executeTrimAfterSelectedNode;
 
 function setEditSubMode(mode) {
     editSubMode = mode;
     ensureEditorMapZoomEnabled();
     try { map.dragPan.enable(); } catch (e) {}
 
-    const inactiveClass = "text-gray-600 hover:bg-white/70 font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
+    const inactiveClass = "text-gray-600 hover:bg-white/70 font-black text-[11px] px-1 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
     if (modePathBtn) modePathBtn.className = (mode === 'path')
-        ? "bg-emerald-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-emerald-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeFreehandBtn) modeFreehandBtn.className = (mode === 'freehand')
-        ? "bg-orange-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-orange-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeMarkerBtn) modeMarkerBtn.className = (mode === 'marker')
-        ? "bg-blue-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-blue-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeCalloutBtn) modeCalloutBtn.className = (mode === 'callout')
-        ? "bg-rose-600 text-white font-extrabold text-[11px] sm:text-xs px-1.5 py-2 rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-rose-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
 
     const promptEl = document.getElementById('editPromptText');
@@ -5043,7 +5256,7 @@ map.on('click', (e) => {
             updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         }
     } else if (editSubMode === 'path') {
-        // 點擊軌跡線條時：自動選取最近的節點（若距離過遠則不動作），並展開快速修剪選單
+        // 點擊軌跡線條時：自動選取最近的節點並彈出跟隨節點的迷你懸浮修剪氣泡；若點擊地圖空白處則收起氣泡並取消選取
         let minDistToNode = Infinity;
         let closestNodeIdx = -1;
         for (let i = 0; i < route.points.length; i++) {
@@ -5054,7 +5267,18 @@ map.on('click', (e) => {
             }
         }
 
-        if (minDistToNode > 45 || closestNodeIdx === -1) return;
+        if (minDistToNode > 38 || closestNodeIdx === -1) {
+            if (selectedEditNodeIdx !== -1) {
+                selectedEditNodeIdx = -1;
+                renderPathEditNodes(route);
+                updateNodeTrimPanelUI(route);
+                const promptEl = document.getElementById('editPromptText');
+                if (promptEl) {
+                    promptEl.innerText = "🖐️ 按住節點可拖曳微調，點擊「+」插入轉折點，點擊節點可刪除或修剪頭尾";
+                }
+            }
+            return;
+        }
 
         route.points[closestNodeIdx].isKeyNode = true;
         selectedEditNodeIdx = closestNodeIdx;
@@ -5063,7 +5287,7 @@ map.on('click', (e) => {
         updateNodeTrimPanelUI(route);
         const promptEl = document.getElementById('editPromptText');
         if (promptEl) {
-            promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：可按住拖曳位置，或使用下方修剪選單刪除多餘路線`;
+            promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：可直接於節點懸浮氣泡刪點或修剪頭尾`;
         }
     } else if (editSubMode === 'freehand') {
         // 「手繪延伸／剪接」模式下點擊地圖：
@@ -9797,7 +10021,7 @@ document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () 
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
 });
 
-// --- 10.9 管理員設定面板表單渲染與雙向同步（含 v3.25 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
+// --- 10.9 管理員設定面板表單渲染與雙向同步（含 v3.26 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
 let selectedAdminAiModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
 let editingAdminAiKeys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
 let editingActiveAiKeyId = systemNavConfig.activeAiKeyId || '';
@@ -9890,10 +10114,50 @@ function renderAdminAiKeyListUI() {
         const actionsDiv = document.createElement('div');
         actionsDiv.className = 'flex items-center gap-1 flex-shrink-0';
 
+        // ⚡ 測試連線按鈕（驗證此組 API Key 與 Google 搜尋聯網是否有效）
+        const testBtn = document.createElement('button');
+        testBtn.type = 'button';
+        testBtn.className = 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer whitespace-nowrap';
+        testBtn.innerHTML = '⚡ 測試連線';
+        testBtn.title = '測試此組 API Key 聯網連線狀態';
+        testBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const keyLabel = item.note || `金鑰 #${idx + 1}`;
+            const testStatusBox = document.getElementById('adminAiKeyTestStatusBox');
+            const origHtml = testBtn.innerHTML;
+            testBtn.disabled = true;
+            testBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 測試中';
+
+            if (testStatusBox) {
+                testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
+                testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在測試「${keyLabel}」的 Gemini 聯網搜尋連線...`;
+                testStatusBox.classList.remove('hidden');
+            }
+
+            try {
+                const resInfo = await testSingleGeminiApiKey(item.key, selectedAdminAiModel);
+                if (testStatusBox) {
+                    testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
+                    testStatusBox.innerHTML = `🟢 Gemini 聯網查詢成功（使用 Key：${keyLabel}｜耗時 ${resInfo.elapsedSec}s）`;
+                    testStatusBox.classList.remove('hidden');
+                }
+            } catch (err) {
+                if (testStatusBox) {
+                    testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
+                    testStatusBox.innerHTML = `🔴 Gemini 連線失敗（Key：${keyLabel}）：${err?.message || '未知錯誤'}`;
+                    testStatusBox.classList.remove('hidden');
+                }
+            } finally {
+                testBtn.disabled = false;
+                testBtn.innerHTML = origHtml;
+            }
+        });
+        actionsDiv.appendChild(testBtn);
+
         if (!isActive) {
             const useBtn = document.createElement('button');
             useBtn.type = 'button';
-            useBtn.className = 'bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer';
+            useBtn.className = 'bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer whitespace-nowrap';
             useBtn.textContent = '設為啟用';
             useBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -10352,7 +10616,7 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
 })();
 
 // ==========================================
-// 🛋️ 11. 家具模式（單一共用作業空間 ＋ ✨ Gemini AI 智慧批次派工插針 ＋ 🔥 純木頭垃圾車支援火紅標記系統 v3.25）
+// 🛋️ 11. 家具模式（單一共用作業空間 ＋ ✨ Gemini AI 智慧批次派工插針 ＋ 🔥 純木頭垃圾車支援火紅標記系統 v3.26）
 // - 徹底移除所有「第 1/2/3 組」分組邏輯與文案，改為全隊單一共用作業空間
 // - Firebase 路徑簡化為：furniture_collab/{YYYY-MM-DD}/active
 // - 按下右下角「🗑️ 清空」時，提示訊息顯示為：「🗑️ 已清空家具定位針與路線」
@@ -11585,29 +11849,126 @@ function getOrderedGeminiApiKeysForDispatch() {
     return ordered;
 }
 
-// 直接從瀏覽器端呼叫 Gemini REST API（當靜態託管環境無 Node server.js 時自動無縫接手）
+// 從 Gemini 聯網搜尋回傳文字中提取合法 JSON 陣列
+function extractJsonArrayFromGeminiText(rawText) {
+    const cleaned = String(rawText || '')
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+    try {
+        const direct = JSON.parse(cleaned);
+        if (Array.isArray(direct)) return direct;
+    } catch (e) {}
+
+    const firstBracket = cleaned.indexOf('[');
+    const lastBracket = cleaned.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket > firstBracket) {
+        const sub = cleaned.slice(firstBracket, lastBracket + 1);
+        const parsed = JSON.parse(sub);
+        if (Array.isArray(parsed)) return parsed;
+    }
+    throw new Error('AI 回傳格式非有效 JSON 陣列');
+}
+
+// ⚡ 單組 API Key 聯網連線測試（支援伺服器端 /api/gemini/test 與瀏覽器 REST 雙通道）
+async function testSingleGeminiApiKey(apiKey, modelName) {
+    const startMs = performance.now();
+    try {
+        const res = await fetchWithTimeout('/api/gemini/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                apiKey,
+                model: modelName || 'gemini-3.5-flash-lite'
+            })
+        }, 20000);
+
+        if (res.ok) {
+            const data = await res.json();
+            const elapsedSec = data?.elapsedSec || ((performance.now() - startMs) / 1000).toFixed(1);
+            return { ok: true, elapsedSec };
+        }
+
+        if (res.status !== 404 && res.status !== 405) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData?.error || `HTTP ${res.status} 連線失敗`);
+        }
+    } catch (err) {
+        // 若非 404/405 或網路問題而是明確的 API 錯誤，且訊息已包含 HTTP 狀態碼，直接拋出
+        if (err && /HTTP (400|403|429|500)/.test(String(err.message || ''))) {
+            throw err;
+        }
+    }
+
+    // 靜態託管環境下直接透過瀏覽器端測試 Gemini REST API (含 google_search 聯網工具)
+    const candidateRestModels = modelName === 'gemini-4-hydrogen'
+        ? ['gemini-2.5-pro', 'gemini-2.5-flash']
+        : ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
+
+    let lastStatus = 500;
+    let lastReason = '未知錯誤';
+    for (const restModel of candidateRestModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const resp = await fetchWithTimeout(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: '請查詢新北市鶯歌區公所的經緯度座標並回傳 JSON {"lat":24.95,"lng":121.35}' }] }],
+                tools: [{ google_search: {} }]
+            })
+        }, 20000);
+
+        lastStatus = resp.status;
+        if (resp.ok) {
+            const elapsedSec = ((performance.now() - startMs) / 1000).toFixed(1);
+            return { ok: true, elapsedSec };
+        }
+        const errJson = await resp.json().catch(() => null);
+        lastReason = errJson?.error?.message || errJson?.error?.status || `HTTP ${resp.status}`;
+        if (resp.status === 400 || resp.status === 403 || resp.status === 429) {
+            throw new Error(`HTTP ${resp.status}：${lastReason}`);
+        }
+    }
+    throw new Error(`HTTP ${lastStatus}：${lastReason}`);
+}
+
+// 直接從瀏覽器端呼叫 Gemini REST API（啟用 "tools": [{ "google_search": {} }] 聯網搜尋真實座標）
 async function callGeminiRestDirectly(apiKey, modelName, dispatchText, communities) {
-    const communityContext = communities.length > 0
-        ? communities.map((c, idx) => `${idx + 1}. 「${c.title}」 -> lat: ${c.lat}, lng: ${c.lng}`).join('\n')
-        : '（目前尚無已標註之社區大樓）';
+    const validCommunities = Array.isArray(communities)
+        ? communities.map(c => ({
+            name: String(c.title || c.name || '').trim(),
+            lat: Number(c.lat),
+            lng: Number(c.lng)
+        })).filter(c => c.name && !isNaN(c.lat) && !isNaN(c.lng))
+        : [];
 
-    const promptText = `你是新北市鶯歌區清潔隊的「大型家具智慧派工解析助手」。
-請將以下清潔隊收到的「大型家具派工單文字」，按文字出現的先後順序拆解為結構化 JSON 陣列。
+    const communityListJson = JSON.stringify(validCommunities);
 
-【已標註之鶯歌社區大樓資料庫（橘色水滴精確座標）】：
-${communityContext}
+    const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手，具備 Google 搜尋聯網能力（Google Search Grounding）。
+以下是全車隊目前已標註的「已標註社區大樓清單（共 ${validCommunities.length} 處）」（含社區名稱與精準 WGS84 經緯度）：
+${communityListJson}
 
-【解析規則】：
-1. 順序 (order)：依照派工單內的順序由 1 開始編號 (1, 2, 3...)。
-2. 優先比對社區大樓：若該筆派工地點與上方【已標註之鶯歌社區大樓資料庫】中的社區名稱相同或高度相符（例如「龍鳳呈祥」、「幸福社區」），請將 matchedCommunity 填寫該社區名稱，並直接填入該社區的精確 lat 與 lng！
-3. 一般街路門牌地址：若不屬於上述已知社區大樓，請將 matchedCommunity 設為空字串 ""，lat 與 lng 設為 0，並在 normalizedAddress 補齊完整地址（若未寫縣市行政區，一律自動補上「新北市鶯歌區」，例如「建國路120號」補為「新北市鶯歌區建國路120號」；同時剔除樓層如「3樓」、「5F」以便地圖門牌定位）。
-4. 純木頭判斷 (isPureWood)：若該筆派工內容提到「純木頭」、「全木頭」、「木頭」、「木櫃/木桌/木床（標明純木或需垃圾車支援）」、「需垃圾車支援」，請將 isPureWood 設為 true，否則設為 false。
-5. 備註 (note)：保留該點位的家具品項、數量、聯絡事項或原文字摘要（例如「純木頭衣櫃x2、沙發x1」）。
-6. 請僅輸出合法的 JSON 陣列，不要加任何 markdown 語法或額外說明。每個元素格式為：
-[{"order":1,"rawName":"地點名稱","matchedCommunity":"","lat":0,"lng":0,"normalizedAddress":"新北市鶯歌區...","isPureWood":false,"note":"家具品項備註"}]
+以下是使用者貼上的今日大型家具派工單文字：
+"""
+${dispatchText.trim()}
+"""
 
-【使用者貼上的派工單文字】：
-${dispatchText}`;
+請嚴格遵照以下步驟解析每一筆派工點位並查出真實經緯度：
+1. 優先比對附帶的「已標註社區大樓清單（${validCommunities.length} 處）」：若派工單上的名稱與清單中的社區相符或高度相似（例如簡稱或漏字），直接採用清單中的精準 lat、lng，並將 source 設為 "community"。
+2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：你必須使用 Google 搜尋（google_search）上網查詢「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請透過 Google 搜尋自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
+3. 純木頭判斷 (isPureWood)：只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌/木床（標明木頭）」、「垃圾車支援」或「需垃圾車」等關鍵字，請將 isPureWood 設為 true，否則設為 false。
+4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字），每筆物件必須包含以下欄位：
+   - order：順序（數字 1, 2, 3...）
+   - name：顯示名稱（字串，若有修正錯別字請顯示修正後的正確名稱或社區名）
+   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 上網查得）
+   - lat：緯度（數字，例如 24.95421）
+   - lng：經度（數字，例如 121.34612）
+   - isPureWood：是否純木頭需垃圾車支援（布林值 true 或 false）
+   - note：家具品項與數量備註（字串，例如 "沙發1組、床墊1張"，若無則為 ""）
+
+輸出範例格式：
+[{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
     const candidateRestModels = modelName === 'gemini-4-hydrogen'
         ? ['gemini-2.5-pro', 'gemini-2.5-flash']
@@ -11622,35 +11983,41 @@ ${dispatchText}`;
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{ parts: [{ text: promptText }] }],
+                tools: [{ google_search: {} }],
                 generationConfig: {
-                    temperature: 0.1,
-                    responseMimeType: 'application/json'
+                    temperature: 0.1
                 }
             })
-        }, 20000);
+        }, 35000);
 
         lastStatus = resp.status;
         if (resp.status === 429) {
-            const err429 = new Error('API Key 額度已滿 (HTTP 429)');
+            const err429 = new Error('HTTP 429 RESOURCE_EXHAUSTED：API Key 額度已滿');
             err429.status = 429;
             throw err429;
         }
         if (resp.ok) {
             const data = await resp.json();
-            const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-            const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-            const items = JSON.parse(cleaned);
+            const parts = data?.candidates?.[0]?.content?.parts || [];
+            const rawText = parts.map(p => p.text || '').join('\n').trim() || '[]';
+            const items = extractJsonArrayFromGeminiText(rawText);
             return Array.isArray(items) ? items : [];
         } else {
-            lastErrText = await resp.text().catch(() => '');
+            const errObj = await resp.json().catch(() => null);
+            lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
+            if (resp.status === 400 || resp.status === 403) {
+                const authErr = new Error(`HTTP ${resp.status}：${lastErrText}`);
+                authErr.status = resp.status;
+                throw authErr;
+            }
         }
     }
-    const err = new Error(lastErrText || `Gemini HTTP ${lastStatus}`);
+    const err = new Error(`HTTP ${lastStatus}：${lastErrText || 'Gemini 聯網查詢失敗'}`);
     err.status = lastStatus;
     throw err;
 }
 
-// 呼叫 AI 解析派工單（支援多組 API Key 遇 429 自動輪替下一組）
+// 呼叫 AI 聯網解析派工單（支援多組 API Key 遇 429 自動輪替下一組，並回傳使用的 Key 備註名稱與耗時秒數）
 async function requestAiDispatchParseWithRotation(dispatchText, communities, onStatusUpdate) {
     const selectedModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
     const orderedKeys = getOrderedGeminiApiKeysForDispatch();
@@ -11664,8 +12031,11 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
 
     for (let i = 0; i < attempts.length; i++) {
         const candidate = attempts[i];
+        const keyNote = candidate.note || `金鑰 #${i + 1}`;
+        const attemptStartMs = performance.now();
+
         if (i > 0 && candidate.key && typeof onStatusUpdate === 'function') {
-            onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${candidate.note}」重試中...`);
+            onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${keyNote}」聯網查詢中...`);
         }
 
         try {
@@ -11678,41 +12048,51 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
                     apiKey: candidate.key,
                     communities
                 })
-            }, 25000);
+            }, 38000);
 
             if (res.status === 429) {
-                lastError = new Error(`金鑰「${candidate.note}」額度已達上限 (HTTP 429)`);
+                const errData429 = await res.json().catch(() => ({}));
+                lastError = new Error(errData429?.error || `HTTP 429：金鑰「${keyNote}」額度已達上限`);
                 continue;
             }
 
             if (res.ok) {
                 const payload = await res.json();
-                // 若輪替到新的有效自訂金鑰成功，自動將該組設為目前啟用中並同步
+                const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
                 if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
                     systemNavConfig.activeAiKeyId = candidate.id;
                     editingActiveAiKeyId = candidate.id;
                     persistAdminAiSettingsImmediately();
                 }
-                return Array.isArray(payload.items) ? payload.items : [];
+                return {
+                    items: Array.isArray(payload.items) ? payload.items : [],
+                    usedKeyNote: keyNote,
+                    elapsedSec
+                };
             }
 
             // 若為 404/405（例如純靜態伺服器無 /api/gemini/dispatch），且有自訂 API Key，直接改走瀏覽器端 Gemini REST
             if ((res.status === 404 || res.status === 405) && candidate.key) {
                 const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
+                const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
                 if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
                     systemNavConfig.activeAiKeyId = candidate.id;
                     editingActiveAiKeyId = candidate.id;
                     persistAdminAiSettingsImmediately();
                 }
-                return items;
+                return {
+                    items,
+                    usedKeyNote: keyNote,
+                    elapsedSec
+                };
             }
 
             const errData = await res.json().catch(() => ({}));
-            if (errData?.isQuotaError) {
-                lastError = new Error(errData.error || 'HTTP 429 額度限制');
+            if (errData?.code === 'RESOURCE_EXHAUSTED' || errData?.isQuotaError) {
+                lastError = new Error(errData.error || `HTTP 429：金鑰「${keyNote}」額度限制`);
                 continue;
             }
-            lastError = new Error(errData?.error || `AI 服務回應錯誤 (HTTP ${res.status})`);
+            lastError = new Error(errData?.error || `HTTP ${res.status}：AI 服務回應錯誤`);
         } catch (err) {
             if (err && err.status === 429) {
                 lastError = err;
@@ -11722,7 +12102,12 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
             if (candidate.key) {
                 try {
                     const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
-                    return items;
+                    const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
+                    return {
+                        items,
+                        usedKeyNote: keyNote,
+                        elapsedSec
+                    };
                 } catch (restErr) {
                     lastError = restErr;
                     if (restErr && restErr.status === 429) continue;
@@ -11733,13 +12118,14 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
         }
     }
 
-    throw lastError || new Error('無法完成 AI 解析，請至管理員設定檢查或新增 Gemini API Key');
+    throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 聯網查詢，請至管理員設定檢查或新增 Gemini API Key');
 }
 
-// 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 rawName 也能直接命中 Firebase 橘色水滴座標）
+// 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 name 也能直接校驗並命中 Firebase 橘色水滴精確座標）
 function findMatchingCommunityBuilding(item, communities) {
     if (!Array.isArray(communities) || communities.length === 0) return null;
     const candidates = [
+        String(item?.name || '').trim(),
         String(item?.matchedCommunity || '').trim(),
         String(item?.rawName || '').trim(),
         String(item?.normalizedAddress || '').trim()
@@ -11862,7 +12248,7 @@ function closeAiDispatchModal() {
 
         const origBtnHtml = runBtn.innerHTML;
         runBtn.disabled = true;
-        runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>AI 正在解析派工單與定位...</span>';
+        runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Gemini 正在聯網搜尋鶯歌座標...</span>';
 
         const showProgressStatus = (msg, style = 'info') => {
             if (!resultBox) return;
@@ -11870,7 +12256,7 @@ function closeAiDispatchModal() {
             if (style === 'error') {
                 resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
             } else if (style === 'success') {
-                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
+                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-900';
             } else {
                 resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
             }
@@ -11878,17 +12264,28 @@ function closeAiDispatchModal() {
         };
 
         try {
-            showProgressStatus('<i class="fa-solid fa-wand-magic-sparkles fa-fade mr-1"></i> 正在比對已標註社區大樓並呼叫 Gemini AI 解析...');
             const communities = cachedAiDispatchCommunities.length > 0
                 ? cachedAiDispatchCommunities
                 : await fetchAllSharedCommunityBuildings();
 
-            const parsedItems = await requestAiDispatchParseWithRotation(rawText, communities, (rotMsg) => {
-                showProgressStatus(rotMsg, 'info');
-            });
+            showProgressStatus(
+                `<i class="fa-solid fa-globe fa-spin mr-1"></i> 正在比對已標註社區大樓（${communities.length} 處）並啟用 Gemini Google 搜尋聯網查詢真實經緯度...`
+            );
+
+            const { items: parsedItems, usedKeyNote, elapsedSec } = await requestAiDispatchParseWithRotation(
+                rawText,
+                communities,
+                (rotMsg) => {
+                    showProgressStatus(rotMsg, 'info');
+                }
+            );
 
             if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
-                showProgressStatus('⚠️ AI 未能從文字中識別出任何有效地址或社區名稱，請確認派工單內容。', 'error');
+                showProgressStatus(
+                    `<div>🟢 Gemini 聯網查詢成功（使用 Key：${usedKeyNote}｜耗時 ${elapsedSec}s）</div>` +
+                    `<div class="mt-1 text-red-700">⚠️ AI 未能從文字中識別出任何有效地址或社區名稱，請確認派工單內容。</div>`,
+                    'error'
+                );
                 return;
             }
 
@@ -11902,12 +12299,12 @@ function closeAiDispatchModal() {
             }
 
             const addedPins = [];
-            const unresolvedAddresses = [];
+            const outOfRangeItems = [];
             let woodCount = 0;
 
             for (let i = 0; i < parsedItems.length; i++) {
                 const item = parsedItems[i];
-                const rawLabel = String(item.rawName || item.matchedCommunity || item.normalizedAddress || `派工點 #${i + 1}`).trim();
+                const rawLabel = String(item.name || item.rawName || item.matchedCommunity || item.normalizedAddress || `派工點 #${i + 1}`).trim();
                 const noteText = String(item.note || '').trim();
                 const isWood = Boolean(
                     item.isPureWood ||
@@ -11915,54 +12312,63 @@ function closeAiDispatchModal() {
                     /純木|全木|木頭|垃圾車支援/.test(noteText)
                 );
 
-                // 1. 優先檢查是否命中已標註社區大樓（橘色水滴座標）
+                // 1. 優先比對已標註社區大樓清單（若本地或 AI 標記命中社區庫）
                 const matchedBld = findMatchingCommunityBuilding(item, communities);
                 if (matchedBld) {
+                    const pinNumber = (furnitureActiveData.pins?.length || 0) + 1;
                     addFurniturePinToWorkspace(matchedBld.lng, matchedBld.lat, `🏢 ${matchedBld.title}`, {
                         note: noteText,
                         needsWoodTruckSupport: isWood,
                         silent: true
                     });
                     if (isWood) woodCount++;
-                    addedPins.push({ lng: matchedBld.lng, lat: matchedBld.lat, label: matchedBld.title });
+                    addedPins.push({
+                        order: pinNumber,
+                        lng: matchedBld.lng,
+                        lat: matchedBld.lat,
+                        label: matchedBld.title,
+                        sourceLabel: '[社區庫]',
+                        isWood
+                    });
                     continue;
                 }
 
-                // 2. 若 AI 已回傳有效鶯歌區附近經緯度
+                // 2. 直接驗證 Gemini Google Search Grounding 回傳的 lat、lng 是否落在鶯歌區合理範圍內（不呼叫 Nominatim）
                 const aiLat = Number(item.lat);
                 const aiLng = Number(item.lng);
-                if (!isNaN(aiLat) && !isNaN(aiLng) && aiLat > 24.85 && aiLat < 25.08 && aiLng > 121.25 && aiLng < 121.48) {
-                    addFurniturePinToWorkspace(aiLng, aiLat, rawLabel, {
+                const isInYinggeBounds = (
+                    !isNaN(aiLat) &&
+                    !isNaN(aiLng) &&
+                    aiLat >= 24.88 &&
+                    aiLat <= 25.03 &&
+                    aiLng >= 121.28 &&
+                    aiLng <= 121.43
+                );
+
+                if (isInYinggeBounds) {
+                    const isCommunitySource = String(item.source || '').toLowerCase() === 'community';
+                    const pinNumber = (furnitureActiveData.pins?.length || 0) + 1;
+                    const displayLabel = isCommunitySource && !rawLabel.startsWith('🏢')
+                        ? `🏢 ${rawLabel}`
+                        : rawLabel;
+
+                    addFurniturePinToWorkspace(Number(aiLng.toFixed(6)), Number(aiLat.toFixed(6)), displayLabel, {
                         note: noteText,
                         needsWoodTruckSupport: isWood,
                         silent: true
                     });
                     if (isWood) woodCount++;
-                    addedPins.push({ lng: aiLng, lat: aiLat, label: rawLabel });
-                    continue;
+                    addedPins.push({
+                        order: pinNumber,
+                        lng: Number(aiLng.toFixed(6)),
+                        lat: Number(aiLat.toFixed(6)),
+                        label: rawLabel,
+                        sourceLabel: isCommunitySource ? '[社區庫]' : '[AI聯網查得]',
+                        isWood
+                    });
+                } else {
+                    outOfRangeItems.push(`${rawLabel}（回傳座標：${isNaN(aiLat) ? '無' : `${aiLat.toFixed(4)}, ${aiLng.toFixed(4)}`} 未落於鶯歌區範圍）`);
                 }
-
-                // 3. 一般門牌地址：自動呼叫免費 OSM Nominatim 轉換經緯度
-                const queryAddr = String(item.normalizedAddress || rawLabel).trim();
-                showProgressStatus(`<i class="fa-solid fa-location-crosshairs fa-spin mr-1"></i> 正在定位門牌 (${i + 1}/${parsedItems.length})：${queryAddr}...`);
-                const geoList = await searchYinggeAddressNominatim(queryAddr);
-                if (Array.isArray(geoList) && geoList.length > 0) {
-                    const best = geoList[0];
-                    const gLng = Number(parseFloat(best.lon).toFixed(6));
-                    const gLat = Number(parseFloat(best.lat).toFixed(6));
-                    if (!isNaN(gLng) && !isNaN(gLat)) {
-                        addFurniturePinToWorkspace(gLng, gLat, rawLabel, {
-                            note: noteText,
-                            needsWoodTruckSupport: isWood,
-                            silent: true
-                        });
-                        if (isWood) woodCount++;
-                        addedPins.push({ lng: gLng, lat: gLat, label: rawLabel });
-                        continue;
-                    }
-                }
-
-                unresolvedAddresses.push(`${rawLabel}${noteText ? `（${noteText}）` : ''}`);
             }
 
             renderAllFurnitureMapElements();
@@ -11980,27 +12386,47 @@ function closeAiDispatchModal() {
                 map.fitBounds(bounds, { padding: { top: 90, bottom: 90, left: 60, right: 60 }, maxZoom: 17.5, duration: 700 });
             }
 
-            if (unresolvedAddresses.length === 0) {
-                showProgressStatus(
-                    `✅ 成功自動插針 <b>${addedPins.length}</b> 處！${woodCount > 0 ? `（含 🔥 純木頭支援 <b>${woodCount}</b> 處）` : ''}`,
-                    'success'
-                );
-                showFurnitureToast(`✨ AI 已自動插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
-                setTimeout(() => {
-                    closeAiDispatchModal();
-                }, 1100);
-            } else {
-                const missingHtml = unresolvedAddresses.map(a => `<li class="ml-4 list-disc">${a}</li>`).join('');
-                showProgressStatus(
-                    `<div>✅ 已自動插針 <b>${addedPins.length}</b> 處${woodCount > 0 ? `（含 🔥 純木頭 <b>${woodCount}</b> 處）` : ''}。</div>` +
-                    `<div class="mt-1.5 text-amber-800">⚠️ 以下 <b>${unresolvedAddresses.length}</b> 筆門牌在免費圖資查無精確座標，請關閉視窗後手動點擊地圖插針：</div>` +
-                    `<ul class="mt-1 text-amber-900">${missingHtml}</ul>`,
-                    'info'
-                );
-                showFurnitureToast(`✨ 已插針 ${addedPins.length} 處（${unresolvedAddresses.length} 筆請手動補插）`);
-            }
+            // 組裝結果區頂部連線狀態列 ＋ 每筆插針來源明細 ([社區庫] / [AI聯網查得])
+            const headerHtml = `<div class="pb-1.5 mb-1.5 border-b border-emerald-200 font-black text-emerald-900">🟢 Gemini 聯網查詢成功（使用 Key：${usedKeyNote}｜耗時 ${elapsedSec}s）</div>`;
+
+            const pinsListHtml = addedPins.length > 0
+                ? `<div class="space-y-1 max-h-40 overflow-y-auto pr-1">` +
+                  addedPins.map(p => {
+                      const badgeCls = p.sourceLabel === '[社區庫]'
+                          ? 'bg-orange-100 text-orange-800 border-orange-300'
+                          : 'bg-blue-100 text-blue-800 border-blue-300';
+                      const woodTag = p.isWood
+                          ? '<span class="bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded ml-1">🔥純木頭</span>'
+                          : '';
+                      return `<div class="flex items-center justify-between gap-1.5 text-[11px] bg-white/85 px-2 py-1 rounded-lg border border-emerald-200/80">` +
+                          `<span class="font-black text-gray-900 truncate">#${p.order} ${p.label}${woodTag}</span>` +
+                          `<span class="text-[10px] font-black px-1.5 py-0.5 rounded border flex-shrink-0 ${badgeCls}">${p.sourceLabel}</span>` +
+                          `</div>`;
+                  }).join('') +
+                  `</div>`
+                : '';
+
+            const outOfRangeHtml = outOfRangeItems.length > 0
+                ? `<div class="mt-2 pt-1.5 border-t border-amber-300 text-amber-800">` +
+                  `⚠️ 以下 <b>${outOfRangeItems.length}</b> 筆座標未落在鶯歌區範圍內，請手動確認：` +
+                  `<ul class="mt-1 ml-4 list-disc text-[11px]">${outOfRangeItems.map(x => `<li>${x}</li>`).join('')}</ul>` +
+                  `</div>`
+                : '';
+
+            showProgressStatus(
+                headerHtml +
+                `<div class="mb-1.5 text-emerald-800">✅ 已自動在地圖依序插針 <b>${addedPins.length}</b> 處${woodCount > 0 ? `（含 🔥 純木頭火紅標記 <b>${woodCount}</b> 處）` : ''}：</div>` +
+                pinsListHtml +
+                outOfRangeHtml,
+                'success'
+            );
+
+            showFurnitureToast(`✨ Gemini 聯網已插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
         } catch (err) {
-            showProgressStatus(`❌ ${err?.message || 'AI 解析失敗，請檢查管理員 API Key 設定或網路連線'}`, 'error');
+            showProgressStatus(
+                `🔴 Gemini 連線失敗：${err?.message || '未知連線或解析錯誤，請檢查管理員 API Key 設定'}`,
+                'error'
+            );
         } finally {
             runBtn.disabled = false;
             runBtn.innerHTML = origBtnHtml;

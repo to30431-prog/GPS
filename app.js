@@ -5024,23 +5024,75 @@ function densifyRoadCoordinates(rawCoords, maxStepMeters = 6) {
     return result;
 }
 
-// 呼叫 OSRM 道路吸附 API（3 秒超時自動降級為兩點直線連接）
-async function fetchOsrmRoadGeometry(lng1, lat1, lng2, lat2) {
-    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
-    try {
-        const res = await fetchWithTimeout(osrmUrl, {}, 3000);
-        if (!res.ok) throw new Error(`OSRM HTTP ${res.status}`);
-        const data = await res.json();
-        const coords = data?.routes?.[0]?.geometry?.coordinates;
-        if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-            // 確保起點與前一段終點座標完全銜接無縫隙
-            const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
-            return { coords: alignedCoords, usedOsrm: true };
-        }
-    } catch (err) {
-        // OSRM 超時 3 秒或離線時，靜默降級為兩點直線連接
+// 規範化方位角為 0~360 整數（若無效則回傳 null）
+function normalizeValidHeadingDeg(rawHeading) {
+    if (typeof rawHeading !== 'number' || isNaN(rawHeading) || !isFinite(rawHeading)) {
+        return null;
     }
-    return { coords: [[lng1, lat1], [lng2, lat2]], usedOsrm: false };
+    return ((Math.round(rawHeading) % 360) + 360) % 360;
+}
+
+// 呼叫 OSRM 道路吸附 API（強制 continue_straight=true 禁止途經點原地迴轉、approaches=curb 台灣靠右順向停靠、並支援起點 bearings 車頭方向角）
+async function fetchOsrmRoadGeometry(lng1, lat1, lng2, lat2, options = {}) {
+    const validHeading = normalizeValidHeadingDeg(options?.startHeading);
+    const bearingsQuery = validHeading !== null ? `&bearings=${validHeading},45;` : '';
+    const approachCandidates = [
+        options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb',
+        'unrestricted;curb'
+    ];
+
+    for (const approachesParam of approachCandidates) {
+        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${approachesParam}${bearingsQuery}`;
+        try {
+            const res = await fetchWithTimeout(osrmUrl, {}, 4000);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                // 確保起點與前一段終點座標完全銜接無縫隙
+                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
+                let endHeading = validHeading;
+                if (alignedCoords.length >= 2) {
+                    const pPrev = alignedCoords[alignedCoords.length - 2];
+                    const pLast = alignedCoords[alignedCoords.length - 1];
+                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
+                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+                    }
+                }
+                return { coords: alignedCoords, usedOsrm: true, endHeading };
+            }
+        } catch (err) {
+            // 單次嘗試失敗或超時，繼續嘗試備援參數
+        }
+    }
+
+    // 若帶入 bearings 在窄巷單行道無解，嘗試保留 continue_straight=true 與 approaches=unrestricted;curb
+    try {
+        const fallbackUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=unrestricted;curb`;
+        const res = await fetchWithTimeout(fallbackUrl, {}, 3500);
+        if (res.ok) {
+            const data = await res.json();
+            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
+                let endHeading = validHeading;
+                if (alignedCoords.length >= 2) {
+                    const pPrev = alignedCoords[alignedCoords.length - 2];
+                    const pLast = alignedCoords[alignedCoords.length - 1];
+                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
+                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+                    }
+                }
+                return { coords: alignedCoords, usedOsrm: true, endHeading };
+            }
+        }
+    } catch (e) {}
+
+    return {
+        coords: [[lng1, lat1], [lng2, lat2]],
+        usedOsrm: false,
+        endHeading: getBearing(lng1, lat1, lng2, lat2)
+    };
 }
 
 // 由 manualDrawSteps 建構與 GPS 實車錄製 100% 相同結構的 points、events 與總距離
@@ -12182,12 +12234,27 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
 })();
 
 // ==========================================
-// 🤖 串聯方式 1：自動沿路串（OSRM 以目前車輛即時 GPS 位置為起點，依最順路順序串接所有插針）
+// 🤖 串聯方式 1：自動沿路串（OSRM 以目前車輛即時 GPS 位置與車頭方向角為起點，強制靠右順向停靠＋禁止原地 U 型迴轉）
 // ==========================================
+function getCurrentValidVehicleHeading() {
+    if (typeof lastRealGpsHeading === 'number' && !isNaN(lastRealGpsHeading) && lastRealGpsHeading >= 0 && lastRealGpsHeading <= 360 && lastValidGpsTime > 0) {
+        return normalizeValidHeadingDeg(lastRealGpsHeading);
+    }
+    if (typeof currentHeading === 'number' && !isNaN(currentHeading) && currentHeading >= 0 && currentHeading <= 360) {
+        return normalizeValidHeadingDeg(currentHeading);
+    }
+    return null;
+}
+
 async function resolveVehicleOriginForFurnitureOsrm() {
-    // 1. 優先使用目前已取得的即時有效 GPS 座標
+    // 1. 優先使用目前已取得的即時有效 GPS 座標與車頭方向角
     if (typeof lastValidGpsLng === 'number' && typeof lastValidGpsLat === 'number' && !isNaN(lastValidGpsLng) && !isNaN(lastValidGpsLat)) {
-        return { lng: Number(lastValidGpsLng.toFixed(6)), lat: Number(lastValidGpsLat.toFixed(6)), source: 'gps' };
+        return {
+            lng: Number(lastValidGpsLng.toFixed(6)),
+            lat: Number(lastValidGpsLat.toFixed(6)),
+            heading: getCurrentValidVehicleHeading(),
+            source: 'gps'
+        };
     }
 
     // 2. 嘗試即時向瀏覽器請求一次最新 GPS 座標（2.2 秒超時防卡死）
@@ -12203,29 +12270,101 @@ async function resolveVehicleOriginForFurnitureOsrm() {
             if (pos && pos.coords && typeof pos.coords.longitude === 'number' && typeof pos.coords.latitude === 'number') {
                 const lng = Number(pos.coords.longitude.toFixed(6));
                 const lat = Number(pos.coords.latitude.toFixed(6));
+                const hwHeading = (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) && pos.coords.heading >= 0 && pos.coords.heading <= 360)
+                    ? normalizeValidHeadingDeg(pos.coords.heading)
+                    : getCurrentValidVehicleHeading();
                 lastValidGpsLng = lng;
                 lastValidGpsLat = lat;
                 lastKnownLngLat = [lng, lat];
+                if (hwHeading !== null) {
+                    lastRealGpsHeading = hwHeading;
+                    currentHeading = hwHeading;
+                }
                 if (vehicleMarker) {
                     try { vehicleMarker.setLngLat([lng, lat]); } catch (e) {}
                 }
-                return { lng, lat, source: 'gps' };
+                return { lng, lat, heading: hwHeading, source: 'gps' };
             }
         } catch (e) {}
     }
 
     // 3. 若無即時 GPS 定位，退回使用目前車輛圖示位置 / 地圖中心點或第一支針座標
     if (Array.isArray(lastKnownLngLat) && lastKnownLngLat.length === 2 && typeof lastKnownLngLat[0] === 'number' && typeof lastKnownLngLat[1] === 'number') {
-        return { lng: Number(lastKnownLngLat[0].toFixed(6)), lat: Number(lastKnownLngLat[1].toFixed(6)), source: 'vehicle_marker' };
+        return {
+            lng: Number(lastKnownLngLat[0].toFixed(6)),
+            lat: Number(lastKnownLngLat[1].toFixed(6)),
+            heading: getCurrentValidVehicleHeading(),
+            source: 'vehicle_marker'
+        };
     }
     if (map && typeof map.getCenter === 'function') {
         const c = map.getCenter();
         if (c && typeof c.lng === 'number' && typeof c.lat === 'number') {
-            return { lng: Number(c.lng.toFixed(6)), lat: Number(c.lat.toFixed(6)), source: 'map_center' };
+            return { lng: Number(c.lng.toFixed(6)), lat: Number(c.lat.toFixed(6)), heading: null, source: 'map_center' };
         }
     }
     const p0 = furnitureActiveData.pins[0];
-    return { lng: Number(p0.lng.toFixed(6)), lat: Number(p0.lat.toFixed(6)), source: 'first_pin' };
+    return { lng: Number(p0.lng.toFixed(6)), lat: Number(p0.lat.toFixed(6)), heading: null, source: 'first_pin' };
+}
+
+// 多途經點一次性 OSRM 順向靠右規劃（帶入 continue_straight=true、approaches=curb;curb;... 與起點 bearings=${Math.round(heading)},45;;...）
+async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
+    if (!Array.isArray(waypoints) || waypoints.length < 2) {
+        return waypoints.map(w => [w.lng, w.lat]);
+    }
+
+    const coordStr = waypoints.map(w => `${w.lng},${w.lat}`).join(';');
+    const validHeading = normalizeValidHeadingDeg(originHeading);
+    // 第 1 個點帶入 ${Math.round(heading)},45，其餘插針點全部留空（例如 bearings=180,45;;...）
+    const bearingsParam = validHeading !== null
+        ? `&bearings=${[`${validHeading},45`, ...waypoints.slice(1).map(() => '')].join(';')}`
+        : '';
+
+    // 1. 優先嘗試全部點位皆設為 curb（approaches=curb;curb;...），次選起點 unrestricted、其餘插針點全設為 curb
+    const allCurbApproaches = waypoints.map(() => 'curb').join(';');
+    const originUnrestrictedApproaches = ['unrestricted', ...waypoints.slice(1).map(() => 'curb')].join(';');
+    const candidateUrls = [
+        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}${bearingsParam}`,
+        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}${bearingsParam}`
+    ];
+    if (bearingsParam) {
+        // 若起點正好位於死巷底導致初始 ±45 度方位角無解，保留 continue_straight=true 與 approaches=curb 作為第三順位
+        candidateUrls.push(
+            `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}`
+        );
+    }
+
+    for (const osrmUrl of candidateUrls) {
+        try {
+            const res = await fetchWithTimeout(osrmUrl, {}, 6500);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                return densifyRoadCoordinates(coords, 8);
+            }
+        } catch (e) {}
+    }
+
+    // 備援：分段呼叫時同樣傳遞前一段抵達時的車頭方向角 (rollingHeading)，搭配 continue_straight=true 與 approaches=curb;curb
+    const combinedCoords = [[waypoints[0].lng, waypoints[0].lat]];
+    let rollingHeading = validHeading;
+    for (let i = 0; i < waypoints.length - 1; i++) {
+        const pA = waypoints[i];
+        const pB = waypoints[i + 1];
+        const { coords, endHeading } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat, {
+            startHeading: rollingHeading,
+            originUnrestricted: (i === 0)
+        });
+        if (typeof endHeading === 'number' && !isNaN(endHeading)) {
+            rollingHeading = endHeading;
+        }
+        const densified = densifyRoadCoordinates(coords, 8);
+        for (let k = 1; k < densified.length; k++) {
+            combinedCoords.push(densified[k]);
+        }
+    }
+    return combinedCoords;
 }
 
 let isFurnitureOsrmBusy = false;
@@ -12244,7 +12383,7 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
     }
-    showFurnitureToast('🤖 正在定位目前車輛位置並規劃最順路順序...');
+    showFurnitureToast('🤖 正在依目前車輛位置與車頭方向規劃靠右順向路線...');
 
     try {
         const origin = await resolveVehicleOriginForFurnitureOsrm();
@@ -12254,18 +12393,31 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         const orderedPins = [];
         let curLng = origin.lng;
         let curLat = origin.lat;
+        let curHeading = normalizeValidHeadingDeg(origin.heading);
 
         while (remainingPins.length > 0) {
             let bestIdx = 0;
-            let bestDist = Infinity;
+            let bestScore = Infinity;
             for (let i = 0; i < remainingPins.length; i++) {
-                const d = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
-                if (d < bestDist) {
-                    bestDist = d;
+                const dKm = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
+                let score = dKm;
+                // 若有當前車頭方向角，對正後方逆向點加上順向繞行權重，優先挑選順向站點避免一出發就原地調頭
+                if (curHeading !== null && dKm > 0.005) {
+                    const targetBearing = getBearing(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
+                    const angleDiff = getAngleDiff(curHeading, targetBearing);
+                    if (angleDiff > 120) {
+                        score += 0.18; // 約等於繞行一個街區的懲罰距離
+                    }
+                }
+                if (score < bestScore) {
+                    bestScore = score;
                     bestIdx = i;
                 }
             }
             const nextPin = remainingPins.splice(bestIdx, 1)[0];
+            if (getDistanceKm(curLng, curLat, nextPin.lng, nextPin.lat) > 0.005) {
+                curHeading = getBearing(curLng, curLat, nextPin.lng, nextPin.lat);
+            }
             orderedPins.push(nextPin);
             curLng = nextPin.lng;
             curLat = nextPin.lat;
@@ -12277,23 +12429,13 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         const waypoints = [];
         const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, orderedPins[0].lng, orderedPins[0].lat) * 1000;
         if (distOriginToFirstM >= 12) {
-            waypoints.push({ lng: origin.lng, lat: origin.lat });
+            waypoints.push({ lng: origin.lng, lat: origin.lat, isOrigin: true });
         }
         orderedPins.forEach(p => {
-            waypoints.push({ lng: p.lng, lat: p.lat });
+            waypoints.push({ lng: p.lng, lat: p.lat, isOrigin: false });
         });
 
-        const combinedCoords = [[waypoints[0].lng, waypoints[0].lat]];
-
-        for (let i = 0; i < waypoints.length - 1; i++) {
-            const pA = waypoints[i];
-            const pB = waypoints[i + 1];
-            const { coords } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat);
-            const densified = densifyRoadCoordinates(coords, 8);
-            for (let k = 1; k < densified.length; k++) {
-                combinedCoords.push(densified[k]);
-            }
-        }
+        const combinedCoords = await fetchOsrmMultiWaypointRoute(waypoints, origin.heading);
 
         furnitureActiveData.routeCoords = combinedCoords;
         furnitureActiveData.distanceKm = computeCoordsDistanceKm(combinedCoords);
@@ -12304,7 +12446,7 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
 
         renderAllFurnitureMapElements();
         await syncActiveFurnitureToFirebase(false);
-        showFurnitureToast(`✅ 已從目前車輛位置自動串接最優路線（共 ${furnitureActiveData.distanceKm} km）`);
+        showFurnitureToast(`✅ 已從目前車輛位置規劃靠右順向最優路線（共 ${furnitureActiveData.distanceKm} km）`);
     } finally {
         isFurnitureOsrmBusy = false;
         if (btn) {

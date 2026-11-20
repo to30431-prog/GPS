@@ -224,11 +224,28 @@ let lastRealGpsHeading = 0;
 let isReplaying = false;
 window.isReplaying = false;
 
-function processFilteredGpsPosition(pos) {
+// 🛰️ iOS 前景喚醒與 12 秒定位看門狗（Watchdog）核心狀態
+let lastGpsUpdateTime = 0;
+window.lastGpsUpdateTime = 0;
+let activeRecordingGpsHandler = null;
+let activeFollowGpsHandler = null;
+let lastGpsForceRestartAt = 0;
+let gpsWatchdogTimer = null;
+
+function markGpsUpdateReceived() {
+    const now = Date.now();
+    lastGpsUpdateTime = now;
+    window.lastGpsUpdateTime = now;
+}
+
+function processFilteredGpsPosition(pos, options = {}) {
     if (!pos || !pos.coords) return null;
     const rawLat = Number(pos.coords.latitude);
     const rawLng = Number(pos.coords.longitude);
     if (isNaN(rawLat) || isNaN(rawLng)) return null;
+
+    // 只要收到合法經緯度座標即更新看門狗時間戳記
+    markGpsUpdateReceived();
 
     const accuracy = typeof pos.coords.accuracy === 'number' && !isNaN(pos.coords.accuracy)
         ? pos.coords.accuracy
@@ -237,16 +254,18 @@ function processFilteredGpsPosition(pos) {
     const maxAccuracyMeters = Number(systemNavConfig.maxAccuracyMeters) || DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters;
     const maxSpeedKmh = Number(systemNavConfig.maxSpeedKmh) || DEFAULT_SYSTEM_CONFIG.maxSpeedKmh;
     const minLockSpeedKmh = Number(systemNavConfig.minLockSpeedKmh) || DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh;
+    const forceBaselineReset = Boolean(options && options.forceBaselineReset);
 
-    // 1. 剔除低精度飄移點：保留 accuracy <= maxAccuracyMeters (預設 45 公尺)，超過直接捨棄
-    if (accuracy > maxAccuracyMeters) {
+    // 1. 剔除低精度飄移點：一般情況保留 accuracy <= maxAccuracyMeters (預設 45m)；剛解鎖喚醒單次定位放寬至 90m 避免冷啟動被丟棄
+    const effectiveMaxAcc = forceBaselineReset ? Math.max(maxAccuracyMeters, 90) : maxAccuracyMeters;
+    if (accuracy > effectiveMaxAcc) {
         return null;
     }
 
     const now = Date.now();
     // 防止多個 watchPosition 監聽器在極短時間內收到同一筆硬體座標時重複計算造成誤判靜止
     const fixKey = `${rawLat.toFixed(6)},${rawLng.toFixed(6)}`;
-    if (fixKey === lastRawGpsFixKey && (now - lastRawGpsFixWallTime) < 350 && lastFilteredGpsResult) {
+    if (!forceBaselineReset && fixKey === lastRawGpsFixKey && (now - lastRawGpsFixWallTime) < 350 && lastFilteredGpsResult) {
         return lastFilteredGpsResult;
     }
 
@@ -254,26 +273,38 @@ function processFilteredGpsPosition(pos) {
         ? pos.coords.speed
         : null;
 
-    // 首次取得合格高精度定位：直接初始化基準點（不使用電子羅盤 heading）
-    if (lastValidGpsLat === null || lastValidGpsLng === null) {
+    // 首次取得合格高精度定位，或從 iOS 背景休眠／超過 12 秒斷線後剛喚醒重抓：直接以最新真實座標對齊基準點（不混入舊座標 0.3 權重，亦不因休眠期間移動距離被時速上限誤殺）
+    const isStaleGapReset = lastValidGpsTime > 0 && (now - lastValidGpsTime) > 12000;
+    if (lastValidGpsLat === null || lastValidGpsLng === null || forceBaselineReset || isStaleGapReset) {
+        if (lastValidGpsLat !== null && lastValidGpsLng !== null) {
+            const wakeMoveMeters = getDistanceKm(lastValidGpsLng, lastValidGpsLat, rawLng, rawLat) * 1000;
+            if (wakeMoveMeters >= 5) {
+                lastRealGpsHeading = getBearing(lastValidGpsLng, lastValidGpsLat, rawLng, rawLat);
+            }
+        }
+        const wasNullBaseline = (lastValidGpsLat === null || lastValidGpsLng === null);
         lastValidGpsLat = rawLat;
         lastValidGpsLng = rawLng;
         lastValidGpsTime = now;
         if (!isReplaying) {
+            currentHeading = lastRealGpsHeading;
             lastKnownLngLat = [rawLng, rawLat];
         }
+        const wakeSpdKmh = rawSpeed !== null ? Math.min(rawSpeed * 3.6, maxSpeedKmh) : 0;
         const firstRes = {
             lng: rawLng,
             lat: rawLat,
             heading: lastRealGpsHeading,
-            speedKmh: rawSpeed !== null ? (rawSpeed * 3.6) : 0,
+            speedKmh: wakeSpdKmh,
             accuracy,
             isStationary: false,
-            isFirstFix: true
+            isFirstFix: wasNullBaseline,
+            isWakeupFix: forceBaselineReset || isStaleGapReset
         };
         lastRawGpsFixKey = fixKey;
         lastRawGpsFixWallTime = now;
         lastFilteredGpsResult = firstRes;
+        lastRecordedSpeedKmh = wakeSpdKmh;
         return firstRes;
     }
 
@@ -356,39 +387,47 @@ function stopIdleGPS() {
     }
 }
 
+function handleIdleGpsPosition(pos) {
+    markGpsUpdateReceived();
+    const filtered = processFilteredGpsPosition(pos);
+    if (!filtered) return; // 誤差 > 45m 或 > 160km/h 暴衝跳點直接捨棄
+
+    if (typeof window.onFleetPositionUpdate === 'function') {
+        window.onFleetPositionUpdate(filtered.lat, filtered.lng);
+    }
+
+    // 🛡️ 重播期間鎖定車輛控制權：當 isReplaying === true 時，嚴禁真實 GPS 更新黃色垃圾車 Marker 的座標與角度
+    if (isReplaying) return;
+
+    if (!isPowerSaveMapPaused()) {
+        const acc = Math.round(filtered.accuracy);
+        const accEl = document.getElementById('accuracyText');
+        if (accEl) accEl.innerText = `± ${acc} m`;
+        if (vehicleMarker) {
+            smoothMoveVehicleMarker([filtered.lng, filtered.lat], filtered.heading, 750);
+        }
+        if ((!filtered.isStationary || filtered.isWakeupFix) && isFollowingCamera) {
+            const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
+            map.easeTo({
+                center: [filtered.lng, filtered.lat],
+                zoom: targetZoom,
+                bearing: isHeadingUpMode ? filtered.heading : map.getBearing(),
+                offset: [0, 100],
+                duration: 600
+            });
+        }
+    }
+}
+
 function startIdleGPS() {
     stopIdleGPS();
     if (!('geolocation' in navigator)) return;
-    idleWatchId = navigator.geolocation.watchPosition(pos => {
-        const filtered = processFilteredGpsPosition(pos);
-        if (!filtered) return; // 誤差 > 45m 或 > 160km/h 暴衝跳點直接捨棄
-
-        if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
-            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
-        }
-
-        // 🛡️ 重播期間鎖定車輛控制權：當 isReplaying === true 時，嚴禁真實 GPS 更新黃色垃圾車 Marker 的座標與角度
-        if (isReplaying) return;
-
-        if (!isPowerSaveMapPaused()) {
-            const acc = Math.round(filtered.accuracy);
-            const accEl = document.getElementById('accuracyText');
-            if (accEl) accEl.innerText = `± ${acc} m`;
-            if (vehicleMarker) {
-                smoothMoveVehicleMarker([filtered.lng, filtered.lat], filtered.heading, 750);
-            }
-            if (!filtered.isStationary && isFollowingCamera) {
-                const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
-                map.easeTo({
-                    center: [filtered.lng, filtered.lat],
-                    zoom: targetZoom,
-                    bearing: isHeadingUpMode ? filtered.heading : map.getBearing(),
-                    offset: [0, 100],
-                    duration: 600
-                });
-            }
-        }
-    }, () => {}, { enableHighAccuracy: true });
+    if (lastGpsUpdateTime === 0) markGpsUpdateReceived();
+    idleWatchId = navigator.geolocation.watchPosition(
+        handleIdleGpsPosition,
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
 }
 
 let savedRoutes = [];
@@ -2474,6 +2513,7 @@ async function stopAndSaveActiveRecording() {
     // 當有效軌跡點不足 2 點（例如靜止測試 0.00 km）時，直接停止錄製狀態、安全釋放 WakeLock 並彈出明確提示
     if (routePoints.length < 2) {
         isRecording = false;
+        activeRecordingGpsHandler = null;
         if (watchId !== null) {
             navigator.geolocation.clearWatch(watchId);
             watchId = null;
@@ -2505,6 +2545,7 @@ async function stopAndSaveActiveRecording() {
     }
 
     isRecording = false;
+    activeRecordingGpsHandler = null;
     if (watchId !== null) {
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
@@ -2666,9 +2707,10 @@ document.getElementById('recordBtn').onclick = async () => {
             }
         }, 1000);
 
-        watchId = navigator.geolocation.watchPosition(pos => {
+        activeRecordingGpsHandler = pos => {
+            markGpsUpdateReceived();
             const filtered = processFilteredGpsPosition(pos);
-            if (!filtered) return; // 剔除 accuracy > 35m 低精度與 > 120km/h 衛星反射瞬移
+            if (!filtered) return; // 剔除 accuracy > 45m 低精度與 > 160km/h 衛星反射瞬移
 
             const now = Date.now();
             const lng = filtered.lng, lat = filtered.lat;
@@ -2678,7 +2720,7 @@ document.getElementById('recordBtn').onclick = async () => {
                 document.getElementById('speedText').innerText = filtered.isStationary ? '0.0' : filtered.speedKmh.toFixed(1);
             }
 
-            if (!filtered.isStationary && typeof window.onFleetPositionUpdate === 'function') {
+            if (typeof window.onFleetPositionUpdate === 'function') {
                 window.onFleetPositionUpdate(lat, lng);
             }
 
@@ -2728,7 +2770,13 @@ document.getElementById('recordBtn').onclick = async () => {
                 }
                 lastRecordTime = now;
             }
-        }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+        };
+
+        watchId = navigator.geolocation.watchPosition(
+            activeRecordingGpsHandler,
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+        );
 
     } else {
         await stopAndSaveActiveRecording();
@@ -5739,6 +5787,7 @@ function backToMain() {
     const wasReplaying = isReplaying;
     stopSmoothPlayback();
     VoiceQueue.clear();
+    activeFollowGpsHandler = null;
     if (followWatchId !== null) {
         navigator.geolocation.clearWatch(followWatchId);
         followWatchId = null;
@@ -6606,14 +6655,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     await requestScreenWakeLock();
 
-    followWatchId = navigator.geolocation.watchPosition(pos => {
+    activeFollowGpsHandler = pos => {
+        markGpsUpdateReceived();
         const filtered = processFilteredGpsPosition(pos);
         if (!filtered) return; // 剔除 accuracy > 45m 低精度與 > 160km/h 衛星反射瞬移
 
         const lng = filtered.lng, lat = filtered.lat;
 
-        if (!filtered.isStationary) {
-            if (typeof window.onFleetPositionUpdate === 'function') window.onFleetPositionUpdate(lat, lng);
+        if (typeof window.onFleetPositionUpdate === 'function') {
+            window.onFleetPositionUpdate(lat, lng);
+        }
+
+        if (!filtered.isStationary || filtered.isWakeupFix) {
             if (!isPowerSaveMapPaused()) {
                 if (vehicleMarker) {
                     smoothMoveVehicleMarker(lastKnownLngLat, currentHeading, 750);
@@ -6763,11 +6816,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 onTriggerWake: true
             });
         }
-    }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+    };
+
+    followWatchId = navigator.geolocation.watchPosition(
+        activeFollowGpsHandler,
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
 };
 
 const endFollowAction = () => {
     VoiceQueue.clear();
+    activeFollowGpsHandler = null;
     if (followWatchId !== null) {
         navigator.geolocation.clearWatch(followWatchId);
         followWatchId = null;
@@ -8462,16 +8522,25 @@ if (settingsEditFleetNameBtn) {
     };
 }
 
+let pendingForcedFleetUpload = null;
+
 async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     if (!fleetUserName || typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
-    if (!navigator.onLine || isUploadingFleetLocation) return;
+    if (!navigator.onLine) return;
+    if (isUploadingFleetLocation) {
+        if (forceUpload) {
+            pendingForcedFleetUpload = { lat, lng };
+        }
+        return;
+    }
 
     const now = Date.now();
     const minUploadIntervalMs = (typeof currentRadarIntervalSec === 'number' && currentRadarIntervalSec > 0 ? currentRadarIntervalSec : 5) * 1000;
     if (!forceUpload && lastUploadedFleetLat !== null && lastUploadedFleetLng !== null) {
         if (now - lastFleetUploadTime < minUploadIntervalMs) return; // 依雲端設定秒數頻率上傳
         const distMeters = getDistanceKm(lastUploadedFleetLng, lastUploadedFleetLat, lng, lat) * 1000;
-        if (distMeters <= 5) return; // 移動未超過 5 公尺不重複上傳
+        // 若原地等待紅燈或定點清運超過 15 秒且手機處於前景接收 GPS，允許更新一次 updatedAt 保持 30 秒內鮮明在線狀態
+        if (distMeters <= 5 && (now - lastFleetUploadTime < 15000)) return;
     }
 
     const prevLat = lastUploadedFleetLat;
@@ -8502,6 +8571,11 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
         lastUploadedFleetLng = prevLng;
     } finally {
         isUploadingFleetLocation = false;
+        if (pendingForcedFleetUpload) {
+            const nextUpload = pendingForcedFleetUpload;
+            pendingForcedFleetUpload = null;
+            uploadMyFleetLocation(nextUpload.lat, nextUpload.lng, true);
+        }
     }
 }
 
@@ -8515,10 +8589,35 @@ window.onFleetPositionUpdate = function(lat, lng) {
 };
 
 // ==========================================
-// 🟢 左上角「車隊雷達在線名單」即時清單（支援超過 3 人自動收折＋點擊快速 flyTo 追蹤隊友）
+// 🟢 左上角「車隊雷達在線名單」即時清單（支援超過 3 人自動收折＋點擊快速 flyTo 追蹤隊友＋超過 30 秒休眠提示）
 // ==========================================
 let onlineFleetMembersList = [];
 let isOnlineFleetListExpanded = false;
+const FLEET_STALE_SLEEP_THRESHOLD_MS = 30 * 1000; // 超過 30 秒未更新視為手機休眠／過期座標
+const FLEET_MAX_RETENTION_MS = 15 * 60 * 1000;    // 保留 15 分鐘內的隊員位置以顯示（X分前・休眠）防誤判
+
+function getFleetStaleStatus(updatedAt, now = Date.now()) {
+    const elapsedMs = Math.max(0, now - Number(updatedAt || 0));
+    const isStale = elapsedMs > FLEET_STALE_SLEEP_THRESHOLD_MS;
+    const staleMinutes = isStale ? Math.max(1, Math.floor(elapsedMs / 60000)) : 0;
+    const staleText = isStale ? `（${staleMinutes}分前・休眠）` : '';
+    return { isStale, staleMinutes, staleText, elapsedMs };
+}
+
+function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now()) {
+    if (!el) return;
+    const cleanName = (memberName || '隊員').trim();
+    const { isStale, staleText } = getFleetStaleStatus(updatedAt, now);
+    const nameSpan = el.querySelector('.fleet-member-name');
+    if (nameSpan) {
+        nameSpan.textContent = isStale ? `${cleanName}${staleText}` : cleanName;
+    }
+    if (isStale) {
+        el.classList.add('is-stale-sleeping');
+    } else {
+        el.classList.remove('is-stale-sleeping');
+    }
+}
 
 function renderOnlineFleetListUI() {
     const container = document.getElementById('onlineFleetListContainer');
@@ -8534,6 +8633,7 @@ function renderOnlineFleetListUI() {
     container.classList.remove('hidden');
     container.innerHTML = '';
 
+    const now = Date.now();
     const totalOnline = onlineFleetMembersList.length;
     const maxVisible = 3;
     const shouldCollapse = totalOnline > maxVisible && !isOnlineFleetListExpanded;
@@ -8542,17 +8642,24 @@ function renderOnlineFleetListUI() {
         : onlineFleetMembersList;
 
     visibleMembers.forEach(member => {
+        const { isStale, staleText } = getFleetStaleStatus(member.updatedAt, now);
         const pillBtn = document.createElement('button');
         pillBtn.type = 'button';
-        pillBtn.className = 'bg-white/95 hover:bg-emerald-50 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-gray-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap';
-        pillBtn.title = `點擊追蹤 ${member.name} 的即時位置`;
+        pillBtn.className = isStale
+            ? 'bg-slate-100/90 hover:bg-slate-200/90 backdrop-blur px-3 py-1.5 rounded-xl shadow-sm text-xs font-extrabold text-slate-500 border border-slate-300 flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap opacity-75'
+            : 'bg-white/95 hover:bg-emerald-50 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-gray-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap';
+        pillBtn.title = isStale
+            ? `${member.name} 目前可能鎖屏休眠，點擊查看最後回報位置`
+            : `點擊追蹤 ${member.name} 的即時位置`;
 
         const dotSpan = document.createElement('span');
-        dotSpan.textContent = '🟢';
+        dotSpan.textContent = isStale ? '⚪' : '🟢';
         dotSpan.className = 'text-[10px] leading-none';
 
         const textSpan = document.createElement('span');
-        textSpan.textContent = `${member.name} · ${member.speedKmh} km/h`;
+        textSpan.textContent = isStale
+            ? `${member.name}${staleText}`
+            : `${member.name} · ${member.speedKmh} km/h`;
 
         pillBtn.appendChild(dotSpan);
         pillBtn.appendChild(textSpan);
@@ -8590,18 +8697,18 @@ function renderOnlineFleetListUI() {
     }
 }
 
-function createFleetTruckMarkerElement(memberName) {
+function createFleetTruckMarkerElement(memberName, updatedAt = Date.now()) {
     const wrapper = document.createElement('div');
     wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
     wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
     wrapper.innerHTML = `
-        <div class="bg-emerald-600 text-white px-2.5 py-1 rounded-full border-2 border-white font-black text-xs flex items-center gap-1.5 whitespace-nowrap shadow-md">
-            <i class="fa-solid fa-truck text-amber-300 text-xs"></i>
+        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-1 rounded-full border-2 border-white font-black text-xs flex items-center gap-1.5 whitespace-nowrap shadow-md">
+            <i class="fleet-truck-icon fa-solid fa-truck text-amber-300 text-xs"></i>
             <span class="fleet-member-name"></span>
         </div>
-        <div class="w-2.5 h-2.5 bg-emerald-600 border-r-2 border-b-2 border-white transform rotate-45 -mt-1.5"></div>
+        <div class="fleet-truck-arrow w-2.5 h-2.5 bg-emerald-600 border-r-2 border-b-2 border-white transform rotate-45 -mt-1.5"></div>
     `;
-    wrapper.querySelector('.fleet-member-name').textContent = memberName || '隊員';
+    updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt);
     return wrapper;
 }
 
@@ -8628,17 +8735,20 @@ async function fetchAndRenderFleetRadar() {
                     : new Date(info.updatedAt || 0).getTime();
 
                 if (isNaN(lat) || isNaN(lng) || !updatedAt) return;
-                // 僅顯示 3 分鐘（180 秒）內有更新的線上友車
-                if (now - updatedAt > 180 * 1000) return;
+                // 保留 15 分鐘內有紀錄的友車：30 秒內顯示鮮明即時色彩，超過 30 秒自動轉為半透明灰階並標註（X分前・休眠）
+                if (now - updatedAt > FLEET_MAX_RETENTION_MS) return;
 
                 activeIds.add(devId);
                 const memberName = (info.name || '隊員').trim();
+                const isStaleMember = (now - updatedAt) > FLEET_STALE_SLEEP_THRESHOLD_MS;
 
-                // 計算同事即時時速 (km/h)：優先採用雲端回報之 speedKmh，若舊版未帶則依前後座標差推算
+                // 計算同事即時時速 (km/h)：優先採用雲端回報之 speedKmh，若超過 30 秒休眠則歸零
                 let memberSpeedKmh = 0;
                 const existingEntry = fleetLayerGroup[devId];
-                if (typeof info.speedKmh === 'number' && !isNaN(info.speedKmh) && info.speedKmh >= 0) {
-                    memberSpeedKmh = (now - updatedAt > 30000) ? 0 : Math.round(info.speedKmh);
+                if (isStaleMember) {
+                    memberSpeedKmh = 0;
+                } else if (typeof info.speedKmh === 'number' && !isNaN(info.speedKmh) && info.speedKmh >= 0) {
+                    memberSpeedKmh = Math.round(info.speedKmh);
                 } else if (existingEntry && existingEntry.lastLat !== undefined && existingEntry.lastUpdatedAt && updatedAt > existingEntry.lastUpdatedAt) {
                     const distKm = getDistanceKm(existingEntry.lastLng, existingEntry.lastLat, lng, lat);
                     const dtSec = Math.max(1, (updatedAt - existingEntry.lastUpdatedAt) / 1000);
@@ -8651,17 +8761,14 @@ async function fetchAndRenderFleetRadar() {
 
                 if (existingEntry) {
                     existingEntry.marker.setLngLat([lng, lat]);
-                    if (existingEntry.name !== memberName) {
-                        const nameSpan = existingEntry.el.querySelector('.fleet-member-name');
-                        if (nameSpan) nameSpan.textContent = memberName;
-                        existingEntry.name = memberName;
-                    }
+                    existingEntry.name = memberName;
                     existingEntry.lastLat = lat;
                     existingEntry.lastLng = lng;
                     existingEntry.lastUpdatedAt = updatedAt;
                     existingEntry.speedKmh = memberSpeedKmh;
+                    updateFleetTruckMarkerAppearance(existingEntry.el, memberName, updatedAt, now);
                 } else {
-                    const el = createFleetTruckMarkerElement(memberName);
+                    const el = createFleetTruckMarkerElement(memberName, updatedAt);
                     const marker = new maplibregl.Marker({
                         element: el,
                         anchor: 'bottom',
@@ -8687,12 +8794,13 @@ async function fetchAndRenderFleetRadar() {
                     lat,
                     lng,
                     speedKmh: memberSpeedKmh,
-                    updatedAt
+                    updatedAt,
+                    isStale: isStaleMember
                 });
             });
         }
 
-        // 移除超過 3 分鐘未更新或已離線的友車標記
+        // 移除超過 15 分鐘未更新或已離線的友車標記
         Object.keys(fleetLayerGroup).forEach(devId => {
             if (!activeIds.has(devId)) {
                 fleetLayerGroup[devId].marker.remove();
@@ -8700,12 +8808,22 @@ async function fetchAndRenderFleetRadar() {
             }
         });
 
-        // 依名稱排序保持清單穩定不跳動，並更新左上角在線名單 UI
-        nextOnlineMembers.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+        // 排序：30 秒內活躍隊員優先排前，休眠隊員排後，同狀態依名稱排序
+        nextOnlineMembers.sort((a, b) => {
+            if (a.isStale !== b.isStale) return a.isStale ? 1 : -1;
+            return a.name.localeCompare(b.name, 'zh-Hant');
+        });
         onlineFleetMembersList = nextOnlineMembers;
         renderOnlineFleetListUI();
     } catch (err) {
-        // 巷弄斷網或 5 秒逾時靜默略過，不干擾導航並於下週期自動恢復
+        // 巷弄斷網或 5 秒逾時靜默略過，不干擾導航，同時以本地時間即時刷新既有標記的休眠狀態
+        const now = Date.now();
+        Object.values(fleetLayerGroup).forEach(entry => {
+            if (entry && entry.el && entry.lastUpdatedAt) {
+                updateFleetTruckMarkerAppearance(entry.el, entry.name, entry.lastUpdatedAt, now);
+            }
+        });
+        renderOnlineFleetListUI();
     } finally {
         isFetchingFleetRadar = false;
     }
@@ -8723,7 +8841,7 @@ function removeMyFleetLocationOnUnload() {
 }
 
 // 僅於實際關閉分頁 (beforeunload) 時嘗試清除，移除 pagehide / visibilitychange 刪除動作，
-// 避免司機切換至 LINE 或講電話時在地圖上瞬間消失（異常斷線亦由雲端 3 分鐘逾時機制自動清除）
+// 避免司機切換至 LINE 或講電話時在地圖上瞬間消失
 window.addEventListener('beforeunload', removeMyFleetLocationOnUnload);
 
 // ==========================================
@@ -8832,6 +8950,158 @@ let activeDistanceGuidePin = null;
 let pinDistanceGuideTimer = null;
 let pinDistanceLineMarker = null;
 
+function startFleetRadarGpsWatch() {
+    if (!('geolocation' in navigator) || !fleetUserName) return;
+    if (fleetRadarWatchId !== null) {
+        navigator.geolocation.clearWatch(fleetRadarWatchId);
+        fleetRadarWatchId = null;
+    }
+    fleetRadarWatchId = navigator.geolocation.watchPosition(pos => {
+        markGpsUpdateReceived();
+        const filtered = processFilteredGpsPosition(pos);
+        if (!filtered) return;
+        window.onFleetPositionUpdate(filtered.lat, filtered.lng);
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+}
+
+// ==========================================
+// 🍎 iOS 螢幕解鎖／切回前景「強制重啟 GPS 定位」＋「12 秒前景定位看門狗（Watchdog）」
+// ==========================================
+function forceRestartGpsAndPushLatestLocation(triggerReason = 'wakeup') {
+    if (!('geolocation' in navigator)) return;
+    const now = Date.now();
+    // 防止 visibilitychange / pageshow / focus 於同一瞬間重複觸發取消剛建立的請求
+    if (triggerReason !== 'watchdog' && (now - lastGpsForceRestartAt < 600)) {
+        return;
+    }
+    lastGpsForceRestartAt = now;
+
+    // 1. 立即呼叫 clearWatch() 清除所有可能已在 iOS 背景休眠假死的舊監聽器
+    if (idleWatchId !== null) {
+        navigator.geolocation.clearWatch(idleWatchId);
+        idleWatchId = null;
+    }
+    if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }
+    if (followWatchId !== null) {
+        navigator.geolocation.clearWatch(followWatchId);
+        followWatchId = null;
+    }
+    if (fleetRadarWatchId !== null) {
+        navigator.geolocation.clearWatch(fleetRadarWatchId);
+        fleetRadarWatchId = null;
+    }
+
+    // 2. 立刻重新啟動新的 watchPosition（強制設定 enableHighAccuracy: true, maximumAge: 0, timeout: 15000，不使用舊快取座標）
+    if (isRecording && typeof activeRecordingGpsHandler === 'function') {
+        watchId = navigator.geolocation.watchPosition(
+            activeRecordingGpsHandler,
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+        );
+    } else if (typeof activeFollowGpsHandler === 'function') {
+        followWatchId = navigator.geolocation.watchPosition(
+            activeFollowGpsHandler,
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+        );
+    } else {
+        startIdleGPS();
+    }
+
+    if (fleetRadarStarted && fleetUserName) {
+        startFleetRadarGpsWatch();
+    }
+
+    // 3. 秒抓最新位置推上 Firebase：單次呼叫 getCurrentPosition 取得最新硬體座標，立即更新地圖車標並寫入 Firebase 車隊即時位置節點
+    navigator.geolocation.getCurrentPosition(pos => {
+        markGpsUpdateReceived();
+        if (!pos || !pos.coords) return;
+        const filtered = processFilteredGpsPosition(pos, { forceBaselineReset: true });
+        const rawLat = Number(pos.coords.latitude);
+        const rawLng = Number(pos.coords.longitude);
+        if (isNaN(rawLat) || isNaN(rawLng)) return;
+
+        const latestLat = filtered ? filtered.lat : rawLat;
+        const latestLng = filtered ? filtered.lng : rawLng;
+        const latestHeading = filtered ? filtered.heading : lastRealGpsHeading;
+        const latestAcc = Math.round(
+            filtered
+                ? filtered.accuracy
+                : (typeof pos.coords.accuracy === 'number' && !isNaN(pos.coords.accuracy) ? pos.coords.accuracy : 10)
+        );
+
+        if (!isReplaying) {
+            lastKnownLngLat = [latestLng, latestLat];
+            currentHeading = latestHeading;
+            if (!isPowerSaveMapPaused()) {
+                const accEl = document.getElementById('accuracyText');
+                if (accEl) accEl.innerText = `± ${latestAcc} m`;
+                const recAccEl = document.getElementById('recAccuracyText');
+                if (recAccEl) recAccEl.innerText = `± ${latestAcc} m`;
+
+                if (vehicleMarker) {
+                    smoothMoveVehicleMarker([latestLng, latestLat], latestHeading, 450);
+                }
+                if (isFollowingCamera && map) {
+                    const targetZoom = getDynamicZoomBySpeed(filtered ? filtered.speedKmh : 0);
+                    map.easeTo({
+                        center: [latestLng, latestLat],
+                        zoom: targetZoom,
+                        bearing: isHeadingUpMode ? latestHeading : map.getBearing(),
+                        offset: [0, 100],
+                        duration: 500
+                    });
+                }
+            }
+        }
+
+        // 若正在錄製或導航中，同步將最新座標餵入當前狀態處理器
+        if (isRecording && typeof activeRecordingGpsHandler === 'function') {
+            activeRecordingGpsHandler(pos);
+        } else if (typeof activeFollowGpsHandler === 'function') {
+            activeFollowGpsHandler(pos);
+        }
+
+        // 立刻更新並強制寫入 Firebase 車隊即時位置節點
+        currentFleetLat = latestLat;
+        currentFleetLng = latestLng;
+        if (fleetUserName) {
+            uploadMyFleetLocation(latestLat, latestLng, true);
+        }
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
+}
+
+function startForegroundGpsWatchdog() {
+    if (gpsWatchdogTimer !== null) {
+        clearInterval(gpsWatchdogTimer);
+        gpsWatchdogTimer = null;
+    }
+    // 每 10 秒檢查一次前景 GPS 是否超過 12 秒未收到新座標
+    gpsWatchdogTimer = setInterval(() => {
+        if (document.visibilityState !== 'visible') return;
+        if (!('geolocation' in navigator)) return;
+        const isPositioningActive = Boolean(
+            idleWatchId !== null ||
+            isRecording ||
+            watchId !== null ||
+            typeof activeFollowGpsHandler === 'function' ||
+            followWatchId !== null ||
+            fleetRadarStarted ||
+            fleetRadarWatchId !== null
+        );
+        if (!isPositioningActive) return;
+
+        const now = Date.now();
+        if (lastGpsUpdateTime === 0 || (now - lastGpsUpdateTime) > 12000) {
+            forceRestartGpsAndPushLatestLocation('watchdog');
+        }
+    }, 10000);
+}
+startForegroundGpsWatchdog();
+
 function startFleetRadarSystem() {
     if (!fleetUserName) return;
 
@@ -8851,24 +9121,26 @@ function startFleetRadarSystem() {
 
     fleetRadarStarted = true;
 
-    // 啟動全模式背景定位監聽（確保即使在預覽或切換畫面時也能持續更新座標）
-    if ('geolocation' in navigator) {
-        fleetRadarWatchId = navigator.geolocation.watchPosition(pos => {
-            const filtered = processFilteredGpsPosition(pos);
-            if (!filtered || filtered.isStationary) return;
-            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
-        }, () => {}, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
-    }
+    // 啟動全模式定位監聽（maximumAge: 0, timeout: 15000）
+    startFleetRadarGpsWatch();
 
-    // 若目前已有定位座標，立即進行首次上線回報
-    if (lastKnownLngLat && Array.isArray(lastKnownLngLat) && currentFleetLat !== null) {
-        uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
-    } else if ('geolocation' in navigator) {
+    // 啟動瞬間立即單次抓取最新硬體座標並推上 Firebase
+    if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(pos => {
-            const filtered = processFilteredGpsPosition(pos);
-            if (!filtered) return;
-            window.onFleetPositionUpdate(filtered.lat, filtered.lng);
-        }, () => {}, { enableHighAccuracy: true });
+            markGpsUpdateReceived();
+            const filtered = processFilteredGpsPosition(pos, { forceBaselineReset: true });
+            const lat = filtered ? filtered.lat : Number(pos?.coords?.latitude);
+            const lng = filtered ? filtered.lng : Number(pos?.coords?.longitude);
+            if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
+                currentFleetLat = lat;
+                currentFleetLng = lng;
+                uploadMyFleetLocation(lat, lng, true);
+            }
+        }, () => {
+            if (lastKnownLngLat && Array.isArray(lastKnownLngLat) && currentFleetLat !== null) {
+                uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+            }
+        }, { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 });
     }
 
     // 靜默讀取 /live_fleet.json 更新友車圖層（依雲端動態秒數，預設 5 秒）
@@ -8879,13 +9151,15 @@ function startFleetRadarSystem() {
         fetchAndRenderSharedMapPins();
     }
 
-    // 60 秒定點心跳保活機制：若超過 60 秒未觸發移動上傳，原地補送一次 updatedAt
+    // 前景活躍定點心跳機制：僅當手機處於前景顯示且近期有收到有效 GPS 時，每 15 秒補送一次 updatedAt 保持在線（若鎖屏休眠則停止補送，讓隊友端於 30 秒後正確顯示休眠狀態）
     fleetHeartbeatTimer = setInterval(() => {
         if (!fleetUserName || currentFleetLat === null || currentFleetLng === null) return;
-        if (Date.now() - lastFleetUploadTime >= 60000) {
+        if (document.visibilityState !== 'visible') return;
+        const now = Date.now();
+        if (lastGpsUpdateTime > 0 && (now - lastGpsUpdateTime) <= 20000 && (now - lastFleetUploadTime) >= 15000) {
             uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
         }
-    }, 10000);
+    }, 5000);
 }
 
 // 初始化檢查使用者名稱與啟動車隊雷達
@@ -8896,23 +9170,37 @@ if (fleetUserName) {
     openFleetUserNameModal(true);
 }
 
-document.addEventListener('visibilitychange', async () => {
+async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
+    if (sourceEvent === 'visibilitychange' && document.visibilityState !== 'visible') return;
     if (bgSilentKeepAliveStarted) {
         ensureBackgroundSilentKeepAlive();
     }
-    if (document.visibilityState === 'visible') {
-        ensurePureBlackSystemBars();
-        if (isBlackScreenActive || isRecording || followWatchId !== null) {
-            await requestScreenWakeLock();
-        }
-        if (fleetUserName && currentFleetLat !== null && currentFleetLng !== null) {
-            uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
-        }
-        fetchAndRenderFleetRadar();
-        if (typeof fetchAndRenderSharedMapPins === 'function') {
-            fetchAndRenderSharedMapPins();
-        }
+    ensurePureBlackSystemBars();
+    if (isBlackScreenActive || isRecording || followWatchId !== null || typeof activeFollowGpsHandler === 'function') {
+        await requestScreenWakeLock();
     }
+    // 強制清除舊 watchPosition、重啟新 watchPosition 並立刻以 getCurrentPosition 秒抓最新位置推上 Firebase
+    forceRestartGpsAndPushLatestLocation(sourceEvent);
+    fetchAndRenderFleetRadar();
+    if (typeof fetchAndRenderSharedMapPins === 'function') {
+        fetchAndRenderSharedMapPins();
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        handlePageForegroundWakeup('visibilitychange');
+    }
+});
+
+window.addEventListener('focus', () => {
+    if (document.visibilityState === 'visible') {
+        handlePageForegroundWakeup('focus');
+    }
+});
+
+window.addEventListener('pageshow', () => {
+    handlePageForegroundWakeup('pageshow');
 });
 
 // ==========================================
@@ -10308,6 +10596,24 @@ function highlightAdminAiModelBtn(activeModel) {
     }
 }
 
+function getCurrentSelectedAiModel(preferredModel) {
+    if (preferredModel && ALLOWED_AI_DISPATCH_MODELS.includes(preferredModel)) {
+        return preferredModel;
+    }
+    if (selectedAdminAiModel && ALLOWED_AI_DISPATCH_MODELS.includes(selectedAdminAiModel)) {
+        return selectedAdminAiModel;
+    }
+    const activeDomBtn = document.querySelector('.admin-ai-model-btn.bg-violet-600');
+    const domModel = activeDomBtn?.getAttribute('data-ai-model');
+    if (domModel && ALLOWED_AI_DISPATCH_MODELS.includes(domModel)) {
+        return domModel;
+    }
+    if (systemNavConfig?.aiDispatchModel && ALLOWED_AI_DISPATCH_MODELS.includes(systemNavConfig.aiDispatchModel)) {
+        return systemNavConfig.aiDispatchModel;
+    }
+    return 'gemini-3.6-flash';
+}
+
 function renderAdminAiKeyListUI() {
     const listContainer = document.getElementById('adminAiKeyListContainer');
     const countBadge = document.getElementById('adminAiKeyCountBadge');
@@ -10335,8 +10641,11 @@ function renderAdminAiKeyListUI() {
         const isActive = (item.id === editingActiveAiKeyId);
         const row = document.createElement('div');
         row.className = isActive
-            ? 'bg-violet-100/90 border-2 border-violet-500 rounded-xl p-2.5 flex items-center justify-between gap-2 shadow-sm pointer-events-auto'
-            : 'bg-white border border-gray-200 rounded-xl p-2.5 flex items-center justify-between gap-2 pointer-events-auto';
+            ? 'bg-violet-100/90 border-2 border-violet-500 rounded-xl p-2.5 flex flex-col gap-2 shadow-sm pointer-events-auto'
+            : 'bg-white border border-gray-200 rounded-xl p-2.5 flex flex-col gap-2 pointer-events-auto';
+
+        const topBar = document.createElement('div');
+        topBar.className = 'flex items-center justify-between gap-2';
 
         const infoDiv = document.createElement('div');
         infoDiv.className = 'min-w-0 flex-1 cursor-pointer';
@@ -10347,7 +10656,6 @@ function renderAdminAiKeyListUI() {
                     ? '<span class="bg-violet-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">✓ 啟用中</span>'
                     : '<span class="bg-gray-100 text-gray-600 text-[10px] font-extrabold px-2 py-0.5 rounded-full">備用</span>'}
             </div>
-            <div class="text-[11px] font-mono font-bold text-gray-600 mt-0.5 truncate">${maskGeminiApiKey(item.key)}</div>
         `;
         infoDiv.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -10356,18 +10664,42 @@ function renderAdminAiKeyListUI() {
             persistAdminAiSettingsImmediately();
         });
 
+        // 該列專屬 API Key 輸入框（支援直接修改與 .trim() 即時測試連線，不必先按儲存並同步）
+        const rowKeyInput = document.createElement('input');
+        rowKeyInput.type = 'text';
+        rowKeyInput.value = String(item.key || '').trim();
+        rowKeyInput.placeholder = '貼上 Gemini API Key (AIzaSy...)';
+        rowKeyInput.autocomplete = 'off';
+        rowKeyInput.spellcheck = false;
+        rowKeyInput.className = 'w-full bg-white/95 border border-violet-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono font-bold text-gray-800 focus:outline-none focus:border-violet-500 pointer-events-auto';
+        ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(evt => {
+            rowKeyInput.addEventListener(evt, (e) => {
+                e.stopPropagation();
+            }, { passive: true });
+        });
+        rowKeyInput.addEventListener('input', () => {
+            item.key = rowKeyInput.value.trim();
+        });
+        rowKeyInput.addEventListener('change', () => {
+            item.key = rowKeyInput.value.trim();
+            persistAdminAiSettingsImmediately();
+        });
+
         const actionsDiv = document.createElement('div');
         actionsDiv.className = 'flex items-center gap-1 flex-shrink-0';
 
-        // ⚡ 測試連線按鈕（驗證此組 API Key 與 Google 搜尋聯網是否有效）
+        // ⚡ 測試連線按鈕（動態讀取當下選中模型與該列輸入框 .trim() 金鑰，發送純文字 ping 輕量測試）
         const testBtn = document.createElement('button');
         testBtn.type = 'button';
         testBtn.className = 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer whitespace-nowrap';
         testBtn.innerHTML = '⚡ 測試連線';
-        testBtn.title = '測試此組 API Key 聯網連線狀態';
+        testBtn.title = '以當前選中模型測試此組 API Key 連線狀態';
         testBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const keyLabel = item.note || `金鑰 #${idx + 1}`;
+            const liveKey = (rowKeyInput.value || item.key || '').trim();
+            item.key = liveKey;
+            const liveModel = getCurrentSelectedAiModel();
             const testStatusBox = document.getElementById('adminAiKeyTestStatusBox');
             const origHtml = testBtn.innerHTML;
             testBtn.disabled = true;
@@ -10375,21 +10707,21 @@ function renderAdminAiKeyListUI() {
 
             if (testStatusBox) {
                 testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
-                testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在測試「${keyLabel}」的 Gemini 聯網搜尋連線...`;
+                testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${keyLabel}」純文字輕量連線...`;
                 testStatusBox.classList.remove('hidden');
             }
 
             try {
-                const resInfo = await testSingleGeminiApiKey(item.key, selectedAdminAiModel);
+                const resInfo = await testSingleGeminiApiKey(liveKey, liveModel);
                 if (testStatusBox) {
                     testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
-                    testStatusBox.innerHTML = `🟢 Gemini 聯網查詢成功（使用 Key：${keyLabel}｜耗時 ${resInfo.elapsedSec}s）`;
+                    testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜使用 Key：${keyLabel}｜耗時 ${resInfo.elapsedSec}s）`;
                     testStatusBox.classList.remove('hidden');
                 }
             } catch (err) {
                 if (testStatusBox) {
                     testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
-                    testStatusBox.innerHTML = `🔴 Gemini 連線失敗（Key：${keyLabel}）：${err?.message || '未知錯誤'}`;
+                    testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${keyLabel}）：${err?.message || '未知錯誤'}`;
                     testStatusBox.classList.remove('hidden');
                 }
             } finally {
@@ -10429,14 +10761,16 @@ function renderAdminAiKeyListUI() {
         });
         actionsDiv.appendChild(delBtn);
 
-        row.appendChild(infoDiv);
-        row.appendChild(actionsDiv);
+        topBar.appendChild(infoDiv);
+        topBar.appendChild(actionsDiv);
+        row.appendChild(topBar);
+        row.appendChild(rowKeyInput);
         listContainer.appendChild(row);
     });
 }
 
 async function persistAdminAiSettingsImmediately() {
-    systemNavConfig.aiDispatchModel = selectedAdminAiModel;
+    systemNavConfig.aiDispatchModel = getCurrentSelectedAiModel(selectedAdminAiModel);
     systemNavConfig.aiApiKeys = normalizeAiApiKeysArray(editingAdminAiKeys);
     systemNavConfig.activeAiKeyId = editingActiveAiKeyId;
     try {
@@ -10483,6 +10817,7 @@ async function persistAdminAiSettingsImmediately() {
     const noteInput = document.getElementById('adminNewAiKeyNoteInput');
     const keyInput = document.getElementById('adminNewAiKeyInput');
     const saveKeyBtn = document.getElementById('btnSaveNewAiKey');
+    const testNewKeyBtn = document.getElementById('btnTestNewAiKeyInput');
     const cancelKeyBtn = document.getElementById('btnCancelNewAiKey');
 
     // 確保輸入框點擊或觸控時明確 stopPropagation 並 focus，絕不被外層攔截
@@ -10517,6 +10852,53 @@ async function persistAdminAiSettingsImmediately() {
         if (keyInput) keyInput.value = '';
         if (noteInput) noteInput.value = '';
         formWrap?.classList.add('hidden');
+    });
+
+    // 新增金鑰表單內的「⚡ 測試連線」按鈕：即使還沒按「確認新增」或「儲存並同步」，也立即用當下點選的模型與輸入框 .trim() 金鑰測試
+    testNewKeyBtn?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const rawKey = (keyInput?.value || '').trim();
+        const rawNote = (noteInput?.value || '').trim() || '新輸入金鑰';
+        const liveModel = getCurrentSelectedAiModel();
+        const testStatusBox = document.getElementById('adminAiKeyTestStatusBox');
+
+        if (!rawKey) {
+            if (testStatusBox) {
+                testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-amber-50 border-amber-300 text-amber-800';
+                testStatusBox.innerHTML = '⚠️ 請先在 API Key 輸入框貼上金鑰再點擊測試連線！';
+                testStatusBox.classList.remove('hidden');
+            }
+            keyInput?.focus();
+            return;
+        }
+
+        const origHtml = testNewKeyBtn.innerHTML;
+        testNewKeyBtn.disabled = true;
+        testNewKeyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 測試中';
+
+        if (testStatusBox) {
+            testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
+            testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${rawNote}」純文字輕量連線...`;
+            testStatusBox.classList.remove('hidden');
+        }
+
+        try {
+            const resInfo = await testSingleGeminiApiKey(rawKey, liveModel);
+            if (testStatusBox) {
+                testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
+                testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜使用 Key：${rawNote}｜耗時 ${resInfo.elapsedSec}s）`;
+                testStatusBox.classList.remove('hidden');
+            }
+        } catch (err) {
+            if (testStatusBox) {
+                testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
+                testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${rawNote}）：${err?.message || '未知錯誤'}`;
+                testStatusBox.classList.remove('hidden');
+            }
+        } finally {
+            testNewKeyBtn.disabled = false;
+            testNewKeyBtn.innerHTML = origHtml;
+        }
     });
 
     saveKeyBtn?.addEventListener('click', (e) => {
@@ -12159,22 +12541,58 @@ async function fetchAllSharedCommunityBuildings() {
     return Array.from(buildingMap.values());
 }
 
-// 取得按啟用順序排列的 API Key 候選清單（當遇到 HTTP 429 時自動輪替下一組）
+// 取得按啟用順序排列的 API Key 候選清單（動態讀取畫面最新 .trim() 金鑰，當遇到 HTTP 429 時自動輪替下一組）
 function getOrderedGeminiApiKeysForDispatch() {
-    const keys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
-    const activeId = systemNavConfig.activeAiKeyId;
+    const mergedRaw = [];
+    // 優先納入開發者面板正在編輯或已載入的金鑰清單（即便尚未按儲存並同步也立即生效）
+    if (Array.isArray(editingAdminAiKeys) && editingAdminAiKeys.length > 0) {
+        editingAdminAiKeys.forEach(k => {
+            const cleanKey = String(k?.key || '').trim();
+            if (cleanKey) {
+                mergedRaw.push({
+                    id: k.id,
+                    key: cleanKey,
+                    note: String(k.note || '').trim() || '自訂金鑰'
+                });
+            }
+        });
+    }
+    // 合併 systemNavConfig 已存金鑰
+    const savedKeys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
+    savedKeys.forEach(k => {
+        const cleanKey = String(k?.key || '').trim();
+        if (cleanKey && !mergedRaw.some(existing => existing.key === cleanKey)) {
+            mergedRaw.push({
+                id: k.id,
+                key: cleanKey,
+                note: String(k.note || '').trim() || '自訂金鑰'
+            });
+        }
+    });
+    // 若新增金鑰輸入框中有未按「確認新增」的金鑰，也納入候選
+    const pendingInputKey = (document.getElementById('adminNewAiKeyInput')?.value || '').trim();
+    const pendingInputNote = (document.getElementById('adminNewAiKeyNoteInput')?.value || '').trim();
+    if (pendingInputKey && !mergedRaw.some(existing => existing.key === pendingInputKey)) {
+        mergedRaw.push({
+            id: '__pending_input__',
+            key: pendingInputKey,
+            note: pendingInputNote || '新填入金鑰'
+        });
+    }
+
+    const activeId = editingActiveAiKeyId || systemNavConfig.activeAiKeyId;
     const ordered = [];
-    const activeObj = keys.find(k => k.id === activeId);
+    const activeObj = mergedRaw.find(k => k.id === activeId);
     if (activeObj) ordered.push(activeObj);
-    keys.forEach(k => {
-        if (!activeObj || k.id !== activeObj.id) {
+    mergedRaw.forEach(k => {
+        if (!activeObj || k.key !== activeObj.key) {
             ordered.push(k);
         }
     });
     return ordered;
 }
 
-// 從 Gemini 聯網搜尋回傳文字中提取合法 JSON 陣列
+// 從 Gemini 回傳文字中提取合法 JSON 陣列
 function extractJsonArrayFromGeminiText(rawText) {
     const cleaned = String(rawText || '')
         .replace(/^```json\s*/i, '')
@@ -12196,70 +12614,84 @@ function extractJsonArrayFromGeminiText(rawText) {
     throw new Error('AI 回傳格式非有效 JSON 陣列');
 }
 
-// ⚡ 單組 API Key 聯網連線測試（支援伺服器端 /api/gemini/test 與瀏覽器 REST 雙通道）
-async function testSingleGeminiApiKey(apiKey, modelName) {
+// 建立 Gemini 模型候選陣列（優先呼叫當前選中的 gemini-3.6-flash 或 gemini-4-hydrogen）
+function getGeminiModelCandidates(selectedModel) {
+    const primary = getCurrentSelectedAiModel(selectedModel);
+    if (primary === 'gemini-4-hydrogen') {
+        return ['gemini-4-hydrogen', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    }
+    return ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+}
+
+// ⚡ 單組 API Key 純文字輕量連線測試（嚴禁帶入 google_search 工具，避免免費額度觸發 HTTP 429 RESOURCE_EXHAUSTED）
+async function testSingleGeminiApiKey(rawApiKey, rawModelName) {
+    const apiKey = String(rawApiKey || '').trim();
+    const selectedModel = getCurrentSelectedAiModel(rawModelName);
     const startMs = performance.now();
-    try {
+
+    if (!apiKey) {
+        // 若未提供自訂 Key，測試後端預設環境金鑰（同樣為純文字 ping、不含 google_search）
         const res = await fetchWithTimeout('/api/gemini/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                apiKey,
-                model: modelName || 'gemini-3.6-flash'
+                apiKey: '',
+                model: selectedModel
             })
-        }, 20000);
-
+        }, 15000);
         if (res.ok) {
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             const elapsedSec = data?.elapsedSec || ((performance.now() - startMs) / 1000).toFixed(1);
-            return { ok: true, elapsedSec };
+            return { ok: true, elapsedSec, testedModel: selectedModel };
         }
-
-        if (res.status !== 404 && res.status !== 405) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData?.error || `HTTP ${res.status} 連線失敗`);
-        }
-    } catch (err) {
-        // 若非 404/405 或網路問題而是明確的 API 錯誤，且訊息已包含 HTTP 狀態碼，直接拋出
-        if (err && /HTTP (400|403|429|500)/.test(String(err.message || ''))) {
-            throw err;
-        }
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error || `HTTP ${res.status} 連線失敗`);
     }
 
-    // 靜態託管環境下直接透過瀏覽器端測試 Gemini REST API (含 google_search 聯網工具)
-    const candidateRestModels = modelName === 'gemini-4-hydrogen'
-        ? ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash']
-        : ['gemini-3.6-flash', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
-
+    // 直接對標準 v1beta REST 端點發送最輕量純文字 "ping"（maxOutputTokens: 10，嚴禁附加 tools: [{ google_search: {} }]）
+    const candidateModels = getGeminiModelCandidates(selectedModel);
     let lastStatus = 500;
     let lastReason = '未知錯誤';
-    for (const restModel of candidateRestModels) {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    for (const modelId of candidateModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
         const resp = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ parts: [{ text: '請查詢新北市鶯歌區公所的經緯度座標並回傳 JSON {"lat":24.95,"lng":121.35}' }] }],
-                tools: [{ google_search: {} }]
+                contents: [{ parts: [{ text: 'ping' }] }],
+                generationConfig: {
+                    maxOutputTokens: 10
+                }
             })
-        }, 20000);
+        }, 15000);
 
         lastStatus = resp.status;
         if (resp.ok) {
             const elapsedSec = ((performance.now() - startMs) / 1000).toFixed(1);
-            return { ok: true, elapsedSec };
+            return { ok: true, elapsedSec, testedModel: selectedModel };
         }
+
         const errJson = await resp.json().catch(() => null);
         lastReason = errJson?.error?.message || errJson?.error?.status || `HTTP ${resp.status}`;
-        if (resp.status === 400 || resp.status === 403 || resp.status === 429) {
-            throw new Error(`HTTP ${resp.status}：${lastReason}`);
+
+        // 若為無效金鑰 (400 API_KEY_INVALID / 403 PERMISSION_DENIED) 則立即停止並回報
+        if (resp.status === 400 || resp.status === 403) {
+            if (/API_KEY_INVALID|key not valid|PERMISSION_DENIED|unregistered callers/i.test(lastReason)) {
+                throw new Error(`HTTP ${resp.status}：${lastReason}`);
+            }
         }
+        // 若為 404 (自訂別名模型在官方端點需對應底層模型) 或 429，繼續嘗試下一個相容模型 ID
     }
+
     throw new Error(`HTTP ${lastStatus}：${lastReason}`);
 }
 
-// 直接從瀏覽器端呼叫 Gemini REST API（啟用 "tools": [{ "google_search": {} }] 聯網搜尋真實座標）
-async function callGeminiRestDirectly(apiKey, modelName, dispatchText, communities) {
+// 直接呼叫標準 Gemini REST API 解析派工單（支援遇 429 自動移除 google_search 工具降級為純文字模式重試）
+async function callGeminiRestDirectly(rawApiKey, rawModelName, dispatchText, communities, onStatusUpdate) {
+    const apiKey = String(rawApiKey || '').trim();
+    const selectedModel = getCurrentSelectedAiModel(rawModelName);
+
     const validCommunities = Array.isArray(communities)
         ? communities.map(c => ({
             name: String(c.title || c.name || '').trim(),
@@ -12270,7 +12702,7 @@ async function callGeminiRestDirectly(apiKey, modelName, dispatchText, communiti
 
     const communityListJson = JSON.stringify(validCommunities);
 
-    const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手，具備 Google 搜尋聯網能力（Google Search Grounding）。
+    const buildPromptText = (useSearchTool) => `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手${useSearchTool ? '，具備 Google 搜尋聯網能力（Google Search Grounding）' : ''}。
 以下是全車隊目前已標註的「已標註社區大樓清單（共 ${validCommunities.length} 處）」（含社區名稱與精準 WGS84 經緯度）：
 ${communityListJson}
 
@@ -12281,12 +12713,12 @@ ${dispatchText.trim()}
 
 請嚴格遵照以下步驟解析每一筆派工點位並查出真實經緯度：
 1. 優先比對附帶的「已標註社區大樓清單（${validCommunities.length} 處）」：若派工單上的名稱與清單中的社區相符或高度相似（例如簡稱或漏字），直接採用清單中的精準 lat、lng，並將 source 設為 "community"。
-2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：你必須使用 Google 搜尋（google_search）上網查詢「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請透過 Google 搜尋自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
+2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：請${useSearchTool ? '使用 Google 搜尋（google_search）上網查詢' : '根據台灣新北市鶯歌區道路門牌地理知識推算'}「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
 3. 純木頭判斷 (isPureWood)：只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌/木床（標明木頭）」、「垃圾車支援」或「需垃圾車」等關鍵字，請將 isPureWood 設為 true，否則設為 false。
 4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字），每筆物件必須包含以下欄位：
    - order：順序（數字 1, 2, 3...）
    - name：顯示名稱（字串，若有修正錯別字請顯示修正後的正確名稱或社區名）
-   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 上網查得）
+   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 查得）
    - lat：緯度（數字，例如 24.95421）
    - lng：經度（數字，例如 121.34612）
    - isPureWood：是否純木頭需垃圾車支援（布林值 true 或 false）
@@ -12295,56 +12727,94 @@ ${dispatchText.trim()}
 輸出範例格式：
 [{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
-    const candidateRestModels = modelName === 'gemini-4-hydrogen'
-        ? ['gemini-4-hydrogen', 'gemini-2.5-pro', 'gemini-2.5-flash']
-        : ['gemini-3.6-flash', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
-
+    const candidateRestModels = getGeminiModelCandidates(selectedModel);
     let lastStatus = 500;
     let lastErrText = '';
+    let encountered429WithTool = false;
+
+    // 第一階段：優先嘗試帶入 google_search 工具呼叫
     for (const restModel of candidateRestModels) {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${apiKey}`;
         const resp = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ parts: [{ text: promptText }] }],
+                contents: [{ parts: [{ text: buildPromptText(true) }] }],
                 tools: [{ google_search: {} }],
                 generationConfig: {
                     temperature: 0.1
                 }
             })
-        }, 35000);
+        }, 32000);
 
         lastStatus = resp.status;
-        if (resp.status === 429) {
-            const err429 = new Error('HTTP 429 RESOURCE_EXHAUSTED：API Key 額度已滿');
-            err429.status = 429;
-            throw err429;
-        }
         if (resp.ok) {
             const data = await resp.json();
             const parts = data?.candidates?.[0]?.content?.parts || [];
             const rawText = parts.map(p => p.text || '').join('\n').trim() || '[]';
             const items = extractJsonArrayFromGeminiText(rawText);
             return Array.isArray(items) ? items : [];
-        } else {
-            const errObj = await resp.json().catch(() => null);
-            lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
-            if (resp.status === 400 || resp.status === 403) {
-                const authErr = new Error(`HTTP ${resp.status}：${lastErrText}`);
-                authErr.status = resp.status;
-                throw authErr;
-            }
+        }
+
+        const errObj = await resp.json().catch(() => null);
+        lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
+
+        if (resp.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(lastErrText)) {
+            encountered429WithTool = true;
+            continue;
+        }
+        if ((resp.status === 400 || resp.status === 403) && /API_KEY_INVALID|key not valid|PERMISSION_DENIED/i.test(lastErrText)) {
+            const authErr = new Error(`HTTP ${resp.status}：${lastErrText}`);
+            authErr.status = resp.status;
+            throw authErr;
         }
     }
-    const err = new Error(`HTTP ${lastStatus}：${lastErrText || 'Gemini 聯網查詢失敗'}`);
+
+    // 第二階段（工具降級容錯）：若因 google_search 聯網工具配額限制遇到 429 或工具不支援，自動拿掉 google_search 改以純文字模式重試同一組 Key
+    if (typeof onStatusUpdate === 'function') {
+        onStatusUpdate(`⚡ 聯網工具配額受限，正在自動降級為「純文字高速解析模式」（模型：${selectedModel}）重試...`);
+    }
+
+    for (const restModel of candidateRestModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${apiKey}`;
+        const resp = await fetchWithTimeout(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: buildPromptText(false) }] }],
+                generationConfig: {
+                    temperature: 0.1
+                }
+            })
+        }, 28000);
+
+        lastStatus = resp.status;
+        if (resp.ok) {
+            const data = await resp.json();
+            const parts = data?.candidates?.[0]?.content?.parts || [];
+            const rawText = parts.map(p => p.text || '').join('\n').trim() || '[]';
+            const items = extractJsonArrayFromGeminiText(rawText);
+            return Array.isArray(items) ? items : [];
+        }
+
+        const errObj = await resp.json().catch(() => null);
+        lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
+    }
+
+    if (lastStatus === 429 || encountered429WithTool) {
+        const err429 = new Error(`HTTP 429 RESOURCE_EXHAUSTED：${lastErrText || 'API Key 額度已達上限'}`);
+        err429.status = 429;
+        throw err429;
+    }
+
+    const err = new Error(`HTTP ${lastStatus}：${lastErrText || 'Gemini 查詢失敗'}`);
     err.status = lastStatus;
     throw err;
 }
 
-// 呼叫 AI 聯網解析派工單（支援多組 API Key 遇 429 自動輪替下一組，並回傳使用的 Key 備註名稱與耗時秒數）
+// 呼叫 AI 解析派工單（動態讀取當前選定模型，支援遇 429 先降級移除 google_search 工具、再自動輪替下一組有效 API Key）
 async function requestAiDispatchParseWithRotation(dispatchText, communities, onStatusUpdate) {
-    const selectedModel = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
+    const selectedModel = getCurrentSelectedAiModel();
     const orderedKeys = getOrderedGeminiApiKeysForDispatch();
 
     // 候選嘗試清單：若有設定自訂 API Key 則依序嘗試每一組，最後或無設定時也嘗試伺服器環境金鑰 ('')
@@ -12356,13 +12826,38 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
 
     for (let i = 0; i < attempts.length; i++) {
         const candidate = attempts[i];
+        const cleanKey = String(candidate.key || '').trim();
         const keyNote = candidate.note || `金鑰 #${i + 1}`;
         const attemptStartMs = performance.now();
 
-        if (i > 0 && candidate.key && typeof onStatusUpdate === 'function') {
-            onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${keyNote}」聯網查詢中...`);
+        if (i > 0 && typeof onStatusUpdate === 'function') {
+            onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${keyNote}」（模型：${selectedModel}）重試中...`);
         }
 
+        // 若有自訂 API Key，優先直接呼叫標準 v1beta REST API（內建 google_search -> 純文字降級雙重容錯）
+        if (cleanKey) {
+            try {
+                const items = await callGeminiRestDirectly(cleanKey, selectedModel, dispatchText, communities, onStatusUpdate);
+                const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
+                if (candidate.id !== '__server_env__' && candidate.id !== '__pending_input__' && candidate.id !== systemNavConfig.activeAiKeyId) {
+                    systemNavConfig.activeAiKeyId = candidate.id;
+                    editingActiveAiKeyId = candidate.id;
+                    persistAdminAiSettingsImmediately();
+                }
+                return {
+                    items,
+                    usedKeyNote: keyNote,
+                    elapsedSec
+                };
+            } catch (restErr) {
+                lastError = restErr;
+                if (restErr && (restErr.status === 429 || /429|RESOURCE_EXHAUSTED/i.test(String(restErr.message || '')))) {
+                    continue;
+                }
+            }
+        }
+
+        // 備援或使用系統預設金鑰時呼叫後端 /api/gemini/dispatch（後端同樣具備 google_search -> 純文字降級容錯）
         try {
             const res = await fetchWithTimeout('/api/gemini/dispatch', {
                 method: 'POST',
@@ -12370,7 +12865,7 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
                 body: JSON.stringify({
                     dispatchText,
                     model: selectedModel,
-                    apiKey: candidate.key,
+                    apiKey: cleanKey,
                     communities
                 })
             }, 38000);
@@ -12384,7 +12879,7 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
             if (res.ok) {
                 const payload = await res.json();
                 const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
-                if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
+                if (candidate.id !== '__server_env__' && candidate.id !== '__pending_input__' && candidate.id !== systemNavConfig.activeAiKeyId) {
                     systemNavConfig.activeAiKeyId = candidate.id;
                     editingActiveAiKeyId = candidate.id;
                     persistAdminAiSettingsImmediately();
@@ -12396,54 +12891,22 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
                 };
             }
 
-            // 若為 404/405（例如純靜態伺服器無 /api/gemini/dispatch），且有自訂 API Key，直接改走瀏覽器端 Gemini REST
-            if ((res.status === 404 || res.status === 405) && candidate.key) {
-                const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
-                const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
-                if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
-                    systemNavConfig.activeAiKeyId = candidate.id;
-                    editingActiveAiKeyId = candidate.id;
-                    persistAdminAiSettingsImmediately();
-                }
-                return {
-                    items,
-                    usedKeyNote: keyNote,
-                    elapsedSec
-                };
-            }
-
             const errData = await res.json().catch(() => ({}));
             if (errData?.code === 'RESOURCE_EXHAUSTED' || errData?.isQuotaError) {
                 lastError = new Error(errData.error || `HTTP 429：金鑰「${keyNote}」額度限制`);
                 continue;
             }
-            lastError = new Error(errData?.error || `HTTP ${res.status}：AI 服務回應錯誤`);
-        } catch (err) {
-            if (err && err.status === 429) {
-                lastError = err;
-                continue;
+            if (!lastError) {
+                lastError = new Error(errData?.error || `HTTP ${res.status}：AI 服務回應錯誤`);
             }
-            // 若 fetch /api/gemini/dispatch 網路失敗且有自訂 Key，嘗試直接連 Gemini REST
-            if (candidate.key) {
-                try {
-                    const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
-                    const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
-                    return {
-                        items,
-                        usedKeyNote: keyNote,
-                        elapsedSec
-                    };
-                } catch (restErr) {
-                    lastError = restErr;
-                    if (restErr && restErr.status === 429) continue;
-                }
-            } else {
+        } catch (err) {
+            if (!lastError) {
                 lastError = err;
             }
         }
     }
 
-    throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 聯網查詢，請至開發者模式檢查或新增 Gemini API Key');
+    throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 派工查詢，請至開發者模式檢查或新增 Gemini API Key');
 }
 
 // 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 name 也能直接校驗並命中 Firebase 橘色水滴精確座標）
@@ -12480,7 +12943,7 @@ async function openAiDispatchModal() {
 
     if (!modal) return;
     if (modelBadge) {
-        modelBadge.textContent = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
+        modelBadge.textContent = getCurrentSelectedAiModel();
     }
     if (resultBox) {
         resultBox.classList.add('hidden');

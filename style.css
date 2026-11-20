@@ -786,3 +786,32 @@ input, textarea {
     transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.2), box-shadow 0.15s ease;
 }
 
+/* ==========================================
+   🛰️ 車隊雷達標記：超過 30 秒未更新自動轉為「半透明灰階休眠樣式」
+   （外層 .fleet-truck-marker 為 MapLibre Marker 容器，嚴禁設定 transform）
+   ========================================== */
+.fleet-truck-marker {
+    transition: opacity 0.25s ease, filter 0.25s ease;
+}
+
+.fleet-truck-marker.is-stale-sleeping {
+    opacity: 0.56 !important;
+    filter: grayscale(100%) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.25)) !important;
+}
+
+.fleet-truck-marker.is-stale-sleeping .fleet-truck-pill {
+    background-color: #64748b !important;
+    border-color: #e2e8f0 !important;
+    color: #f1f5f9 !important;
+}
+
+.fleet-truck-marker.is-stale-sleeping .fleet-truck-icon {
+    color: #cbd5e1 !important;
+}
+
+.fleet-truck-marker.is-stale-sleeping .fleet-truck-arrow {
+    background-color: #64748b !important;
+    border-color: #e2e8f0 !important;
+}
+
+

@@ -1254,6 +1254,44 @@
                         </div>
                         <input type="checkbox" id="adminShowOnlineFleetListInput" checked class="w-5 h-5 accent-amber-600 rounded cursor-pointer">
                     </label>
+
+                    <!-- 車隊休眠狀態顯示開關與超過分鐘數自動屏蔽設定 -->
+                    <div class="bg-white/95 border border-amber-200 rounded-xl p-3 space-y-2.5">
+                        <label class="flex items-center justify-between cursor-pointer">
+                            <div>
+                                <div class="text-xs font-extrabold text-gray-800">顯示車隊休眠狀態提示</div>
+                                <div class="text-[10px] font-bold text-gray-400">超過 30 秒未更新時顯示（X分前・休眠），關閉則一律不顯示</div>
+                            </div>
+                            <input type="checkbox" id="adminShowFleetSleepStatusInput" checked class="w-5 h-5 accent-amber-600 rounded cursor-pointer">
+                        </label>
+                        <div class="pt-2 border-t border-amber-100 space-y-1.5">
+                            <div class="flex items-center justify-between gap-2">
+                                <div>
+                                    <label for="adminFleetSleepMaxMinutesInput" class="text-[11px] font-extrabold text-gray-700">休眠顯示上限分鐘數（超過自動屏蔽）</label>
+                                    <div class="text-[10px] font-bold text-gray-400">預設 3 分鐘（設為 0 代表不屏蔽上限）</div>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" id="adminFleetSleepMaxMinutesInput" min="0" max="60" step="1" value="3" class="w-16 bg-amber-50/70 border border-amber-300 focus:border-amber-500 text-gray-900 text-xs font-black rounded-lg p-1.5 outline-none text-center">
+                                    <span class="text-[11px] font-extrabold text-gray-600">分</span>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-4 gap-1.5" id="adminSleepMaxMinQuickOptions">
+                                <button type="button" data-sleep-max-min="3" class="admin-sleep-max-min-btn bg-amber-100 border-2 border-amber-500 text-amber-900 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]">
+                                    ✅ 3分鐘
+                                </button>
+                                <button type="button" data-sleep-max-min="5" class="admin-sleep-max-min-btn bg-white hover:bg-amber-50 border border-gray-200 text-gray-700 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]">
+                                    5分鐘
+                                </button>
+                                <button type="button" data-sleep-max-min="10" class="admin-sleep-max-min-btn bg-white hover:bg-amber-50 border border-gray-200 text-gray-700 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]">
+                                    10分鐘
+                                </button>
+                                <button type="button" data-sleep-max-min="0" class="admin-sleep-max-min-btn bg-white hover:bg-amber-50 border border-gray-200 text-gray-700 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]">
+                                    不屏蔽(0)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-5 gap-1.5" id="adminIntervalOptions">
                         <button type="button" data-interval="3" class="admin-interval-btn bg-white hover:bg-blue-50 border-2 border-gray-200 text-gray-800 font-extrabold py-2 px-1 rounded-xl active:scale-95 transition-all flex flex-col items-center justify-center text-xs">
                             <span>⚡3秒</span>

@@ -70,18 +70,16 @@ app.post('/api/gemini/dispatch', async (req, res) => {
             }
         });
 
-        const validCommunities = Array.isArray(communities)
-            ? communities.map(c => ({
-                name: String(c.title || c.name || '').trim(),
-                lat: Number(c.lat),
-                lng: Number(c.lng)
-            })).filter(c => c.name && !isNaN(c.lat) && !isNaN(c.lng))
+        const validCommunityNames = Array.isArray(communities)
+            ? communities.map(c => String(c.title || c.name || '').trim()).filter(Boolean)
             : [];
 
-        const communityListJson = JSON.stringify(validCommunities);
+        const communityListJson = JSON.stringify(validCommunityNames);
 
-        const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手。
-以下是全車隊目前已標註的「已標註社區大樓清單（共 ${validCommunities.length} 處）」（含社區名稱與精準 WGS84 經緯度）：
+        const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工單文字整理助手。
+你只需要負責「整理地址與社區名稱」並去除電話號碼、聯絡人等雜訊，嚴禁自行推測或編造經緯度座標。
+
+以下是全車隊目前已建檔的「已標註社區大樓名稱清單（共 ${validCommunityNames.length} 處）」：
 ${communityListJson}
 
 以下是使用者貼上的今日大型家具派工單文字：
@@ -89,61 +87,60 @@ ${communityListJson}
 ${dispatchText.trim()}
 """
 
-請嚴格遵照以下步驟解析每一筆派工點位並查出真實經緯度：
-1. 優先比對附帶的「已標註社區大樓清單（${validCommunities.length} 處）」：若派工單上的名稱與清單中的社區相符或高度相似（例如簡稱或漏字），直接採用清單中的精準 lat、lng，並將 source 設為 "community"。
-2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：請查詢或推算「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
+請嚴格遵照以下規則萃取每一筆清運地點：
+1. 若該筆地點為社區大樓（或與上方「已標註社區大樓名稱清單」相符／高度相似）：
+   - 將 matchedCommunity 填入匹配到的清單內標準社區名稱（若清單內無完全對應但明確為社區名稱，填入該社區名稱）。
+   - 將 name 設為該社區名稱（例如 "龍鳳呈祥"）。
+   - 將 fullAddress 設為 "新北市鶯歌區" 加上該社區或門牌地址（去除電話與雜訊）。
+2. 若該筆為一般門牌地址、巷弄或路段：
+   - 去除電話號碼、手機、聯絡人稱呼、時間等雜訊，若有明顯鶯歌路名同音錯別字請修正為正確路名。
+   - 將 name 設為簡潔門牌地址（例如 "建國路120號"）。
+   - 將 fullAddress 自動補齊前綴為完整標準門牌地址（必須以 "新北市鶯歌區" 開頭，例如 "新北市鶯歌區建國路120號"，並去除幾樓之幾等樓層尾綴以便門牌定位）。
+   - 將 matchedCommunity 設為 ""。
 3. 純木頭判斷 (isPureWood)：只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌/木床（標明木頭）」、「垃圾車支援」或「需垃圾車」等關鍵字，請將 isPureWood 設為 true，否則設為 false。
-4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字），每筆物件必須包含以下欄位：
+4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字，也不要回傳 lat/lng），每筆物件包含以下欄位：
    - order：順序（數字 1, 2, 3...）
-   - name：顯示名稱（字串，若有修正錯別字請顯示修正後的正確名稱或社區名）
-   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 查得）
-   - lat：緯度（數字，例如 24.95421）
-   - lng：經度（數字，例如 121.34612）
+   - name：顯示名稱（字串，例如 "龍鳳呈祥" 或 "建國路120號"）
+   - fullAddress：完整標準地址（字串，自動補齊前綴為 "新北市鶯歌區..."，已去除電話與樓層雜訊）
+   - matchedCommunity：匹配到的社區大樓名稱（字串，若為一般門牌則為 ""）
    - isPureWood：是否純木頭需垃圾車支援（布林值 true 或 false）
    - note：家具品項與數量備註（字串，例如 "沙發1組、床墊1張"，若無則為 ""）
 
 輸出範例格式：
-[{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
+[{"order":1,"name":"龍鳳呈祥","fullAddress":"新北市鶯歌區龍鳳呈祥","matchedCommunity":"龍鳳呈祥","isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","fullAddress":"新北市鶯歌區建國路120號","matchedCommunity":"","isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
         const candidates = getModelCandidates(selectedModel);
         let lastErr = null;
 
-        // 雙階段執行：第一階段啟用 googleSearch 工具；若遇 429 則自動降級為純文字模式（不帶 googleSearch 工具）重試
-        const toolModes = [true, false];
-        for (const useSearchTool of toolModes) {
-            for (const candidateModel of candidates) {
-                try {
-                    const reqPayload = {
-                        model: candidateModel,
-                        contents: promptText,
-                        config: useSearchTool
-                            ? { tools: [{ googleSearch: {} }], temperature: 0.1 }
-                            : { temperature: 0.1 }
-                    };
-                    const response = await ai.models.generateContent(reqPayload);
-                    const rawText = (response.text || '[]').trim();
-                    const parsed = extractJsonArrayFromText(rawText);
-                    return res.json({
-                        items: Array.isArray(parsed) ? parsed : [],
-                        usedModel: selectedModel,
-                        usedPlainTextFallback: !useSearchTool
+        // 純文字模式呼叫（不掛載 google_search 工具以避免 429 錯誤）
+        for (const candidateModel of candidates) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: candidateModel,
+                    contents: promptText,
+                    config: { temperature: 0.1 }
+                });
+                const rawText = (response.text || '[]').trim();
+                const parsed = extractJsonArrayFromText(rawText);
+                return res.json({
+                    items: Array.isArray(parsed) ? parsed : [],
+                    usedModel: selectedModel
+                });
+            } catch (err) {
+                lastErr = err;
+                const status = err?.status || err?.httpStatusCode || (String(err?.message || '').includes('429') ? 429 : 0);
+                const msg = String(err?.message || '');
+                if (status === 400 && (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))) {
+                    return res.status(400).json({
+                        error: 'HTTP 400 API_KEY_INVALID：API Key 無效，請檢查金鑰是否正確',
+                        code: 'API_KEY_INVALID'
                     });
-                } catch (err) {
-                    lastErr = err;
-                    const status = err?.status || err?.httpStatusCode || (String(err?.message || '').includes('429') ? 429 : 0);
-                    const msg = String(err?.message || '');
-                    if (status === 400 && (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid'))) {
-                        return res.status(400).json({
-                            error: 'HTTP 400 API_KEY_INVALID：API Key 無效，請檢查金鑰是否正確',
-                            code: 'API_KEY_INVALID'
-                        });
-                    }
-                    if (status === 403 || msg.includes('PERMISSION_DENIED')) {
-                        return res.status(403).json({
-                            error: `HTTP 403 PERMISSION_DENIED：API Key 權限遭拒 (${msg.slice(0, 120)})`,
-                            code: 'PERMISSION_DENIED'
-                        });
-                    }
+                }
+                if (status === 403 || msg.includes('PERMISSION_DENIED')) {
+                    return res.status(403).json({
+                        error: `HTTP 403 PERMISSION_DENIED：API Key 權限遭拒 (${msg.slice(0, 120)})`,
+                        code: 'PERMISSION_DENIED'
+                    });
                 }
             }
         }

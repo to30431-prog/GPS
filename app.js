@@ -58,6 +58,8 @@ const DEFAULT_SYSTEM_CONFIG = {
     highSpeedZoom: 14.5,
     enableDynamicZoom: true,
     showOnlineFleetList: true,
+    showFleetSleepStatus: true,
+    fleetSleepMaxMinutes: 3,
     maxAccuracyMeters: 45,
     maxSpeedKmh: 160,
     minLockSpeedKmh: 4,
@@ -118,6 +120,8 @@ function normalizeSystemConfig(raw) {
         highSpeedZoom: Number(clampNum(src.highSpeedZoom, 10, 20, DEFAULT_SYSTEM_CONFIG.highSpeedZoom).toFixed(2)),
         enableDynamicZoom: typeof src.enableDynamicZoom === 'boolean' ? src.enableDynamicZoom : DEFAULT_SYSTEM_CONFIG.enableDynamicZoom,
         showOnlineFleetList: typeof src.showOnlineFleetList === 'boolean' ? src.showOnlineFleetList : DEFAULT_SYSTEM_CONFIG.showOnlineFleetList,
+        showFleetSleepStatus: typeof src.showFleetSleepStatus === 'boolean' ? src.showFleetSleepStatus : DEFAULT_SYSTEM_CONFIG.showFleetSleepStatus,
+        fleetSleepMaxMinutes: Math.round(clampNum(src.fleetSleepMaxMinutes, 0, 120, DEFAULT_SYSTEM_CONFIG.fleetSleepMaxMinutes)),
         maxAccuracyMeters: clampNum(src.maxAccuracyMeters, 5, 300, DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters),
         maxSpeedKmh: clampNum(src.maxSpeedKmh, 30, 300, DEFAULT_SYSTEM_CONFIG.maxSpeedKmh),
         minLockSpeedKmh: Number(clampNum(src.minLockSpeedKmh, 0.5, 30, DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh).toFixed(1)),
@@ -8598,10 +8602,21 @@ const FLEET_MAX_RETENTION_MS = 15 * 60 * 1000;    // 保留 15 分鐘內的隊�
 
 function getFleetStaleStatus(updatedAt, now = Date.now()) {
     const elapsedMs = Math.max(0, now - Number(updatedAt || 0));
-    const isStale = elapsedMs > FLEET_STALE_SLEEP_THRESHOLD_MS;
-    const staleMinutes = isStale ? Math.max(1, Math.floor(elapsedMs / 60000)) : 0;
+    const isOver30s = elapsedMs > FLEET_STALE_SLEEP_THRESHOLD_MS;
+    const rawStaleMinutes = isOver30s ? Math.max(1, Math.floor(elapsedMs / 60000)) : 0;
+
+    // 開發者模式設定：休眠提示開關（預設開啟）與超過設定分鐘數自動屏蔽（預設 3 分鐘，設為 0 代表不屏蔽）
+    const showSleepEnabled = systemNavConfig.showFleetSleepStatus !== false;
+    const rawMaxMin = Number(systemNavConfig.fleetSleepMaxMinutes);
+    const maxMinutes = isNaN(rawMaxMin) ? DEFAULT_SYSTEM_CONFIG.fleetSleepMaxMinutes : Math.max(0, rawMaxMin);
+    const isExceededMaxMinutes = maxMinutes > 0 && elapsedMs > (maxMinutes * 60 * 1000);
+
+    // 僅當「休眠提示開關為開啟」且「超過 30 秒」且「未超過設定上限分鐘數」時，才顯示（X分前・休眠）與半透明休眠樣式
+    const isStale = Boolean(showSleepEnabled && isOver30s && !isExceededMaxMinutes);
+    const staleMinutes = isStale ? rawStaleMinutes : 0;
     const staleText = isStale ? `（${staleMinutes}分前・休眠）` : '';
-    return { isStale, staleMinutes, staleText, elapsedMs };
+
+    return { isStale, isOver30s, isExceededMaxMinutes, staleMinutes, staleText, elapsedMs };
 }
 
 function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now()) {
@@ -10396,7 +10411,15 @@ function applySystemConfigToRuntime(newCfg) {
     // 1. 全隊頂部公告橫幅即時顯示／隱藏
     renderFleetAnnouncementBanner(normalized.announcementText);
 
-    // 1.5 左上角車隊雷達在線名單顯示開關即時同步套用
+    // 1.5 左上角車隊雷達在線名單與地圖友車標記休眠狀態即時同步套用
+    if (typeof fleetLayerGroup === 'object' && fleetLayerGroup) {
+        const now = Date.now();
+        Object.values(fleetLayerGroup).forEach(entry => {
+            if (entry && entry.el && entry.lastUpdatedAt) {
+                updateFleetTruckMarkerAppearance(entry.el, entry.name, entry.lastUpdatedAt, now);
+            }
+        });
+    }
     if (typeof renderOnlineFleetListUI === 'function') {
         renderOnlineFleetListUI();
     }
@@ -10935,6 +10958,23 @@ async function persistAdminAiSettingsImmediately() {
     });
 })();
 
+function highlightAdminSleepMaxMinBtn(activeMinutes) {
+    const numVal = Number(activeMinutes);
+    const btns = document.querySelectorAll('.admin-sleep-max-min-btn');
+    btns.forEach(btn => {
+        const btnVal = parseInt(btn.getAttribute('data-sleep-max-min'), 10);
+        const isMatch = (!isNaN(numVal) && btnVal === numVal);
+        const labelText = btnVal === 0 ? '不屏蔽(0)' : `${btnVal}分鐘`;
+        if (isMatch) {
+            btn.className = 'admin-sleep-max-min-btn bg-amber-100 border-2 border-amber-500 text-amber-900 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]';
+            btn.textContent = `✅ ${labelText}`;
+        } else {
+            btn.className = 'admin-sleep-max-min-btn bg-white hover:bg-amber-50 border border-gray-200 text-gray-700 font-extrabold py-1.5 px-1 rounded-lg active:scale-95 transition-all text-[11px]';
+            btn.textContent = labelText;
+        }
+    });
+}
+
 function populateAdminSettingsForm(cfg) {
     const c = normalizeSystemConfig(cfg);
     selectedAdminInterval = c.radarIntervalSec;
@@ -10966,6 +11006,9 @@ function populateAdminSettingsForm(cfg) {
     setVal('adminHighSpeedZoomInput', c.highSpeedZoom);
     setChecked('adminEnableDynamicZoomInput', c.enableDynamicZoom);
     setChecked('adminShowOnlineFleetListInput', c.showOnlineFleetList);
+    setChecked('adminShowFleetSleepStatusInput', c.showFleetSleepStatus);
+    setVal('adminFleetSleepMaxMinutesInput', c.fleetSleepMaxMinutes);
+    highlightAdminSleepMaxMinBtn(c.fleetSleepMaxMinutes);
     setVal('adminMaxAccuracyInput', c.maxAccuracyMeters);
     setVal('adminMaxSpeedInput', c.maxSpeedKmh);
     setVal('adminMinLockSpeedInput', c.minLockSpeedKmh);
@@ -11011,6 +11054,8 @@ function readAdminSettingsForm() {
         highSpeedZoom: getVal('adminHighSpeedZoomInput'),
         enableDynamicZoom: getChecked('adminEnableDynamicZoomInput'),
         showOnlineFleetList: getChecked('adminShowOnlineFleetListInput'),
+        showFleetSleepStatus: getChecked('adminShowFleetSleepStatusInput'),
+        fleetSleepMaxMinutes: getVal('adminFleetSleepMaxMinutesInput'),
         maxAccuracyMeters: getVal('adminMaxAccuracyInput'),
         maxSpeedKmh: getVal('adminMaxSpeedInput'),
         minLockSpeedKmh: getVal('adminMinLockSpeedInput'),
@@ -11069,6 +11114,24 @@ document.querySelectorAll('.admin-interval-btn').forEach(btn => {
             highlightAdminIntervalBtn(val);
         }
     });
+});
+
+// 休眠顯示上限分鐘數快速按鈕與輸入框雙向同步事件
+document.querySelectorAll('.admin-sleep-max-min-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = parseInt(btn.getAttribute('data-sleep-max-min'), 10);
+        if (!isNaN(val) && val >= 0) {
+            const inputEl = document.getElementById('adminFleetSleepMaxMinutesInput');
+            if (inputEl) inputEl.value = val;
+            highlightAdminSleepMaxMinBtn(val);
+        }
+    });
+});
+
+document.getElementById('adminFleetSleepMaxMinutesInput')?.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value, 10);
+    highlightAdminSleepMaxMinBtn(isNaN(val) ? -1 : val);
 });
 
 // 一鍵清空公告按鈕
@@ -12687,23 +12750,21 @@ async function testSingleGeminiApiKey(rawApiKey, rawModelName) {
     throw new Error(`HTTP ${lastStatus}：${lastReason}`);
 }
 
-// 直接呼叫標準 Gemini REST API 解析派工單（支援遇 429 自動移除 google_search 工具降級為純文字模式重試）
-async function callGeminiRestDirectly(rawApiKey, rawModelName, dispatchText, communities, onStatusUpdate) {
+// 一、Gemini API 只負責「整理地址與社區名稱」（不掛載 google_search 工具以避免 429 錯誤，嚴禁由 AI 推測經緯度）
+async function callGeminiRestDirectly(rawApiKey, rawModelName, dispatchText, communities) {
     const apiKey = String(rawApiKey || '').trim();
     const selectedModel = getCurrentSelectedAiModel(rawModelName);
 
-    const validCommunities = Array.isArray(communities)
-        ? communities.map(c => ({
-            name: String(c.title || c.name || '').trim(),
-            lat: Number(c.lat),
-            lng: Number(c.lng)
-        })).filter(c => c.name && !isNaN(c.lat) && !isNaN(c.lng))
+    const validCommunityNames = Array.isArray(communities)
+        ? communities.map(c => String(c.title || c.name || '').trim()).filter(Boolean)
         : [];
 
-    const communityListJson = JSON.stringify(validCommunities);
+    const communityListJson = JSON.stringify(validCommunityNames);
 
-    const buildPromptText = (useSearchTool) => `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工定位助手${useSearchTool ? '，具備 Google 搜尋聯網能力（Google Search Grounding）' : ''}。
-以下是全車隊目前已標註的「已標註社區大樓清單（共 ${validCommunities.length} 處）」（含社區名稱與精準 WGS84 經緯度）：
+    const promptText = `你是一個專業的新北市鶯歌區清潔隊大型家具清運派工單文字整理助手。
+你只需要負責「整理地址與社區名稱」並去除電話號碼、聯絡人等雜訊，嚴禁自行推測或編造經緯度座標。
+
+以下是全車隊目前已建檔的「已標註社區大樓名稱清單（共 ${validCommunityNames.length} 處）」：
 ${communityListJson}
 
 以下是使用者貼上的今日大型家具派工單文字：
@@ -12711,77 +12772,40 @@ ${communityListJson}
 ${dispatchText.trim()}
 """
 
-請嚴格遵照以下步驟解析每一筆派工點位並查出真實經緯度：
-1. 優先比對附帶的「已標註社區大樓清單（${validCommunities.length} 處）」：若派工單上的名稱與清單中的社區相符或高度相似（例如簡稱或漏字），直接採用清單中的精準 lat、lng，並將 source 設為 "community"。
-2. 若不在已標註清單內（例如一般門牌地址、巷弄或地標）：請${useSearchTool ? '使用 Google 搜尋（google_search）上網查詢' : '根據台灣新北市鶯歌區道路門牌地理知識推算'}「新北市鶯歌區＋該地址」的實際地理位置與經緯度座標（WGS84 格式，鶯歌區 lat 約在 24.93~24.98 之間，lng 約在 121.31~121.36 之間）。若地址有明顯錯別字（例如同音異字），也請自動修正為鶯歌區正確路名與門牌座標，並將 source 設為 "google_search"。
+請嚴格遵照以下規則萃取每一筆清運地點：
+1. 若該筆地點為社區大樓（或與上方「已標註社區大樓名稱清單」相符／高度相似）：
+   - 將 matchedCommunity 填入匹配到的清單內標準社區名稱（若清單內無完全對應但明確為社區名稱，填入該社區名稱）。
+   - 將 name 設為該社區名稱（例如 "龍鳳呈祥"）。
+   - 將 fullAddress 設為 "新北市鶯歌區" 加上該社區或門牌地址（去除電話與雜訊）。
+2. 若該筆為一般門牌地址、巷弄或路段：
+   - 去除電話號碼、手機、聯絡人稱呼、時間等雜訊，若有明顯鶯歌路名同音錯別字請修正為正確路名。
+   - 將 name 設為簡潔門牌地址（例如 "建國路120號"）。
+   - 將 fullAddress 自動補齊前綴為完整標準門牌地址（必須以 "新北市鶯歌區" 開頭，例如 "新北市鶯歌區建國路120號"，並去除幾樓之幾等樓層尾綴以便門牌定位）。
+   - 將 matchedCommunity 設為 ""。
 3. 純木頭判斷 (isPureWood)：只要該站文字中有提及「純木頭」、「木頭」、「全木」、「純木」、「木櫃/木桌/木床（標明木頭）」、「垃圾車支援」或「需垃圾車」等關鍵字，請將 isPureWood 設為 true，否則設為 false。
-4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字），每筆物件必須包含以下欄位：
+4. 嚴格只回傳 JSON 陣列（不要加任何額外解說文字，也不要回傳 lat/lng），每筆物件包含以下欄位：
    - order：順序（數字 1, 2, 3...）
-   - name：顯示名稱（字串，若有修正錯別字請顯示修正後的正確名稱或社區名）
-   - source：來源標註（字串，只能是 "community" 代表命中社區資料庫，或 "google_search" 代表 AI 查得）
-   - lat：緯度（數字，例如 24.95421）
-   - lng：經度（數字，例如 121.34612）
+   - name：顯示名稱（字串，例如 "龍鳳呈祥" 或 "建國路120號"）
+   - fullAddress：完整標準地址（字串，自動補齊前綴為 "新北市鶯歌區..."，已去除電話與樓層雜訊）
+   - matchedCommunity：匹配到的社區大樓名稱（字串，若為一般門牌則為 ""）
    - isPureWood：是否純木頭需垃圾車支援（布林值 true 或 false）
    - note：家具品項與數量備註（字串，例如 "沙發1組、床墊1張"，若無則為 ""）
 
 輸出範例格式：
-[{"order":1,"name":"龍鳳呈祥","source":"community","lat":24.95612,"lng":121.34215,"isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","source":"google_search","lat":24.95318,"lng":121.34892,"isPureWood":true,"note":"純木頭衣櫃x2"}]`;
+[{"order":1,"name":"龍鳳呈祥","fullAddress":"新北市鶯歌區龍鳳呈祥","matchedCommunity":"龍鳳呈祥","isPureWood":false,"note":"沙發1組"},{"order":2,"name":"建國路120號","fullAddress":"新北市鶯歌區建國路120號","matchedCommunity":"","isPureWood":true,"note":"純木頭衣櫃x2"}]`;
 
     const candidateRestModels = getGeminiModelCandidates(selectedModel);
     let lastStatus = 500;
     let lastErrText = '';
-    let encountered429WithTool = false;
 
-    // 第一階段：優先嘗試帶入 google_search 工具呼叫
+    // 純文字呼叫標準 v1beta REST 端點（不帶 tools: [{ google_search: {} }]，徹底避免免費版工具配額 429）
     for (const restModel of candidateRestModels) {
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${apiKey}`;
         const resp = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{ parts: [{ text: buildPromptText(true) }] }],
-                tools: [{ google_search: {} }],
-                generationConfig: {
-                    temperature: 0.1
-                }
-            })
-        }, 32000);
-
-        lastStatus = resp.status;
-        if (resp.ok) {
-            const data = await resp.json();
-            const parts = data?.candidates?.[0]?.content?.parts || [];
-            const rawText = parts.map(p => p.text || '').join('\n').trim() || '[]';
-            const items = extractJsonArrayFromGeminiText(rawText);
-            return Array.isArray(items) ? items : [];
-        }
-
-        const errObj = await resp.json().catch(() => null);
-        lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
-
-        if (resp.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(lastErrText)) {
-            encountered429WithTool = true;
-            continue;
-        }
-        if ((resp.status === 400 || resp.status === 403) && /API_KEY_INVALID|key not valid|PERMISSION_DENIED/i.test(lastErrText)) {
-            const authErr = new Error(`HTTP ${resp.status}：${lastErrText}`);
-            authErr.status = resp.status;
-            throw authErr;
-        }
-    }
-
-    // 第二階段（工具降級容錯）：若因 google_search 聯網工具配額限制遇到 429 或工具不支援，自動拿掉 google_search 改以純文字模式重試同一組 Key
-    if (typeof onStatusUpdate === 'function') {
-        onStatusUpdate(`⚡ 聯網工具配額受限，正在自動降級為「純文字高速解析模式」（模型：${selectedModel}）重試...`);
-    }
-
-    for (const restModel of candidateRestModels) {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${apiKey}`;
-        const resp = await fetchWithTimeout(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: buildPromptText(false) }] }],
+                contents: [{ parts: [{ text: promptText }] }],
                 generationConfig: {
                     temperature: 0.1
                 }
@@ -12799,20 +12823,26 @@ ${dispatchText.trim()}
 
         const errObj = await resp.json().catch(() => null);
         lastErrText = errObj?.error?.message || `HTTP ${resp.status}`;
+
+        if ((resp.status === 400 || resp.status === 403) && /API_KEY_INVALID|key not valid|PERMISSION_DENIED/i.test(lastErrText)) {
+            const authErr = new Error(`HTTP ${resp.status}：${lastErrText}`);
+            authErr.status = resp.status;
+            throw authErr;
+        }
     }
 
-    if (lastStatus === 429 || encountered429WithTool) {
+    if (lastStatus === 429 || /RESOURCE_EXHAUSTED|quota/i.test(lastErrText)) {
         const err429 = new Error(`HTTP 429 RESOURCE_EXHAUSTED：${lastErrText || 'API Key 額度已達上限'}`);
         err429.status = 429;
         throw err429;
     }
 
-    const err = new Error(`HTTP ${lastStatus}：${lastErrText || 'Gemini 查詢失敗'}`);
+    const err = new Error(`HTTP ${lastStatus}：${lastErrText || 'Gemini 派工單整理失敗'}`);
     err.status = lastStatus;
     throw err;
 }
 
-// 呼叫 AI 解析派工單（動態讀取當前選定模型，支援遇 429 先降級移除 google_search 工具、再自動輪替下一組有效 API Key）
+// 呼叫 AI 整理派工單地址與社區名稱（動態讀取當前選定模型，支援多組 API Key 遇 429 自動輪替下一組）
 async function requestAiDispatchParseWithRotation(dispatchText, communities, onStatusUpdate) {
     const selectedModel = getCurrentSelectedAiModel();
     const orderedKeys = getOrderedGeminiApiKeysForDispatch();
@@ -12834,10 +12864,10 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
             onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${keyNote}」（模型：${selectedModel}）重試中...`);
         }
 
-        // 若有自訂 API Key，優先直接呼叫標準 v1beta REST API（內建 google_search -> 純文字降級雙重容錯）
+        // 若有自訂 API Key，優先直接呼叫標準 v1beta REST API（純文字輕量萃取地址與社區）
         if (cleanKey) {
             try {
-                const items = await callGeminiRestDirectly(cleanKey, selectedModel, dispatchText, communities, onStatusUpdate);
+                const items = await callGeminiRestDirectly(cleanKey, selectedModel, dispatchText, communities);
                 const elapsedSec = ((performance.now() - attemptStartMs) / 1000).toFixed(1);
                 if (candidate.id !== '__server_env__' && candidate.id !== '__pending_input__' && candidate.id !== systemNavConfig.activeAiKeyId) {
                     systemNavConfig.activeAiKeyId = candidate.id;
@@ -12857,7 +12887,7 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
             }
         }
 
-        // 備援或使用系統預設金鑰時呼叫後端 /api/gemini/dispatch（後端同樣具備 google_search -> 純文字降級容錯）
+        // 備援或使用系統預設金鑰時呼叫後端 /api/gemini/dispatch
         try {
             const res = await fetchWithTimeout('/api/gemini/dispatch', {
                 method: 'POST',
@@ -12868,7 +12898,7 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
                     apiKey: cleanKey,
                     communities
                 })
-            }, 38000);
+            }, 35000);
 
             if (res.status === 429) {
                 const errData429 = await res.json().catch(() => ({}));
@@ -12909,12 +12939,39 @@ async function requestAiDispatchParseWithRotation(dispatchText, communities, onS
     throw lastError || new Error('HTTP 400 MISSING_API_KEY：無法完成 AI 派工查詢，請至開發者模式檢查或新增 Gemini API Key');
 }
 
-// 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 name 也能直接校驗並命中 Firebase 橘色水滴精確座標）
+// ==========================================
+// 🎯 二、三層優先定位機制（1. 社區大樓資料庫 -> 2. ArcGIS 台灣門牌接口 -> 3. OSM Nominatim 鶯歌範圍備援）
+// ==========================================
+
+// 規範化為以「新北市鶯歌區」開頭的標準門牌查詢字串（去除樓層與電話雜訊）
+function normalizeYinggeFullAddress(rawAddr) {
+    let addr = String(rawAddr || '').trim();
+    if (!addr) return '';
+    // 移除電話號碼、括號備註與幾樓之幾尾綴，保留到「X號(之X)」
+    addr = addr
+        .replace(/09\d{2}[-\s]?\d{3}[-\s]?\d{3}/g, '')
+        .replace(/02[-\s]?\d{4}[-\s]?\d{4}/g, '')
+        .replace(/[（(][^）)]*[）)]/g, '')
+        .replace(/(\d+號(?:之\d+)?)\s*\d+\s*[樓Ff].*$/g, '$1')
+        .trim();
+    if (!addr) return '';
+    if (!/新北市|鶯歌區/.test(addr)) {
+        addr = `新北市鶯歌區${addr}`;
+    } else if (!addr.includes('新北市') && addr.includes('鶯歌區')) {
+        addr = `新北市${addr}`;
+    } else if (addr.includes('新北市') && !addr.includes('鶯歌區')) {
+        addr = addr.replace('新北市', '新北市鶯歌區');
+    }
+    return addr;
+}
+
+// 【第一順位】最優先比對現有社區大樓資料庫（完全保留既有社區大樓資料結構與橘色標記邏輯）
 function findMatchingCommunityBuilding(item, communities) {
     if (!Array.isArray(communities) || communities.length === 0) return null;
     const candidates = [
-        String(item?.name || '').trim(),
         String(item?.matchedCommunity || '').trim(),
+        String(item?.name || '').trim(),
+        String(item?.fullAddress || '').trim(),
         String(item?.rawName || '').trim(),
         String(item?.normalizedAddress || '').trim()
     ].filter(Boolean);
@@ -12928,6 +12985,97 @@ function findMatchingCommunityBuilding(item, communities) {
                 return b;
             }
         }
+    }
+    return null;
+}
+
+// 【第二順位】純門牌交由 ArcGIS 台灣門牌接口查詢（score >= 70 即採用精準門牌座標）
+async function geocodeAddressWithArcGIS(rawAddress) {
+    const fullAddress = normalizeYinggeFullAddress(rawAddress);
+    if (!fullAddress) return null;
+
+    const queryVariants = [fullAddress];
+    // 若含「之X號」或樓層殘留，加入基礎門牌號作為二次嘗試
+    const baseHouseAddr = fullAddress.replace(/(號)之\d+.*$/, '$1');
+    if (baseHouseAddr !== fullAddress) {
+        queryVariants.push(baseHouseAddr);
+    }
+
+    for (const candidateAddr of queryVariants) {
+        const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encodeURIComponent(candidateAddr)}&countryCode=TWN&searchExtent=121.30,24.92,121.39,25.01&location=121.348,24.955&outSr=4326&maxLocations=1&forStorage=false&f=json`;
+        try {
+            const res = await fetchWithTimeout(url, {}, 7000);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const topCandidate = data?.candidates?.[0];
+            if (!topCandidate || !topCandidate.location) continue;
+
+            const score = Number(topCandidate.score || 0);
+            const lat = Number(topCandidate.location.y);
+            const lng = Number(topCandidate.location.x);
+            const isInYinggeBounds = (
+                !isNaN(lat) &&
+                !isNaN(lng) &&
+                lat >= 24.90 &&
+                lat <= 25.02 &&
+                lng >= 121.29 &&
+                lng <= 121.41
+            );
+
+            if (score >= 70 && isInYinggeBounds) {
+                return {
+                    lat: Number(lat.toFixed(6)),
+                    lng: Number(lng.toFixed(6)),
+                    score,
+                    matchedAddr: topCandidate.address || candidateAddr
+                };
+            }
+        } catch (e) {}
+    }
+    return null;
+}
+
+// 【第三順位】鶯歌區範圍備援：OpenStreetMap Nominatim（bounded=1&viewbox=121.30,25.01,121.39,24.92 限制在鶯歌區範圍內）
+async function geocodeAddressWithNominatimBounded(rawAddress) {
+    const fullAddress = normalizeYinggeFullAddress(rawAddress);
+    if (!fullAddress) return null;
+
+    // 先查完整門牌，若無結果再退回查該路名／巷弄以確保路段座標命中
+    const queries = [fullAddress];
+    const roadOnly = fullAddress.replace(/\d+號.*$/, '').trim();
+    if (roadOnly && roadOnly !== fullAddress && roadOnly.length > 6) {
+        queries.push(roadOnly);
+    }
+
+    for (const q of queries) {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=tw&limit=1&bounded=1&viewbox=121.30,25.01,121.39,24.92&q=${encodeURIComponent(q)}`;
+        try {
+            const res = await fetchWithTimeout(url, {
+                headers: { 'Accept-Language': 'zh-TW,zh;q=0.9' }
+            }, 6500);
+            if (!res.ok) continue;
+            const list = await res.json();
+            const first = Array.isArray(list) ? list[0] : null;
+            if (!first) continue;
+
+            const lat = Number(first.lat);
+            const lng = Number(first.lon);
+            const isInYinggeBounds = (
+                !isNaN(lat) &&
+                !isNaN(lng) &&
+                lat >= 24.90 &&
+                lat <= 25.02 &&
+                lng >= 121.29 &&
+                lng <= 121.41
+            );
+            if (isInYinggeBounds) {
+                return {
+                    lat: Number(lat.toFixed(6)),
+                    lng: Number(lng.toFixed(6)),
+                    matchedAddr: first.display_name || q
+                };
+            }
+        } catch (e) {}
     }
     return null;
 }
@@ -13036,7 +13184,7 @@ function closeAiDispatchModal() {
 
         const origBtnHtml = runBtn.innerHTML;
         runBtn.disabled = true;
-        runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Gemini 正在聯網搜尋鶯歌座標...</span>';
+        runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>AI 正在整理地址並精準定位...</span>';
 
         const showProgressStatus = (msg, style = 'info') => {
             if (!resultBox) return;
@@ -13057,7 +13205,7 @@ function closeAiDispatchModal() {
                 : await fetchAllSharedCommunityBuildings();
 
             showProgressStatus(
-                `<i class="fa-solid fa-globe fa-spin mr-1"></i> 正在比對已標註社區大樓（${communities.length} 處）並啟用 Gemini Google 搜尋聯網查詢真實經緯度...`
+                `<i class="fa-solid fa-wand-magic-sparkles fa-spin mr-1"></i> 步驟 1/2：正在使用 Gemini（${getCurrentSelectedAiModel()}）整理派工地址與比對社區大樓（${communities.length} 處）...`
             );
 
             const { items: parsedItems, usedKeyNote, elapsedSec } = await requestAiDispatchParseWithRotation(
@@ -13070,7 +13218,7 @@ function closeAiDispatchModal() {
 
             if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
                 showProgressStatus(
-                    `<div>🟢 Gemini 聯網查詢成功（使用 Key：${usedKeyNote}｜耗時 ${elapsedSec}s）</div>` +
+                    `<div>🟢 Gemini 派工單解析完成（使用 Key：${usedKeyNote}｜耗時 ${elapsedSec}s）</div>` +
                     `<div class="mt-1 text-red-700">⚠️ AI 未能從文字中識別出任何有效地址或社區名稱，請確認派工單內容。</div>`,
                     'error'
                 );
@@ -13087,12 +13235,13 @@ function closeAiDispatchModal() {
             }
 
             const addedPins = [];
-            const outOfRangeItems = [];
+            const unresolvedItems = [];
             let woodCount = 0;
 
             for (let i = 0; i < parsedItems.length; i++) {
                 const item = parsedItems[i];
-                const rawLabel = String(item.name || item.rawName || item.matchedCommunity || item.normalizedAddress || `派工點 #${i + 1}`).trim();
+                const rawLabel = String(item.name || item.matchedCommunity || item.fullAddress || item.rawName || item.normalizedAddress || `派工點 #${i + 1}`).trim();
+                const fullAddrForGeocode = String(item.fullAddress || item.normalizedAddress || rawLabel).trim();
                 const noteText = String(item.note || '').trim();
                 const isWood = Boolean(
                     item.isPureWood ||
@@ -13100,7 +13249,11 @@ function closeAiDispatchModal() {
                     /純木|全木|木頭|垃圾車支援/.test(noteText)
                 );
 
-                // 1. 優先比對已標註社區大樓清單（若本地或 AI 標記命中社區庫）
+                showProgressStatus(
+                    `<i class="fa-solid fa-location-crosshairs fa-spin mr-1"></i> 步驟 2/2：正在執行三層精準定位 (${i + 1}/${parsedItems.length})「${rawLabel}」...`
+                );
+
+                // 【第一順位】最優先比對現有社區大樓資料庫（命中直接採用該社區原本精準座標）
                 const matchedBld = findMatchingCommunityBuilding(item, communities);
                 if (matchedBld) {
                     const pinNumber = (furnitureActiveData.pins?.length || 0) + 1;
@@ -13121,26 +13274,12 @@ function closeAiDispatchModal() {
                     continue;
                 }
 
-                // 2. 直接驗證 Gemini Google Search Grounding 回傳的 lat、lng 是否落在鶯歌區合理範圍內（不呼叫 Nominatim）
-                const aiLat = Number(item.lat);
-                const aiLng = Number(item.lng);
-                const isInYinggeBounds = (
-                    !isNaN(aiLat) &&
-                    !isNaN(aiLng) &&
-                    aiLat >= 24.88 &&
-                    aiLat <= 25.03 &&
-                    aiLng >= 121.28 &&
-                    aiLng <= 121.43
-                );
-
-                if (isInYinggeBounds) {
-                    const isCommunitySource = String(item.source || '').toLowerCase() === 'community';
+                // 【第二順位】純門牌交由 ArcGIS 台灣門牌接口查詢（score >= 70 即採用該精準門牌座標）
+                const arcgisHit = await geocodeAddressWithArcGIS(fullAddrForGeocode);
+                if (arcgisHit) {
                     const pinNumber = (furnitureActiveData.pins?.length || 0) + 1;
-                    const displayLabel = isCommunitySource && !rawLabel.startsWith('🏢')
-                        ? `🏢 ${rawLabel}`
-                        : rawLabel;
-
-                    addFurniturePinToWorkspace(Number(aiLng.toFixed(6)), Number(aiLat.toFixed(6)), displayLabel, {
+                    const displayLabel = rawLabel.replace(/^新北市鶯歌區/, '').trim() || rawLabel;
+                    addFurniturePinToWorkspace(arcgisHit.lng, arcgisHit.lat, displayLabel, {
                         note: noteText,
                         needsWoodTruckSupport: isWood,
                         silent: true
@@ -13148,15 +13287,38 @@ function closeAiDispatchModal() {
                     if (isWood) woodCount++;
                     addedPins.push({
                         order: pinNumber,
-                        lng: Number(aiLng.toFixed(6)),
-                        lat: Number(aiLat.toFixed(6)),
-                        label: rawLabel,
-                        sourceLabel: isCommunitySource ? '[社區庫]' : '[AI聯網查得]',
+                        lng: arcgisHit.lng,
+                        lat: arcgisHit.lat,
+                        label: displayLabel,
+                        sourceLabel: '[ArcGIS門牌]',
                         isWood
                     });
-                } else {
-                    outOfRangeItems.push(`${rawLabel}（回傳座標：${isNaN(aiLat) ? '無' : `${aiLat.toFixed(4)}, ${aiLng.toFixed(4)}`} 未落於鶯歌區範圍）`);
+                    continue;
                 }
+
+                // 【第三順位】鶯歌區範圍備援：呼叫 OpenStreetMap Nominatim (bounded=1&viewbox=121.30,25.01,121.39,24.92)
+                const osmHit = await geocodeAddressWithNominatimBounded(fullAddrForGeocode);
+                if (osmHit) {
+                    const pinNumber = (furnitureActiveData.pins?.length || 0) + 1;
+                    const displayLabel = rawLabel.replace(/^新北市鶯歌區/, '').trim() || rawLabel;
+                    addFurniturePinToWorkspace(osmHit.lng, osmHit.lat, displayLabel, {
+                        note: noteText,
+                        needsWoodTruckSupport: isWood,
+                        silent: true
+                    });
+                    if (isWood) woodCount++;
+                    addedPins.push({
+                        order: pinNumber,
+                        lng: osmHit.lng,
+                        lat: osmHit.lat,
+                        label: displayLabel,
+                        sourceLabel: '[OSM備援]',
+                        isWood
+                    });
+                    continue;
+                }
+
+                unresolvedItems.push(`${rawLabel}（查無鶯歌區對應社區或門牌座標）`);
             }
 
             renderAllFurnitureMapElements();
@@ -13174,15 +13336,18 @@ function closeAiDispatchModal() {
                 map.fitBounds(bounds, { padding: { top: 90, bottom: 90, left: 60, right: 60 }, maxZoom: 17.5, duration: 700 });
             }
 
-            // 組裝結果區頂部連線狀態列 ＋ 每筆插針來源明細 ([社區庫] / [AI聯網查得])
-            const headerHtml = `<div class="pb-1.5 mb-1.5 border-b border-emerald-200 font-black text-emerald-900">🟢 Gemini 聯網查詢成功（使用 Key：${usedKeyNote}｜耗時 ${elapsedSec}s）</div>`;
+            // 組裝結果區頂部連線狀態列 ＋ 每筆插針來源明細 ([社區庫] / [ArcGIS門牌] / [OSM備援])
+            const headerHtml = `<div class="pb-1.5 mb-1.5 border-b border-emerald-200 font-black text-emerald-900">🟢 AI 地址整理＋三層精準定位完成（Key：${usedKeyNote}｜AI 耗時 ${elapsedSec}s）</div>`;
 
             const pinsListHtml = addedPins.length > 0
                 ? `<div class="space-y-1 max-h-40 overflow-y-auto pr-1">` +
                   addedPins.map(p => {
-                      const badgeCls = p.sourceLabel === '[社區庫]'
-                          ? 'bg-orange-100 text-orange-800 border-orange-300'
-                          : 'bg-blue-100 text-blue-800 border-blue-300';
+                      let badgeCls = 'bg-blue-100 text-blue-800 border-blue-300';
+                      if (p.sourceLabel === '[社區庫]') {
+                          badgeCls = 'bg-orange-100 text-orange-800 border-orange-300';
+                      } else if (p.sourceLabel === '[OSM備援]') {
+                          badgeCls = 'bg-amber-100 text-amber-800 border-amber-300';
+                      }
                       const woodTag = p.isWood
                           ? '<span class="bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded ml-1">🔥純木頭</span>'
                           : '';
@@ -13194,10 +13359,10 @@ function closeAiDispatchModal() {
                   `</div>`
                 : '';
 
-            const outOfRangeHtml = outOfRangeItems.length > 0
+            const outOfRangeHtml = unresolvedItems.length > 0
                 ? `<div class="mt-2 pt-1.5 border-t border-amber-300 text-amber-800">` +
-                  `⚠️ 以下 <b>${outOfRangeItems.length}</b> 筆座標未落在鶯歌區範圍內，請手動確認：` +
-                  `<ul class="mt-1 ml-4 list-disc text-[11px]">${outOfRangeItems.map(x => `<li>${x}</li>`).join('')}</ul>` +
+                  `⚠️ 以下 <b>${unresolvedItems.length}</b> 筆地址未能查得鶯歌區座標，請透過上方搜尋欄手動確認：` +
+                  `<ul class="mt-1 ml-4 list-disc text-[11px]">${unresolvedItems.map(x => `<li>${x}</li>`).join('')}</ul>` +
                   `</div>`
                 : '';
 
@@ -13209,10 +13374,10 @@ function closeAiDispatchModal() {
                 'success'
             );
 
-            showFurnitureToast(`✨ Gemini 聯網已插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
+            showFurnitureToast(`✨ 已精準插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
         } catch (err) {
             showProgressStatus(
-                `🔴 Gemini 連線失敗：${err?.message || '未知連線或解析錯誤，請檢查開發者模式 API Key 設定'}`,
+                `🔴 AI 派工失敗：${err?.message || '未知連線或解析錯誤，請檢查開發者模式 API Key 設定'}`,
                 'error'
             );
         } finally {

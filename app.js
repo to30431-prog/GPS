@@ -1,11 +1,11 @@
 // ==========================================
 // 🔑 雲端路線庫管理員密碼與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.24';
+const APP_VERSION = 'v3.25';
 window.APP_VERSION = APP_VERSION;
 const ADMIN_PASSWORD = '5201314';
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.24
+// 確保畫面上所有版本號膠囊同步顯示為 v3.25
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -46,6 +46,8 @@ let lastRouteLayerRenderTime = 0;
 // ==========================================
 // ⚙️ v3.1 動態導航與車隊系統參數（與 Firebase system_config 雙向即時同步，讀取不到時自動套用預設值）
 // ==========================================
+const ALLOWED_AI_DISPATCH_MODELS = ['gemini-3.5-flash-lite', 'gemini-4-hydrogen'];
+
 const DEFAULT_SYSTEM_CONFIG = {
     radarIntervalSec: 5,
     lookAheadDistMeters: 100,
@@ -59,7 +61,10 @@ const DEFAULT_SYSTEM_CONFIG = {
     maxAccuracyMeters: 45,
     maxSpeedKmh: 160,
     minLockSpeedKmh: 4,
-    announcementText: ''
+    announcementText: '',
+    aiDispatchModel: 'gemini-3.5-flash-lite',
+    aiApiKeys: [],
+    activeAiKeyId: ''
 };
 
 function clampNum(val, min, max, fallback) {
@@ -68,8 +73,41 @@ function clampNum(val, min, max, fallback) {
     return Math.min(Math.max(n, min), max);
 }
 
+function normalizeAiApiKeysArray(rawList) {
+    if (!Array.isArray(rawList)) return [];
+    const seenKeys = new Set();
+    const result = [];
+    rawList.forEach((item, idx) => {
+        if (!item) return;
+        const keyStr = typeof item === 'string'
+            ? item.trim()
+            : (typeof item.key === 'string' ? item.key.trim() : '');
+        if (!keyStr || seenKeys.has(keyStr)) return;
+        seenKeys.add(keyStr);
+        result.push({
+            id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `aikey_${Date.now()}_${idx}`,
+            key: keyStr,
+            note: typeof item.note === 'string' ? item.note.trim().slice(0, 25) : '',
+            createdAt: Number(item.createdAt) || Date.now()
+        });
+    });
+    return result;
+}
+
 function normalizeSystemConfig(raw) {
     const src = (raw && typeof raw === 'object') ? raw : {};
+    const aiModelRaw = typeof src.aiDispatchModel === 'string' ? src.aiDispatchModel.trim() : '';
+    const aiDispatchModel = ALLOWED_AI_DISPATCH_MODELS.includes(aiModelRaw)
+        ? aiModelRaw
+        : DEFAULT_SYSTEM_CONFIG.aiDispatchModel;
+    const aiApiKeys = normalizeAiApiKeysArray(src.aiApiKeys);
+    let activeAiKeyId = typeof src.activeAiKeyId === 'string' ? src.activeAiKeyId.trim() : '';
+    if (aiApiKeys.length > 0 && !aiApiKeys.some(k => k.id === activeAiKeyId)) {
+        activeAiKeyId = aiApiKeys[0].id;
+    } else if (aiApiKeys.length === 0) {
+        activeAiKeyId = '';
+    }
+
     return {
         radarIntervalSec: clampNum(src.radarIntervalSec, 2, 120, DEFAULT_SYSTEM_CONFIG.radarIntervalSec),
         lookAheadDistMeters: clampNum(src.lookAheadDistMeters, 20, 600, DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters),
@@ -83,7 +121,10 @@ function normalizeSystemConfig(raw) {
         maxAccuracyMeters: clampNum(src.maxAccuracyMeters, 5, 300, DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters),
         maxSpeedKmh: clampNum(src.maxSpeedKmh, 30, 300, DEFAULT_SYSTEM_CONFIG.maxSpeedKmh),
         minLockSpeedKmh: Number(clampNum(src.minLockSpeedKmh, 0.5, 30, DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh).toFixed(1)),
-        announcementText: typeof src.announcementText === 'string' ? src.announcementText.trim() : DEFAULT_SYSTEM_CONFIG.announcementText
+        announcementText: typeof src.announcementText === 'string' ? src.announcementText.trim() : DEFAULT_SYSTEM_CONFIG.announcementText,
+        aiDispatchModel,
+        aiApiKeys,
+        activeAiKeyId
     };
 }
 
@@ -698,7 +739,6 @@ let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
-let cachedFurnitureOtherRoutesGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureManualDraftGeoJSON = { type: 'FeatureCollection', features: [] };
 
@@ -709,7 +749,33 @@ const map = new maplibregl.Map({
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
 
-setTimeout(() => { map.resize(); }, 500);
+function updateMapMarkersZoomScale() {
+    if (!map) return;
+    const currentZoom = map.getZoom();
+    const mapEl = map.getContainer();
+    if (!mapEl) return;
+
+    // 1. ⚠️ 警告膠囊、🎵 音樂開關與黃色引線備忘框：依 zoom 等比例縮小（下限 0.55 倍）
+    const rawScale = Math.max(0.55, Math.min(1, Math.pow(1.25, currentZoom - 15.5)));
+    mapEl.style.setProperty('--map-pin-scale', rawScale.toFixed(3));
+
+    // 2. 🏢 社區大樓三段式隨 zoom 變形 (zoom < 14.2 遠景小圓點 / 14.2~15.6 中景 0.65x 水滴無標籤 / >= 15.6 近景完整顯示)
+    let tierClass = 'zoom-tier-near';
+    if (currentZoom < 14.2) {
+        tierClass = 'zoom-tier-far';
+    } else if (currentZoom < 15.6) {
+        tierClass = 'zoom-tier-mid';
+    }
+    if (!mapEl.classList.contains(tierClass)) {
+        mapEl.classList.remove('zoom-tier-far', 'zoom-tier-mid', 'zoom-tier-near');
+        mapEl.classList.add(tierClass);
+    }
+}
+map.on('zoom', updateMapMarkersZoomScale);
+map.on('load', updateMapMarkersZoomScale);
+updateMapMarkersZoomScale();
+
+setTimeout(() => { map.resize(); updateMapMarkersZoomScale(); }, 500);
 window.addEventListener('resize', () => map.resize());
 
 const puckEl = document.createElement('div');
@@ -1046,41 +1112,7 @@ function ensureCustomRouteSourcesAndLayers() {
             });
         }
 
-        // 5. 🛋️ 家具模式專屬圖層（其他 2 組路線＋本組主路線＋手動拉線草稿）
-        if (!map.getSource('furniture-other-routes-source')) {
-            map.addSource('furniture-other-routes-source', {
-                type: 'geojson',
-                data: cachedFurnitureOtherRoutesGeoJSON || emptyGeoJSON()
-            });
-        }
-        if (!map.getLayer('furniture-other-routes-casing')) {
-            map.addLayer({
-                id: 'furniture-other-routes-casing',
-                type: 'line',
-                source: 'furniture-other-routes-source',
-                layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: {
-                    'line-color': '#ffffff',
-                    'line-width': 7,
-                    'line-opacity': 0.85
-                }
-            });
-        }
-        if (!map.getLayer('furniture-other-routes-line')) {
-            map.addLayer({
-                id: 'furniture-other-routes-line',
-                type: 'line',
-                source: 'furniture-other-routes-source',
-                layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: {
-                    'line-color': ['coalesce', ['get', 'color'], '#2563eb'],
-                    'line-width': 4,
-                    'line-dasharray': [2, 1.5],
-                    'line-opacity': 0.9
-                }
-            });
-        }
-
+        // 5. 🛋️ 家具模式專屬圖層（共用主路線＋手動拉線草稿）
         if (!map.getSource('furniture-own-route-source')) {
             map.addSource('furniture-own-route-source', {
                 type: 'geojson',
@@ -1257,7 +1289,6 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
         map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
         map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
         map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON || emptyGeoJSON());
-        map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON || emptyGeoJSON());
         map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON || emptyGeoJSON());
         map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON || emptyGeoJSON());
         if (currentMapLayerPreset?.isVector) {
@@ -2155,8 +2186,13 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
     const arrowEl = document.createElement('div');
     arrowEl.className = 'alert-compact-arrow';
 
-    markerEl.appendChild(pillEl);
-    markerEl.appendChild(arrowEl);
+    // 內層等比例縮放容器（transform-origin: bottom center），確保縮放時尖端不偏移且不覆蓋外層 MapLibre translate3d
+    const scaleWrapEl = document.createElement('div');
+    scaleWrapEl.className = 'alert-compact-scale-wrap';
+    scaleWrapEl.appendChild(pillEl);
+    scaleWrapEl.appendChild(arrowEl);
+
+    markerEl.appendChild(scaleWrapEl);
 
     markerEl.onclick = (e) => {
         e.stopPropagation();
@@ -4318,11 +4354,14 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
         const badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
         const iconClass = ev.type === 'on' ? 'fa-music' : 'fa-volume-xmark';
         const text = ev.type === 'on' ? '開' : '關';
+        const wrapperEl = document.createElement('div');
+        wrapperEl.className = 'pin-se-wrapper';
         const markerEl = document.createElement('div');
         markerEl.className = `music-marker ${badgeClass}`;
         markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+        wrapperEl.appendChild(markerEl);
         const m = new maplibregl.Marker({
-            element: markerEl,
+            element: wrapperEl,
             anchor: 'center',
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
@@ -4332,12 +4371,15 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
 
     (route.points || []).forEach((p, idx) => {
         if (p.is_stop) {
+            const wrapperEl = document.createElement('div');
+            wrapperEl.className = 'pin-se-wrapper';
             const markerEl = document.createElement('div');
             markerEl.className = `music-marker bg-indigo-600 border border-white shadow-lg cursor-grab active:cursor-grabbing`;
             markerEl.innerHTML = `<i class="fa-regular fa-clock"></i> ${p.scheduled_time} <i class="fa-solid fa-pen ml-1 opacity-70"></i>`;
+            wrapperEl.appendChild(markerEl);
             
             const m = new maplibregl.Marker({
-                element: markerEl,
+                element: wrapperEl,
                 anchor: 'center',
                 draggable: true,
                 rotationAlignment: 'viewport',
@@ -8447,6 +8489,11 @@ const viewMapPinPhotoWrap = document.getElementById('viewMapPinPhotoWrap');
 const viewMapPinPhotoImg = document.getElementById('viewMapPinPhotoImg');
 const btnGoogleNavMapPin = document.getElementById('btnGoogleNavMapPin');
 const btnDistanceGuideMapPin = document.getElementById('btnDistanceGuideMapPin');
+const viewMapPinBuildingNoteWrap = document.getElementById('viewMapPinBuildingNoteWrap');
+const viewMapPinBuildingNoteInput = document.getElementById('viewMapPinBuildingNoteInput');
+const btnSaveMapPinBuildingNote = document.getElementById('btnSaveMapPinBuildingNote');
+const btnSaveMapPinBuildingNoteText = document.getElementById('btnSaveMapPinBuildingNoteText');
+const viewMapPinNoteSavedStatus = document.getElementById('viewMapPinNoteSavedStatus');
 const btnEditMapPinTitle = document.getElementById('btnEditMapPinTitle');
 const btnDeleteMapPin = document.getElementById('btnDeleteMapPin');
 const btnCloseViewMapPin = document.getElementById('btnCloseViewMapPin');
@@ -8908,6 +8955,7 @@ async function saveBuildingMapPin() {
         lat: Number(pendingMapPinLat.toFixed(6)),
         lng: Number(pendingMapPinLng.toFixed(6)),
         title: buildingName,
+        note: isEditing ? (editingBuildingPinTarget.note || '') : '',
         photo: '',
         author: isEditing ? (editingBuildingPinTarget.author || authorName) : authorName,
         createdAt: isEditing ? (editingBuildingPinTarget.createdAt || now) : now,
@@ -9063,10 +9111,24 @@ function openViewMapPinModal(pin) {
         if (viewMapPinPhotoWrap) viewMapPinPhotoWrap.classList.add('hidden');
     }
 
+    if (viewMapPinBuildingNoteWrap) {
+        if (isBuilding) {
+            viewMapPinBuildingNoteWrap.classList.remove('hidden');
+            if (viewMapPinBuildingNoteInput) {
+                viewMapPinBuildingNoteInput.value = pin.note || '';
+            }
+            if (viewMapPinNoteSavedStatus) {
+                viewMapPinNoteSavedStatus.classList.add('hidden');
+            }
+        } else {
+            viewMapPinBuildingNoteWrap.classList.add('hidden');
+        }
+    }
+
     if (btnEditMapPinTitle) {
         if (isBuilding) {
             btnEditMapPinTitle.classList.remove('hidden');
-            btnEditMapPinTitle.innerHTML = '✏️ 修改社區大樓名稱';
+            btnEditMapPinTitle.innerHTML = '✏️ 編輯名稱';
         } else {
             btnEditMapPinTitle.classList.add('hidden');
         }
@@ -9074,8 +9136,8 @@ function openViewMapPinModal(pin) {
 
     if (btnDeleteMapPin) {
         btnDeleteMapPin.innerHTML = isBuilding
-            ? '🗑️ 刪除社區大樓標記'
-            : '🗑️ 已清理／移除地標';
+            ? '🗑️ 刪除'
+            : '🗑️ 已清理／移除';
     }
 
     syncDistanceGuideButtonUI(pin);
@@ -9093,6 +9155,65 @@ function closeViewMapPinModal() {
 
 if (btnCloseViewMapPin) btnCloseViewMapPin.onclick = closeViewMapPinModal;
 if (btnCloseViewMapPinTop) btnCloseViewMapPinTop.onclick = closeViewMapPinModal;
+
+if (viewMapPinBuildingNoteInput) {
+    ['mousedown', 'touchstart', 'pointerdown', 'click'].forEach(evtName => {
+        viewMapPinBuildingNoteInput.addEventListener(evtName, (e) => {
+            e.stopPropagation();
+        });
+    });
+}
+
+if (btnSaveMapPinBuildingNote) {
+    btnSaveMapPinBuildingNote.onclick = async (e) => {
+        e.stopPropagation();
+        if (!activeViewingMapPin || !activeViewingMapPin.id) return;
+        if (!navigator.onLine) {
+            alert('⚠️ 目前無網路連線，無法儲存社區備註！');
+            return;
+        }
+        const pinId = activeViewingMapPin.id;
+        const noteText = (viewMapPinBuildingNoteInput?.value || '').trim();
+        const now = Date.now();
+        const updatedPinData = {
+            ...activeViewingMapPin,
+            id: pinId,
+            pinType: 'building',
+            note: noteText,
+            updatedAt: now
+        };
+
+        const origHtml = btnSaveMapPinBuildingNote.innerHTML;
+        btnSaveMapPinBuildingNote.disabled = true;
+        btnSaveMapPinBuildingNote.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 同步中...';
+
+        try {
+            const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updatedPinData)
+            }, 5000);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            activeViewingMapPin.note = noteText;
+            activeViewingMapPin.updatedAt = now;
+            upsertPinMarkerOnMap(pinId, updatedPinData);
+            if (viewMapPinTimeText) {
+                viewMapPinTimeText.textContent = formatPinCreatedAt(now);
+            }
+            if (viewMapPinNoteSavedStatus) {
+                viewMapPinNoteSavedStatus.textContent = '✅ 已同步';
+                viewMapPinNoteSavedStatus.classList.remove('hidden');
+            }
+        } catch (err) {
+            console.error('儲存社區備註失敗:', err);
+            alert('❌ 儲存備註失敗（網路不穩或連線逾時），請稍後再試！');
+        } finally {
+            btnSaveMapPinBuildingNote.disabled = false;
+            btnSaveMapPinBuildingNote.innerHTML = origHtml;
+        }
+    };
+}
 
 if (btnEditMapPinTitle) {
     btnEditMapPinTitle.onclick = () => {
@@ -9121,7 +9242,7 @@ if (btnDeleteMapPin) {
 
         const origHtml = btnDeleteMapPin.innerHTML;
         btnDeleteMapPin.disabled = true;
-        btnDeleteMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步移除...';
+        btnDeleteMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 移除中...';
 
         try {
             const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
@@ -9151,14 +9272,17 @@ if (btnDeleteMapPin) {
 function createSharedPinMarkerElement(pin) {
     const isBuilding = pin.pinType === 'building';
     const wrapper = document.createElement('div');
-    wrapper.className = 'shared-pin-wrapper';
+    wrapper.className = isBuilding ? 'shared-pin-wrapper is-building-pin' : 'shared-pin-wrapper';
+
+    const scaleInner = document.createElement('div');
+    scaleInner.className = 'shared-pin-scale-inner';
 
     const labelEl = document.createElement('div');
     labelEl.className = isBuilding ? 'shared-pin-label is-building' : 'shared-pin-label';
     labelEl.textContent = isBuilding
         ? `🏢 ${pin.title || '社區大樓'}`
         : (pin.title || '現場地標');
-    wrapper.appendChild(labelEl);
+    scaleInner.appendChild(labelEl);
 
     const teardrop = document.createElement('div');
     teardrop.className = isBuilding ? 'shared-pin-teardrop is-building' : 'shared-pin-teardrop';
@@ -9178,16 +9302,94 @@ function createSharedPinMarkerElement(pin) {
     }
 
     teardrop.appendChild(inner);
-    wrapper.appendChild(teardrop);
+    scaleInner.appendChild(teardrop);
+    wrapper.appendChild(scaleInner);
 
-    wrapper.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (pinsLayerGroup[pin.id]?.data) {
-            openViewMapPinModal(pinsLayerGroup[pin.id].data);
-        } else {
-            openViewMapPinModal(pin);
-        }
-    });
+    if (isBuilding) {
+        // 遠景 (zoom < 14.2) 專用 9px 橘紅色實心圓點
+        const dotEl = document.createElement('div');
+        dotEl.className = 'shared-pin-dot';
+        wrapper.appendChild(dotEl);
+
+        // 🏢 社區大樓水滴防誤觸（按住滿 0.5 秒 / 500ms 才開啟資訊卡，滑動超過 8px 或提早放開即取消）
+        let holdTimer = null;
+        let holdStartX = 0;
+        let holdStartY = 0;
+
+        const cancelBuildingHold = () => {
+            if (holdTimer) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+            }
+            wrapper.classList.remove('is-pressing');
+        };
+
+        const startBuildingHold = (clientX, clientY) => {
+            cancelBuildingHold();
+            holdStartX = clientX;
+            holdStartY = clientY;
+            wrapper.classList.add('is-pressing');
+            holdTimer = setTimeout(() => {
+                holdTimer = null;
+                wrapper.classList.remove('is-pressing');
+                vibrate(35);
+                if (pinsLayerGroup[pin.id]?.data) {
+                    openViewMapPinModal(pinsLayerGroup[pin.id].data);
+                } else {
+                    openViewMapPinModal(pin);
+                }
+            }, 500);
+        };
+
+        wrapper.addEventListener('touchstart', (e) => {
+            if (!e.touches || e.touches.length !== 1) {
+                cancelBuildingHold();
+                return;
+            }
+            const t = e.touches[0];
+            startBuildingHold(t.clientX, t.clientY);
+        }, { passive: true });
+
+        wrapper.addEventListener('touchmove', (e) => {
+            if (!holdTimer || !e.touches || e.touches.length === 0) return;
+            const t = e.touches[0];
+            if (Math.hypot(t.clientX - holdStartX, t.clientY - holdStartY) > 8) {
+                cancelBuildingHold();
+            }
+        }, { passive: true });
+
+        wrapper.addEventListener('touchend', cancelBuildingHold, { passive: true });
+        wrapper.addEventListener('touchcancel', cancelBuildingHold, { passive: true });
+
+        wrapper.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            startBuildingHold(e.clientX, e.clientY);
+        });
+
+        wrapper.addEventListener('mousemove', (e) => {
+            if (!holdTimer) return;
+            if (Math.hypot(e.clientX - holdStartX, e.clientY - holdStartY) > 8) {
+                cancelBuildingHold();
+            }
+        });
+
+        wrapper.addEventListener('mouseup', cancelBuildingHold);
+        wrapper.addEventListener('mouseleave', cancelBuildingHold);
+
+        wrapper.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+    } else {
+        // ⚠️ 一般藍色髒亂點水滴保留即點即開
+        wrapper.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (pinsLayerGroup[pin.id]?.data) {
+                openViewMapPinModal(pinsLayerGroup[pin.id].data);
+            } else {
+                openViewMapPinModal(pin);
+            }
+        });
+    }
 
     return wrapper;
 }
@@ -9595,12 +9797,265 @@ document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () 
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
 });
 
-// --- 10.9 管理員設定面板表單渲染與雙向同步 ---
+// --- 10.9 管理員設定面板表單渲染與雙向同步（含 v3.25 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
+let selectedAdminAiModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+let editingAdminAiKeys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
+let editingActiveAiKeyId = systemNavConfig.activeAiKeyId || '';
+
+function maskGeminiApiKey(rawKey) {
+    const k = String(rawKey || '').trim();
+    if (k.length <= 10) {
+        return k.slice(0, 3) + '••••' + k.slice(-2);
+    }
+    return `${k.slice(0, 6)}••••••••${k.slice(-4)}`;
+}
+
+function highlightAdminAiModelBtn(activeModel) {
+    const modelToSelect = ALLOWED_AI_DISPATCH_MODELS.includes(activeModel)
+        ? activeModel
+        : 'gemini-3.5-flash-lite';
+    selectedAdminAiModel = modelToSelect;
+
+    const btns = document.querySelectorAll('.admin-ai-model-btn');
+    btns.forEach(btn => {
+        const m = btn.getAttribute('data-ai-model');
+        const isSelected = (m === modelToSelect);
+        if (isSelected) {
+            btn.className = 'admin-ai-model-btn bg-violet-600 text-white border-2 border-violet-600 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between shadow-sm pointer-events-auto cursor-pointer';
+            btn.innerHTML = m === 'gemini-4-hydrogen'
+                ? `<div><div class="text-xs font-black">gemini-4-hydrogen</div><div class="text-[10px] font-bold opacity-90">進階：強理解力版（複雜派工單深度解析）</div></div><i class="fa-solid fa-circle-check text-sm"></i>`
+                : `<div><div class="text-xs font-black">gemini-3.5-flash-lite</div><div class="text-[10px] font-bold opacity-90">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-solid fa-circle-check text-sm"></i>`;
+        } else {
+            btn.className = 'admin-ai-model-btn bg-white hover:bg-violet-50 text-gray-800 border-2 border-gray-200 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between pointer-events-auto cursor-pointer';
+            btn.innerHTML = m === 'gemini-4-hydrogen'
+                ? `<div><div class="text-xs font-black">gemini-4-hydrogen</div><div class="text-[10px] font-bold text-gray-500">進階：強理解力版（複雜派工單深度解析）</div></div><i class="fa-regular fa-circle text-sm text-gray-300"></i>`
+                : `<div><div class="text-xs font-black">gemini-3.5-flash-lite</div><div class="text-[10px] font-bold text-gray-500">預設：極速輕量版（回應最快、省額度）</div></div><i class="fa-regular fa-circle text-sm text-gray-300"></i>`;
+        }
+    });
+
+    const dispatchBadge = document.getElementById('aiDispatchActiveModelBadge');
+    if (dispatchBadge) {
+        dispatchBadge.textContent = modelToSelect;
+    }
+}
+
+function renderAdminAiKeyListUI() {
+    const listContainer = document.getElementById('adminAiKeyListContainer');
+    const countBadge = document.getElementById('adminAiKeyCountBadge');
+    if (countBadge) {
+        countBadge.textContent = `${editingAdminAiKeys.length} 組`;
+    }
+    if (!listContainer) return;
+
+    listContainer.innerHTML = '';
+
+    if (editingAdminAiKeys.length === 0) {
+        listContainer.innerHTML = `
+            <div class="bg-white/90 border border-violet-200 rounded-xl p-2.5 text-[11px] font-bold text-gray-500 text-center">
+                目前尚未新增自訂 API Key（預設使用系統內建金鑰；可點下方按鈕新增多組備援金鑰）
+            </div>
+        `;
+        return;
+    }
+
+    if (!editingAdminAiKeys.some(k => k.id === editingActiveAiKeyId)) {
+        editingActiveAiKeyId = editingAdminAiKeys[0].id;
+    }
+
+    editingAdminAiKeys.forEach((item, idx) => {
+        const isActive = (item.id === editingActiveAiKeyId);
+        const row = document.createElement('div');
+        row.className = isActive
+            ? 'bg-violet-100/90 border-2 border-violet-500 rounded-xl p-2.5 flex items-center justify-between gap-2 shadow-sm pointer-events-auto'
+            : 'bg-white border border-gray-200 rounded-xl p-2.5 flex items-center justify-between gap-2 pointer-events-auto';
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'min-w-0 flex-1 cursor-pointer';
+        infoDiv.innerHTML = `
+            <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-xs font-black text-gray-900">${item.note || `金鑰 #${idx + 1}`}</span>
+                ${isActive
+                    ? '<span class="bg-violet-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">✓ 啟用中</span>'
+                    : '<span class="bg-gray-100 text-gray-600 text-[10px] font-extrabold px-2 py-0.5 rounded-full">備用</span>'}
+            </div>
+            <div class="text-[11px] font-mono font-bold text-gray-600 mt-0.5 truncate">${maskGeminiApiKey(item.key)}</div>
+        `;
+        infoDiv.addEventListener('click', (e) => {
+            e.stopPropagation();
+            editingActiveAiKeyId = item.id;
+            renderAdminAiKeyListUI();
+            persistAdminAiSettingsImmediately();
+        });
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'flex items-center gap-1 flex-shrink-0';
+
+        if (!isActive) {
+            const useBtn = document.createElement('button');
+            useBtn.type = 'button';
+            useBtn.className = 'bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer';
+            useBtn.textContent = '設為啟用';
+            useBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                editingActiveAiKeyId = item.id;
+                renderAdminAiKeyListUI();
+                persistAdminAiSettingsImmediately();
+            });
+            actionsDiv.appendChild(useBtn);
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer';
+        delBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+        delBtn.title = '刪除此組 API Key';
+        delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            editingAdminAiKeys = editingAdminAiKeys.filter(k => k.id !== item.id);
+            if (editingActiveAiKeyId === item.id) {
+                editingActiveAiKeyId = editingAdminAiKeys[0]?.id || '';
+            }
+            renderAdminAiKeyListUI();
+            persistAdminAiSettingsImmediately();
+        });
+        actionsDiv.appendChild(delBtn);
+
+        row.appendChild(infoDiv);
+        row.appendChild(actionsDiv);
+        listContainer.appendChild(row);
+    });
+}
+
+async function persistAdminAiSettingsImmediately() {
+    systemNavConfig.aiDispatchModel = selectedAdminAiModel;
+    systemNavConfig.aiApiKeys = normalizeAiApiKeysArray(editingAdminAiKeys);
+    systemNavConfig.activeAiKeyId = editingActiveAiKeyId;
+    try {
+        localStorage.setItem('yingge_system_nav_config_v31', JSON.stringify(systemNavConfig));
+    } catch (e) {}
+    try {
+        await fetchWithTimeout(SYSTEM_CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...systemNavConfig,
+                updatedAt: Date.now()
+            })
+        }, 5000);
+    } catch (e) {}
+}
+
+// 綁定模型選擇器與多組 API Key 新增表單事件（確保 100% 可點擊、可聚焦打字，不被地圖或外層遮罩攔截）
+(function setupAdminAiSettingsEvents() {
+    const modalEl = document.getElementById('adminSettingsModal');
+    if (modalEl) {
+        ['pointerdown', 'touchstart', 'mousedown', 'wheel'].forEach(evtName => {
+            modalEl.addEventListener(evtName, (e) => {
+                e.stopPropagation();
+            }, { passive: true });
+        });
+    }
+
+    // 1. Gemini 模型選擇器卡片點擊切換
+    document.querySelectorAll('.admin-ai-model-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const modelName = btn.getAttribute('data-ai-model');
+            if (!modelName) return;
+            highlightAdminAiModelBtn(modelName);
+            vibrate(20);
+            persistAdminAiSettingsImmediately();
+        });
+    });
+
+    // 2. 「+ 新增填入新一組 API Key」展開/收合按鈕
+    const toggleBtn = document.getElementById('btnToggleAddAiKeyForm');
+    const formWrap = document.getElementById('adminAddAiKeyFormWrap');
+    const noteInput = document.getElementById('adminNewAiKeyNoteInput');
+    const keyInput = document.getElementById('adminNewAiKeyInput');
+    const saveKeyBtn = document.getElementById('btnSaveNewAiKey');
+    const cancelKeyBtn = document.getElementById('btnCancelNewAiKey');
+
+    // 確保輸入框點擊或觸控時明確 stopPropagation 並 focus，絕不被外層攔截
+    [noteInput, keyInput, document.getElementById('adminAnnouncementInput')].forEach(inp => {
+        if (!inp) return;
+        ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(evt => {
+            inp.addEventListener(evt, (e) => {
+                e.stopPropagation();
+            }, { passive: true });
+        });
+        inp.addEventListener('click', () => {
+            inp.focus();
+        });
+    });
+
+    toggleBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!formWrap) return;
+        const willShow = formWrap.classList.contains('hidden');
+        if (willShow) {
+            formWrap.classList.remove('hidden');
+            setTimeout(() => {
+                noteInput?.focus();
+            }, 60);
+        } else {
+            formWrap.classList.add('hidden');
+        }
+    });
+
+    cancelKeyBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (keyInput) keyInput.value = '';
+        if (noteInput) noteInput.value = '';
+        formWrap?.classList.add('hidden');
+    });
+
+    saveKeyBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rawKey = (keyInput?.value || '').trim();
+        const rawNote = (noteInput?.value || '').trim();
+        if (!rawKey) {
+            keyInput?.focus();
+            return;
+        }
+
+        // 若已存在相同 Key 則更新備註並設為啟用，否則新增一組
+        const existing = editingAdminAiKeys.find(item => item.key === rawKey);
+        if (existing) {
+            if (rawNote) existing.note = rawNote;
+            editingActiveAiKeyId = existing.id;
+        } else {
+            const newId = `aikey_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+            editingAdminAiKeys.push({
+                id: newId,
+                key: rawKey,
+                note: rawNote || `金鑰 #${editingAdminAiKeys.length + 1}`,
+                createdAt: Date.now()
+            });
+            editingActiveAiKeyId = newId;
+        }
+
+        if (keyInput) keyInput.value = '';
+        if (noteInput) noteInput.value = '';
+        formWrap?.classList.add('hidden');
+        vibrate(25);
+        renderAdminAiKeyListUI();
+        persistAdminAiSettingsImmediately();
+    });
+})();
+
 function populateAdminSettingsForm(cfg) {
     const c = normalizeSystemConfig(cfg);
     selectedAdminInterval = c.radarIntervalSec;
     updateAdminIntervalDisplay(c.radarIntervalSec);
     highlightAdminIntervalBtn(c.radarIntervalSec);
+
+    // 同步 AI 模型與多組 API Key 清單
+    selectedAdminAiModel = c.aiDispatchModel || 'gemini-3.5-flash-lite';
+    editingAdminAiKeys = normalizeAiApiKeysArray(c.aiApiKeys);
+    editingActiveAiKeyId = c.activeAiKeyId || (editingAdminAiKeys[0]?.id || '');
+    highlightAdminAiModelBtn(selectedAdminAiModel);
+    renderAdminAiKeyListUI();
 
     const setVal = (id, val) => {
         const el = document.getElementById(id);
@@ -9629,6 +10084,31 @@ function readAdminSettingsForm() {
     const getVal = (id) => document.getElementById(id)?.value;
     const getChecked = (id) => Boolean(document.getElementById(id)?.checked);
 
+    // 若使用者在新增 API Key 輸入框填了金鑰但還沒按「確認新增」就直接按底下「儲存並同步」，自動幫他收錄進清單！
+    const pendingNewKey = (document.getElementById('adminNewAiKeyInput')?.value || '').trim();
+    const pendingNewNote = (document.getElementById('adminNewAiKeyNoteInput')?.value || '').trim();
+    if (pendingNewKey) {
+        const existing = editingAdminAiKeys.find(k => k.key === pendingNewKey);
+        if (existing) {
+            if (pendingNewNote) existing.note = pendingNewNote;
+            editingActiveAiKeyId = existing.id;
+        } else {
+            const newId = `aikey_${Date.now()}`;
+            editingAdminAiKeys.push({
+                id: newId,
+                key: pendingNewKey,
+                note: pendingNewNote || `金鑰 #${editingAdminAiKeys.length + 1}`,
+                createdAt: Date.now()
+            });
+            editingActiveAiKeyId = newId;
+        }
+        const keyInput = document.getElementById('adminNewAiKeyInput');
+        const noteInput = document.getElementById('adminNewAiKeyNoteInput');
+        if (keyInput) keyInput.value = '';
+        if (noteInput) noteInput.value = '';
+        document.getElementById('adminAddAiKeyFormWrap')?.classList.add('hidden');
+    }
+
     return normalizeSystemConfig({
         radarIntervalSec: selectedAdminInterval,
         announcementText: getVal('adminAnnouncementInput') || '',
@@ -9642,7 +10122,10 @@ function readAdminSettingsForm() {
         showOnlineFleetList: getChecked('adminShowOnlineFleetListInput'),
         maxAccuracyMeters: getVal('adminMaxAccuracyInput'),
         maxSpeedKmh: getVal('adminMaxSpeedInput'),
-        minLockSpeedKmh: getVal('adminMinLockSpeedInput')
+        minLockSpeedKmh: getVal('adminMinLockSpeedInput'),
+        aiDispatchModel: selectedAdminAiModel,
+        aiApiKeys: editingAdminAiKeys,
+        activeAiKeyId: editingActiveAiKeyId
     });
 }
 
@@ -9659,6 +10142,11 @@ async function openAdminSettingsPanel() {
     modal.classList.remove('hidden');
 
     const cloudCfg = await fetchSystemConfig();
+    // 若本機已有剛新增的 API Keys 而雲端還是空的，保留合併本機 Keys
+    if (editingAdminAiKeys.length > 0 && (!Array.isArray(cloudCfg.aiApiKeys) || cloudCfg.aiApiKeys.length === 0)) {
+        cloudCfg.aiApiKeys = editingAdminAiKeys;
+        cloudCfg.activeAiKeyId = editingActiveAiKeyId;
+    }
     applySystemConfigToRuntime(cloudCfg);
     populateAdminSettingsForm(cloudCfg);
 }
@@ -9701,9 +10189,13 @@ document.getElementById('btnClearAdminAnnouncement')?.addEventListener('click', 
     }
 });
 
-// 恢復預設值按鈕
+// 恢復預設值按鈕（保留已設定的 API Keys 避免誤刪）
 document.getElementById('btnResetAdminDefaults')?.addEventListener('click', () => {
-    populateAdminSettingsForm(DEFAULT_SYSTEM_CONFIG);
+    populateAdminSettingsForm({
+        ...DEFAULT_SYSTEM_CONFIG,
+        aiApiKeys: editingAdminAiKeys,
+        activeAiKeyId: editingActiveAiKeyId
+    });
 });
 
 // 儲存並同步按鈕
@@ -9726,7 +10218,7 @@ document.getElementById('btnSaveAdminSettings')?.addEventListener('click', async
             body: JSON.stringify(payload)
         }, 5000);
 
-        // 本機立即套用所有新參數與公告橫幅
+        // 本機立即套用所有新參數、AI 模型、API Key 清單與公告橫幅
         applySystemConfigToRuntime(newConfig);
         populateAdminSettingsForm(newConfig);
 
@@ -9772,9 +10264,13 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
         const manualDrawUI = document.getElementById('manualDrawUI');
         const adminSettingsModal = document.getElementById('adminSettingsModal');
         const adminPasswordModal = document.getElementById('adminPasswordModal');
+        const aiDispatchModal = document.getElementById('aiDispatchModal');
 
         // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
-        if (adminSettingsModal && !adminSettingsModal.classList.contains('hidden')) {
+        if (aiDispatchModal && !aiDispatchModal.classList.contains('hidden')) {
+            aiDispatchModal.classList.add('hidden');
+        }
+        else if (adminSettingsModal && !adminSettingsModal.classList.contains('hidden')) {
             adminSettingsModal.classList.add('hidden');
         }
         else if (adminPasswordModal && !adminPasswordModal.classList.contains('hidden')) {
@@ -9823,64 +10319,47 @@ document.getElementById('btnCloseAdminSettings')?.addEventListener('click', () =
             document.getElementById('btnManualCancel').click();
         }
         else if (routeDetailUI && !routeDetailUI.classList.contains('hidden')) {
-            // 如果在路線詳情頁，就觸發左上角返回鍵
             document.getElementById('topBackBtn').click();
         }
         else if (historyModal && !historyModal.classList.contains('hidden')) {
-            // 如果在清單頁，就觸發首頁圖示的關閉鍵
             document.getElementById('closeHistory').click();
-        } 
+        }
     });
 
-    // 2. 製造假歷史紀錄的函數 (讓手機能有東西可以"返回")
     function pushFakeHistory() {
         window.history.pushState({ pwa: true }, '');
     }
 
-    // 3. 用「外掛監聽」的方式，綁定到現有的按鈕上 (不用動你原本的代碼)
     const hBtn = document.getElementById('historyBtn');
-    if(hBtn) hBtn.addEventListener('click', pushFakeHistory);
-    
+    if (hBtn) hBtn.addEventListener('click', pushFakeHistory);
+
     const sBtn = document.getElementById('settingsBtn');
-    if(sBtn) sBtn.addEventListener('click', pushFakeHistory);
+    if (sBtn) sBtn.addEventListener('click', pushFakeHistory);
 
     const cBtn = document.getElementById('openCloudModalBtn');
-    if(cBtn) cBtn.addEventListener('click', pushFakeHistory);
+    if (cBtn) cBtn.addEventListener('click', pushFakeHistory);
 
     const bBtn = document.getElementById('blackScreenBtn');
-    if(bBtn) bBtn.addEventListener('click', pushFakeHistory);
+    if (bBtn) bBtn.addEventListener('click', pushFakeHistory);
 
-    // 4. 攔截開啟路線詳情的函數
     if (typeof window.openRouteDetail === 'function') {
         const originalOpenRouteDetail = window.openRouteDetail;
         window.openRouteDetail = function(idx) {
-            pushFakeHistory(); // 先推入歷史紀錄騙過手機
-            originalOpenRouteDetail(idx); // 再執行原本的開畫面動作
+            pushFakeHistory();
+            originalOpenRouteDetail(idx);
         };
     }
 })();
 
 // ==========================================
-// 🛋️ 11. 家具模式（3 組大型家具協作 ＋ 純木頭垃圾車支援火紅標記系統 v3.24）
-// - 僅限管理員模式／管理員選單內觸發切換（一般使用者主畫面不顯示，保持介面乾淨不誤觸）
-// - 3 組獨立顏色：第 1 組 (group1 紫色 #9333ea)、第 2 組 (group2 藍色 #2563eb)、第 3 組 (group3 青色 #0d9488)
-// - 免費 OSM Nominatim 地址／地標搜尋（400ms Debounce，優先偏向新北市鶯歌區範圍）
-// - 多支定位針連續插針（1, 2, 3...），支援拖曳微調、單支刪除、撤銷上一支、清空
-// - 全插完再串：🤖 自動沿路串 (OSRM) 與 ✍️ 手動拉線串（靠近目標針 25m 內自動吸附）
-// - Firebase 即時同步當日路徑：furniture_collab/{YYYY-MM-DD}/groups/{groupId}
-// - 🔥 需垃圾車支援（純木頭家具）：火紅色標記＋螢幕左上角即時提醒徽章（點擊依序飛往定位）
+// 🛋️ 11. 家具模式（單一共用作業空間 ＋ ✨ Gemini AI 智慧批次派工插針 ＋ 🔥 純木頭垃圾車支援火紅標記系統 v3.25）
+// - 徹底移除所有「第 1/2/3 組」分組邏輯與文案，改為全隊單一共用作業空間
+// - Firebase 路徑簡化為：furniture_collab/{YYYY-MM-DD}/active
+// - 按下右下角「🗑️ 清空」時，提示訊息顯示為：「🗑️ 已清空家具定位針與路線」
+// - 畫面頂部搜尋列右側配備「✨ AI 派工」按鈕，結合全隊已標註之「🏢 社區大樓（橘色水滴）」精確經緯度、OSM Nominatim 門牌定位與純木頭火紅標記自動批次插針
 // ==========================================
 let isFurnitureModeActive = false;
 window.isFurnitureModeActive = false;
-
-const FURNITURE_GROUP_STORAGE_KEY = 'yingge_furniture_active_group';
-const FURNITURE_SHOW_OTHERS_STORAGE_KEY = 'yingge_furniture_show_others';
-
-const FURNITURE_GROUPS_CONFIG = {
-    group1: { id: 'group1', name: '第 1 組', shortLabel: '1組', color: '#9333ea', badgeBg: 'bg-purple-600' },
-    group2: { id: 'group2', name: '第 2 組', shortLabel: '2組', color: '#2563eb', badgeBg: 'bg-blue-600' },
-    group3: { id: 'group3', name: '第 3 組', shortLabel: '3組', color: '#0d9488', badgeBg: 'bg-teal-600' }
-};
 
 function getTodayDateString() {
     const now = new Date();
@@ -9891,33 +10370,29 @@ function getTodayDateString() {
 }
 
 let currentFurnitureDateStr = getTodayDateString();
-let activeFurnitureGroupId = localStorage.getItem(FURNITURE_GROUP_STORAGE_KEY) || 'group1';
-if (!FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId]) {
-    activeFurnitureGroupId = 'group1';
-}
 
-let showOtherFurnitureGroups = localStorage.getItem(FURNITURE_SHOW_OTHERS_STORAGE_KEY) !== 'false';
-
-// 當日 3 組完整資料結構：{ group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }, group2: ..., group3: ... }
-let furnitureGroupsData = {
-    group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
-    group2: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
-    group3: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }
+// 單一共用家具作業空間資料結構
+let furnitureActiveData = {
+    pins: [],
+    routeCoords: [],
+    distanceKm: '0.00',
+    updatedAt: 0,
+    author: ''
 };
 
-// 記錄本組是否有尚未發布到雲端的本地編輯（避免背景輪詢覆蓋正在插針中的草稿）
-let isLocalFurnitureGroupDirty = false;
+let isLocalFurnitureDirty = false;
 let furnitureDomMarkers = [];
 let activeFurniturePopupMarker = null;
 let furnitureSearchPreviewMarker = null;
 let lastSelectedSearchCandidate = null;
 let furnitureSearchDebounceTimer = null;
+let furnitureToastTimer = null;
 
 // 手動拉線串聯狀態
 let isFurnitureManualConnecting = false;
-let furnitureManualTargetPinIdx = 1; // 目前準備連向的目標針索引 (0-indexed: 由 0 號針連往 1 號針)
-let furnitureManualConnectedCoords = []; // 已完成吸附的累積座標
-let furnitureManualSegmentDraft = []; // 當前正在拉向下一支針的草稿座標
+let furnitureManualTargetPinIdx = 1;
+let furnitureManualConnectedCoords = [];
+let furnitureManualSegmentDraft = [];
 let isFurnitureDrawingStroke = false;
 
 // 左上角火紅提醒輪播索引
@@ -9926,34 +10401,32 @@ let woodSupportAlertCycleIdx = 0;
 // 記錄切換進家具模式前的一般收運介面與路線圖層快照，以便切回時 100% 完整還原
 let normalModeRestoreSnapshot = null;
 
-function getLocalFurnitureStorageKey(dateStr, groupId) {
-    return `yingge_furniture_local_${dateStr}_${groupId}`;
+function getLocalFurnitureStorageKey(dateStr = currentFurnitureDateStr) {
+    return `yingge_furniture_active_${dateStr}`;
 }
 
-function saveLocalFurnitureGroupBackup(groupId = activeFurnitureGroupId) {
+function saveLocalFurnitureBackup() {
     try {
-        const gData = furnitureGroupsData[groupId];
-        if (!gData) return;
         localStorage.setItem(
-            getLocalFurnitureStorageKey(currentFurnitureDateStr, groupId),
-            JSON.stringify(gData)
+            getLocalFurnitureStorageKey(currentFurnitureDateStr),
+            JSON.stringify(furnitureActiveData)
         );
     } catch (e) {}
 }
 
-function loadLocalFurnitureGroupBackup(groupId) {
+function loadLocalFurnitureBackup() {
     try {
-        const raw = localStorage.getItem(getLocalFurnitureStorageKey(currentFurnitureDateStr, groupId));
+        const raw = localStorage.getItem(getLocalFurnitureStorageKey(currentFurnitureDateStr));
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-            return normalizeFurnitureGroupPayload(parsed);
+            return normalizeFurniturePayload(parsed);
         }
     } catch (e) {}
     return null;
 }
 
-function normalizeFurnitureGroupPayload(raw) {
+function normalizeFurniturePayload(raw) {
     const pins = Array.isArray(raw?.pins)
         ? raw.pins
             .filter(p => p && !isNaN(Number(p.lng)) && !isNaN(Number(p.lat)))
@@ -9961,7 +10434,7 @@ function normalizeFurnitureGroupPayload(raw) {
                 id: String(p.id || `fpin_${Date.now()}_${idx}`),
                 lng: Number(Number(p.lng).toFixed(6)),
                 lat: Number(Number(p.lat).toFixed(6)),
-                label: String(p.label || `點位 #${idx + 1}`),
+                label: String(p.label || `家具點位 #${idx + 1}`),
                 note: String(p.note || ''),
                 needsWoodTruckSupport: Boolean(p.needsWoodTruckSupport),
                 collected: Boolean(p.collected),
@@ -9998,18 +10471,25 @@ function computeCoordsDistanceKm(coords) {
     return km.toFixed(2);
 }
 
-function setFurniturePrompt(text, styleType = 'default') {
-    const banner = document.getElementById('furniturePromptBanner');
-    if (!banner) return;
-    banner.textContent = text;
-    if (styleType === 'manual') {
-        banner.className = 'bg-orange-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-orange-300';
-    } else if (styleType === 'success') {
-        banner.className = 'bg-emerald-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-emerald-300';
-    } else if (styleType === 'fire') {
-        banner.className = 'bg-red-600/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-yellow-300';
-    } else {
-        banner.className = 'bg-amber-700/95 backdrop-blur text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto text-center max-w-md border border-amber-300';
+// 顯示家具模式輕量快顯膠囊（如「🗑️ 已清空家具定位針與路線」）
+function showFurnitureToast(message, durationMs = 2400) {
+    const toastEl = document.getElementById('furnitureToastBanner');
+    if (!toastEl) return;
+    if (furnitureToastTimer) {
+        clearTimeout(furnitureToastTimer);
+        furnitureToastTimer = null;
+    }
+    toastEl.textContent = message;
+    toastEl.classList.remove('hidden');
+    furnitureToastTimer = setTimeout(() => {
+        toastEl.classList.add('hidden');
+        furnitureToastTimer = null;
+    }, durationMs);
+}
+
+function setFurniturePrompt(text) {
+    if (text) {
+        showFurnitureToast(text, 2400);
     }
 }
 
@@ -10035,25 +10515,18 @@ function clearFurnitureSearchPreviewMarker() {
     }
 }
 
-// 收集當日所有未處理的「🔥 需垃圾車支援（純木頭）」點位（跨 3 組）
+// 收集當日所有未處理的「🔥 需垃圾車支援（純木頭）」點位
 function getActiveWoodSupportPinsList() {
     const list = [];
-    ['group1', 'group2', 'group3'].forEach(gId => {
-        const gCfg = FURNITURE_GROUPS_CONFIG[gId];
-        const gData = furnitureGroupsData[gId];
-        if (!gData || !Array.isArray(gData.pins)) return;
-        gData.pins.forEach((pin, idx) => {
-            if (pin && pin.needsWoodTruckSupport && !pin.collected) {
-                list.push({
-                    groupId: gId,
-                    groupName: gCfg.name,
-                    groupShort: gCfg.shortLabel,
-                    pinIndex: idx,
-                    pinNumber: idx + 1,
-                    pin
-                });
-            }
-        });
+    if (!furnitureActiveData || !Array.isArray(furnitureActiveData.pins)) return list;
+    furnitureActiveData.pins.forEach((pin, idx) => {
+        if (pin && pin.needsWoodTruckSupport && !pin.collected) {
+            list.push({
+                pinIndex: idx,
+                pinNumber: idx + 1,
+                pin
+            });
+        }
     });
     return list;
 }
@@ -10076,7 +10549,7 @@ function updateWoodSupportTopLeftAlertUI() {
     const previewItem = supportList[woodSupportAlertCycleIdx % supportList.length];
     if (subEl && previewItem) {
         const shortAddr = (previewItem.pin.label || '').replace(/^新北市鶯歌區/, '').slice(0, 12);
-        subEl.textContent = `${previewItem.groupShort}#${previewItem.pinNumber} ${shortAddr || '純木頭'} · 點擊飛往`;
+        subEl.textContent = `#${previewItem.pinNumber} ${shortAddr || '純木頭'} · 點擊飛往`;
     }
 }
 
@@ -10097,52 +10570,21 @@ document.getElementById('furnitureWoodSupportAlertBtn')?.addEventListener('click
         duration: 650
     });
 
-    // 確保在地圖上渲染該火紅點位並彈出支援收運操作卡
     renderAllFurnitureMapElements();
     setTimeout(() => {
-        openFurniturePinActionPopup(target.groupId, target.pinIndex);
+        openFurniturePinActionPopup(target.pinIndex);
     }, 300);
 });
 
-// 更新家具模式面板上的按鈕、組別膠囊、針數與距離統計
+// 更新家具模式左下角插針統計小膠囊（📍 0 支針 ｜ 0.00 km）與各邊角按鈕啟用狀態
 function updateFurniturePanelUI() {
-    const curGroupData = furnitureGroupsData[activeFurnitureGroupId] || { pins: [], routeCoords: [], distanceKm: '0.00' };
-    const pinsCount = curGroupData.pins.length;
-    curGroupData.distanceKm = computeCoordsDistanceKm(curGroupData.routeCoords);
+    const pinsCount = Array.isArray(furnitureActiveData.pins) ? furnitureActiveData.pins.length : 0;
+    furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
 
-    // 1. 組別按鈕高亮
-    document.querySelectorAll('.furniture-group-btn').forEach(btn => {
-        const gId = btn.getAttribute('data-group');
-        const cfg = FURNITURE_GROUPS_CONFIG[gId];
-        if (!cfg) return;
-        if (gId === activeFurnitureGroupId) {
-            btn.className = `furniture-group-btn ${cfg.badgeBg} text-white font-black text-xs py-1.5 px-2 rounded-xl shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1`;
-            btn.innerHTML = `<span class="w-2 h-2 rounded-full bg-white inline-block"></span>${cfg.name}`;
-        } else {
-            const dotColor = gId === 'group1' ? 'bg-purple-600' : (gId === 'group2' ? 'bg-blue-600' : 'bg-teal-600');
-            btn.className = 'furniture-group-btn text-gray-600 hover:bg-white/70 font-black text-xs py-1.5 px-2 rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1';
-            btn.innerHTML = `<span class="w-2 h-2 rounded-full ${dotColor} inline-block"></span>${cfg.name}`;
-        }
-    });
-
-    // 2. 顯示他組路線開關
-    const toggleOthersBtn = document.getElementById('btnToggleOtherFurnitureGroups');
-    const toggleOthersLabel = document.getElementById('otherFurnitureGroupsLabel');
-    if (toggleOthersBtn && toggleOthersLabel) {
-        if (showOtherFurnitureGroups) {
-            toggleOthersBtn.className = 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-extrabold text-[11px] px-2.5 py-2 rounded-2xl active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 shadow-sm';
-            toggleOthersBtn.innerHTML = `<i class="fa-solid fa-eye text-emerald-600"></i><span id="otherFurnitureGroupsLabel">顯示他組:開</span>`;
-        } else {
-            toggleOthersBtn.className = 'bg-gray-100 hover:bg-gray-200 text-gray-500 border border-gray-300 font-extrabold text-[11px] px-2.5 py-2 rounded-2xl active:scale-95 transition-all whitespace-nowrap flex items-center gap-1';
-            toggleOthersBtn.innerHTML = `<i class="fa-solid fa-eye-slash text-gray-400"></i><span id="otherFurnitureGroupsLabel">顯示他組:關</span>`;
-        }
-    }
-
-    // 3. 左下角插針統計小膠囊（📍 0 支針 ｜ 0.00 km）與各邊角按鈕啟用狀態
     const pinCountBadge = document.getElementById('furniturePinCountBadge');
     const distBadge = document.getElementById('furnitureRouteDistBadge');
     if (pinCountBadge) pinCountBadge.textContent = `📍 ${pinsCount} 支針`;
-    if (distBadge) distBadge.textContent = `${curGroupData.distanceKm} km`;
+    if (distBadge) distBadge.textContent = `${furnitureActiveData.distanceKm} km`;
 
     const undoBtn = document.getElementById('btnFurnitureUndoPin');
     const clearBtn = document.getElementById('btnFurnitureClearPins');
@@ -10151,7 +10593,7 @@ function updateFurniturePanelUI() {
     const manualConnectText = document.getElementById('furnitureManualConnectBtnText');
 
     if (undoBtn) undoBtn.disabled = (pinsCount === 0);
-    if (clearBtn) clearBtn.disabled = (pinsCount === 0 && curGroupData.routeCoords.length === 0);
+    if (clearBtn) clearBtn.disabled = (pinsCount === 0 && furnitureActiveData.routeCoords.length === 0);
     if (autoOsrmBtn) autoOsrmBtn.disabled = (pinsCount < 2);
     if (manualConnectBtn) {
         manualConnectBtn.disabled = (pinsCount < 2);
@@ -10167,79 +10609,47 @@ function updateFurniturePanelUI() {
     updateWoodSupportTopLeftAlertUI();
 }
 
-// 渲染地圖上的家具路線圖層與所有組別定位針（加上防呆：切換底圖或切換模式皆完整重繪）
+// 渲染地圖上的家具路線圖層與所有定位針
 function renderAllFurnitureMapElements() {
     if (!map) return;
     ensureCustomRouteSourcesAndLayers();
 
-    // 若不在家具模式下：隱藏家具路線與一般家具針，但保留全隊未處理的「🔥 需垃圾車支援（純木頭）」火紅標記供垃圾車司機隨時查看！
     clearFurnitureDomMarkers();
 
     if (!isFurnitureModeActive) {
-        cachedFurnitureOtherRoutesGeoJSON = emptyGeoJSON();
         cachedFurnitureOwnRouteGeoJSON = emptyGeoJSON();
         cachedFurnitureManualDraftGeoJSON = emptyGeoJSON();
         try {
-            map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON);
             map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON);
             map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON);
         } catch (e) {}
 
-        // 在一般收運模式下，仍把當日「未處理的火紅純木頭支援點」顯示在地圖上，方便 2 台垃圾車司機邊收運邊支援
+        // 在一般收運模式下，仍把當日「未處理的火紅純木頭支援點」顯示在地圖上，方便垃圾車司機邊收運邊支援
         const activeSupportPins = getActiveWoodSupportPinsList();
         activeSupportPins.forEach(item => {
-            createFurniturePinDomMarker(item.groupId, item.pin, item.pinIndex, false);
+            createFurniturePinDomMarker(item.pin, item.pinIndex);
         });
         updateWoodSupportTopLeftAlertUI();
         return;
     }
 
-    // 1. 建構其他 2 組的路線 GeoJSON Features（當 showOtherFurnitureGroups 為開時顯示）
-    const otherFeatures = [];
-    if (showOtherFurnitureGroups) {
-        ['group1', 'group2', 'group3'].forEach(gId => {
-            if (gId === activeFurnitureGroupId) return;
-            const gCfg = FURNITURE_GROUPS_CONFIG[gId];
-            const gData = furnitureGroupsData[gId];
-            if (gData && Array.isArray(gData.routeCoords) && gData.routeCoords.length >= 2) {
-                otherFeatures.push({
-                    type: 'Feature',
-                    properties: {
-                        groupId: gId,
-                        groupName: gCfg.name,
-                        color: gCfg.color
-                    },
-                    geometry: {
-                        type: 'LineString',
-                        coordinates: gData.routeCoords
-                    }
-                });
-            }
-        });
-    }
-    cachedFurnitureOtherRoutesGeoJSON = { type: 'FeatureCollection', features: otherFeatures };
-
-    // 2. 建構目前所選組別的主路線 GeoJSON Feature
-    const ownCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
-    const ownData = furnitureGroupsData[activeFurnitureGroupId];
+    // 1. 建構共用家具路線 GeoJSON Feature
     const ownFeatures = [];
-    if (ownData && Array.isArray(ownData.routeCoords) && ownData.routeCoords.length >= 2) {
+    if (Array.isArray(furnitureActiveData.routeCoords) && furnitureActiveData.routeCoords.length >= 2) {
         ownFeatures.push({
             type: 'Feature',
             properties: {
-                groupId: activeFurnitureGroupId,
-                groupName: ownCfg.name,
-                color: ownCfg.color
+                color: '#7c3aed'
             },
             geometry: {
                 type: 'LineString',
-                coordinates: ownData.routeCoords
+                coordinates: furnitureActiveData.routeCoords
             }
         });
     }
     cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: ownFeatures };
 
-    // 3. 手動拉線串聯草稿圖層
+    // 2. 手動拉線串聯草稿圖層
     const draftCoords = isFurnitureManualConnecting && furnitureManualSegmentDraft.length >= 2
         ? furnitureManualSegmentDraft
         : [];
@@ -10248,59 +10658,44 @@ function renderAllFurnitureMapElements() {
         : emptyGeoJSON();
 
     try {
-        map.getSource('furniture-other-routes-source')?.setData(cachedFurnitureOtherRoutesGeoJSON);
         map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON);
         map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON);
     } catch (e) {}
 
-    // 4. 渲染其他 2 組的定位針（若 showOtherFurnitureGroups 為開，或是該針為火紅需垃圾車支援點，一律顯示）
-    ['group1', 'group2', 'group3'].forEach(gId => {
-        if (gId === activeFurnitureGroupId) return;
-        const gData = furnitureGroupsData[gId];
-        if (!gData || !Array.isArray(gData.pins)) return;
-        gData.pins.forEach((pin, idx) => {
-            const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
-            if (!showOtherFurnitureGroups && !isUrgentWood) return;
-            createFurniturePinDomMarker(gId, pin, idx, false);
-        });
-    });
-
-    // 5. 渲染本組的所有定位針（可拖曳微調座標）
-    if (ownData && Array.isArray(ownData.pins)) {
-        ownData.pins.forEach((pin, idx) => {
-            createFurniturePinDomMarker(activeFurnitureGroupId, pin, idx, true);
+    // 3. 渲染所有家具定位針（可拖曳微調座標）
+    if (Array.isArray(furnitureActiveData.pins)) {
+        furnitureActiveData.pins.forEach((pin, idx) => {
+            createFurniturePinDomMarker(pin, idx);
         });
     }
 
     updateFurniturePanelUI();
 }
 
-function createFurniturePinDomMarker(groupId, pin, pinIdx, isOwnEditableGroup) {
-    const gCfg = FURNITURE_GROUPS_CONFIG[groupId] || FURNITURE_GROUPS_CONFIG.group1;
+function createFurniturePinDomMarker(pin, pinIdx) {
     const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
     const isCollected = Boolean(pin.collected);
     const pinNumber = pinIdx + 1;
 
     // 外層 wrapper 嚴禁設 CSS transform
     const wrapperEl = document.createElement('div');
-    wrapperEl.className = `furniture-pin-wrapper ${isUrgentWood ? 'is-wood-support' : ''} ${!isOwnEditableGroup ? 'is-other-group' : ''}`;
+    wrapperEl.className = `furniture-pin-wrapper ${isUrgentWood ? 'is-wood-support' : ''}`;
 
     const pillEl = document.createElement('div');
-    pillEl.className = `furniture-pin-pill group-${groupId} ${isUrgentWood ? 'is-wood-support' : ''} ${isCollected ? 'is-collected' : ''}`;
+    pillEl.className = `furniture-pin-pill ${isUrgentWood ? 'is-wood-support' : ''} ${isCollected ? 'is-collected' : ''}`;
 
     let statusPrefix = '';
     if (isUrgentWood) statusPrefix = '🔥 ';
     else if (isCollected) statusPrefix = '✅ ';
 
-    const groupTag = (!isOwnEditableGroup || isUrgentWood) ? `${gCfg.shortLabel}` : '';
     const shortLabel = (pin.label || '').replace(/^新北市鶯歌區/, '').trim();
-    const displayAddr = shortLabel && !shortLabel.startsWith('點位')
-        ? ` · ${Array.from(shortLabel).slice(0, 6).join('')}`
+    const displayAddr = shortLabel && !shortLabel.startsWith('點位') && !shortLabel.startsWith('家具點位')
+        ? ` · ${Array.from(shortLabel).slice(0, 7).join('')}`
         : '';
 
     pillEl.innerHTML = `
-        <span>${statusPrefix}${groupTag ? `${groupTag}-` : ''}#${pinNumber}</span>
-        ${isUrgentWood ? '<span class="bg-yellow-300 text-red-900 text-[9px] font-black px-1 py-0.2 rounded">純木頭支援</span>' : (displayAddr ? `<span class="text-[10px] opacity-90">${displayAddr}</span>` : '')}
+        <span>${statusPrefix}#${pinNumber}</span>
+        ${isUrgentWood ? '<span class="bg-yellow-300 text-red-900 text-[9px] font-black px-1 py-0.2 rounded">純木頭支援</span>' : (displayAddr ? `<span class="text-[10px] opacity-95">${displayAddr}</span>` : '')}
     `;
 
     const arrowEl = document.createElement('div');
@@ -10311,15 +10706,14 @@ function createFurniturePinDomMarker(groupId, pin, pinIdx, isOwnEditableGroup) {
 
     wrapperEl.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        // 若正在「手動拉線串」模式且點擊本組目標針，直接吸附連接到該針！
-        if (isFurnitureModeActive && isFurnitureManualConnecting && isOwnEditableGroup) {
+        if (isFurnitureModeActive && isFurnitureManualConnecting) {
             handleManualConnectSnapToPin(pinIdx);
             return;
         }
-        openFurniturePinActionPopup(groupId, pinIdx);
+        openFurniturePinActionPopup(pinIdx);
     });
 
-    const canDrag = Boolean(isFurnitureModeActive && isOwnEditableGroup && !isFurnitureManualConnecting);
+    const canDrag = Boolean(isFurnitureModeActive && !isFurnitureManualConnecting);
     const marker = new maplibregl.Marker({
         element: wrapperEl,
         anchor: 'bottom',
@@ -10337,10 +10731,10 @@ function createFurniturePinDomMarker(groupId, pin, pinIdx, isOwnEditableGroup) {
             pin.lng = Number(pos.lng.toFixed(6));
             pin.lat = Number(pos.lat.toFixed(6));
             pin.updatedAt = Date.now();
-            isLocalFurnitureGroupDirty = true;
-            saveLocalFurnitureGroupBackup(groupId);
+            isLocalFurnitureDirty = true;
+            saveLocalFurnitureBackup();
             renderAllFurnitureMapElements();
-            syncSingleFurnitureGroupToFirebase(groupId, false);
+            syncActiveFurnitureToFirebase(false);
         });
     }
 
@@ -10348,16 +10742,13 @@ function createFurniturePinDomMarker(groupId, pin, pinIdx, isOwnEditableGroup) {
     return marker;
 }
 
-// 點擊任一組定位針彈出簡潔操作卡片：可切換「🔥 需垃圾車支援（純木頭）」或「✅ 已收運／解除支援」並即時同步 Firebase
-function openFurniturePinActionPopup(groupId, pinIdx) {
+// 點擊定位針彈出簡潔操作卡片：可切換「🔥 需垃圾車支援（純木頭）」或「✅ 已收運／解除支援」並即時同步 Firebase
+function openFurniturePinActionPopup(pinIdx) {
     closeFurniturePinPopup();
-    const gCfg = FURNITURE_GROUPS_CONFIG[groupId];
-    const gData = furnitureGroupsData[groupId];
-    const pin = gData?.pins?.[pinIdx];
-    if (!gCfg || !pin) return;
+    const pin = furnitureActiveData?.pins?.[pinIdx];
+    if (!pin) return;
 
     const isUrgentWood = Boolean(pin.needsWoodTruckSupport && !pin.collected);
-    const isOwnGroup = (groupId === activeFurnitureGroupId);
     const pinNumber = pinIdx + 1;
 
     const wrapper = document.createElement('div');
@@ -10372,7 +10763,7 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
     headerRow.className = 'flex items-center justify-between gap-2 pb-1.5 border-b border-gray-100';
     headerRow.innerHTML = `
         <div class="flex items-center gap-1.5 min-w-0">
-            <span class="${gCfg.badgeBg} text-white text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">${gCfg.name} #${pinNumber}</span>
+            <span class="bg-violet-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap">家具點位 #${pinNumber}</span>
             ${isUrgentWood ? '<span class="bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap">🔥 待垃圾車支援</span>' : (pin.collected ? '<span class="bg-emerald-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full whitespace-nowrap">✅ 已收運</span>' : '')}
         </div>
     `;
@@ -10384,7 +10775,6 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
     headerRow.appendChild(closeBtn);
     card.appendChild(headerRow);
 
-    // 地址或備註顯示與快捷備註輸入
     const addrDiv = document.createElement('div');
     addrDiv.className = 'text-xs font-extrabold text-gray-800 mt-1.5 break-words leading-snug';
     addrDiv.textContent = pin.label || `大型家具點位 #${pinNumber}`;
@@ -10398,12 +10788,11 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
     noteInput.addEventListener('change', async () => {
         pin.note = noteInput.value.trim();
         pin.updatedAt = Date.now();
-        saveLocalFurnitureGroupBackup(groupId);
-        await syncSingleFurnitureGroupToFirebase(groupId, false);
+        saveLocalFurnitureBackup();
+        await syncActiveFurnitureToFirebase(false);
     });
     card.appendChild(noteInput);
 
-    // 核心支援狀態切換按鈕列
     const actionsCol = document.createElement('div');
     actionsCol.className = 'flex flex-col gap-1.5 mt-2.5 pt-2 border-t border-gray-100';
 
@@ -10428,9 +10817,9 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
         pin.updatedAt = Date.now();
         vibrate([35, 25, 35]);
         closeFurniturePinPopup();
-        saveLocalFurnitureGroupBackup(groupId);
+        saveLocalFurnitureBackup();
         renderAllFurnitureMapElements();
-        await syncSingleFurnitureGroupToFirebase(groupId, true);
+        await syncActiveFurnitureToFirebase(true);
     };
     actionsCol.appendChild(woodBtn);
 
@@ -10453,13 +10842,13 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
         pin.updatedAt = Date.now();
         vibrate(30);
         closeFurniturePinPopup();
-        saveLocalFurnitureGroupBackup(groupId);
+        saveLocalFurnitureBackup();
         renderAllFurnitureMapElements();
-        await syncSingleFurnitureGroupToFirebase(groupId, true);
+        await syncActiveFurnitureToFirebase(true);
     };
     actionsCol.appendChild(collectedBtn);
 
-    // 底部列：Google 導航 ＋（本組可刪除此針）
+    // 底部列：Google 導航 ＋ 刪除此針
     const bottomRow = document.createElement('div');
     bottomRow.className = 'flex items-center gap-1.5 mt-0.5';
 
@@ -10473,22 +10862,22 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
     };
     bottomRow.appendChild(gNavBtn);
 
-    if (isFurnitureModeActive && isOwnGroup) {
+    if (isFurnitureModeActive) {
         const delPinBtn = document.createElement('button');
         delPinBtn.type = 'button';
         delPinBtn.className = 'bg-gray-100 hover:bg-red-50 text-red-600 border border-gray-200 font-extrabold py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 flex items-center justify-center gap-1';
         delPinBtn.innerHTML = '<span>🗑️ 刪針</span>';
         delPinBtn.onclick = () => {
-            gData.pins.splice(pinIdx, 1);
-            if (gData.pins.length < 2) {
-                gData.routeCoords = [];
-                gData.distanceKm = '0.00';
+            furnitureActiveData.pins.splice(pinIdx, 1);
+            if (furnitureActiveData.pins.length < 2) {
+                furnitureActiveData.routeCoords = [];
+                furnitureActiveData.distanceKm = '0.00';
             }
-            isLocalFurnitureGroupDirty = true;
+            isLocalFurnitureDirty = true;
             closeFurniturePinPopup();
-            saveLocalFurnitureGroupBackup(groupId);
+            saveLocalFurnitureBackup();
             renderAllFurnitureMapElements();
-            syncSingleFurnitureGroupToFirebase(groupId, false);
+            syncActiveFurnitureToFirebase(false);
         };
         bottomRow.appendChild(delPinBtn);
     }
@@ -10512,30 +10901,30 @@ function openFurniturePinActionPopup(groupId, pinIdx) {
         .addTo(map);
 }
 
-// 新增定位針至目前組別
-function addFurniturePinToActiveGroup(lng, lat, labelText = '') {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData) return;
+// 新增定位針至家具作業空間
+function addFurniturePinToWorkspace(lng, lat, labelText = '', options = {}) {
     const cleanLng = Number(Number(lng).toFixed(6));
     const cleanLat = Number(Number(lat).toFixed(6));
-    const nextNum = gData.pins.length + 1;
+    const nextNum = furnitureActiveData.pins.length + 1;
 
-    gData.pins.push({
+    furnitureActiveData.pins.push({
         id: `fpin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         lng: cleanLng,
         lat: cleanLat,
         label: labelText ? String(labelText).trim() : `家具點位 #${nextNum}`,
-        note: '',
-        needsWoodTruckSupport: false,
+        note: options.note ? String(options.note).trim() : '',
+        needsWoodTruckSupport: Boolean(options.needsWoodTruckSupport),
         collected: false,
         updatedAt: Date.now()
     });
-    gData.updatedAt = Date.now();
-    isLocalFurnitureGroupDirty = true;
-    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
-    vibrate(25);
-    renderAllFurnitureMapElements();
-    syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+    furnitureActiveData.updatedAt = Date.now();
+    isLocalFurnitureDirty = true;
+    saveLocalFurnitureBackup();
+    if (!options.silent) {
+        vibrate(25);
+        renderAllFurnitureMapElements();
+        syncActiveFurnitureToFirebase(false);
+    }
 }
 
 // 家具模式下點擊地圖：直接插針（或手動拉線串聯模式下點擊加點／吸附目標針）
@@ -10544,26 +10933,23 @@ function handleFurnitureMapClick(e) {
     const clickLng = Number(e.lngLat.lng.toFixed(6));
     const clickLat = Number(e.lngLat.lat.toFixed(6));
 
-    // 若處於「✍️ 手動拉線串」模式：點擊地圖可逐點拉線，靠近目標針 <= 25m 自動吸附！
     if (isFurnitureManualConnecting) {
         handleFurnitureManualClickPoint(clickLng, clickLat);
         return;
     }
 
-    addFurniturePinToActiveGroup(clickLng, clickLat, '');
+    addFurniturePinToWorkspace(clickLng, clickLat, '');
 }
 
 // ==========================================
 // 🔍 免費 OSM Nominatim 地址／地標搜尋（400ms Debounce，優先偏向新北市鶯歌區範圍）
 // ==========================================
-// 新北市鶯歌區範圍 viewbox: left=121.30, top=24.99, right=121.39, bottom=24.92
 const YINGGE_VIEWBOX = '121.30,24.99,121.39,24.92';
 
 async function searchYinggeAddressNominatim(rawQuery) {
     const q = String(rawQuery || '').trim();
     if (!q) return [];
 
-    // 若使用者未輸入縣市區名，自動組合「新北市鶯歌區」優先查詢，若無結果再查原關鍵字
     const hasDistrictKeyword = /鶯歌|三峽|樹林|桃園|八德|新北/.test(q);
     const primaryQuery = hasDistrictKeyword ? q : `新北市鶯歌區 ${q}`;
     const urlPrimary = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=tw&limit=5&viewbox=${YINGGE_VIEWBOX}&bounded=0&q=${encodeURIComponent(primaryQuery)}`;
@@ -10671,7 +11057,6 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
                 </button>
             `;
 
-            // 點選整列：飛往該地址並顯示「📍 插針」按鈕
             row.addEventListener('click', (e) => {
                 e.stopPropagation();
                 lastSelectedSearchCandidate = { lng, lat, label: title };
@@ -10681,10 +11066,9 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
                 setCameraFollow(false);
                 map.flyTo({ center: [lng, lat], zoom: 18, duration: 550 });
                 showFurnitureSearchPreviewPin(lng, lat, title);
-                setFurniturePrompt(`🔍 已定位至「${title}」，點擊右側「📍 插針」即可加入點位`, 'default');
+                showFurnitureToast(`🔍 已定位至「${title}」，點右側「📍 插針」加入`);
             });
 
-            // 點選列右側「📍 插針」按鈕：飛往並立即插針
             const directPinBtn = row.querySelector('button');
             directPinBtn?.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -10695,7 +11079,7 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
                 clearBtn?.classList.add('hidden');
                 setCameraFollow(false);
                 map.flyTo({ center: [lng, lat], zoom: 17.5, duration: 500 });
-                addFurniturePinToActiveGroup(lng, lat, title);
+                addFurniturePinToWorkspace(lng, lat, title);
             });
 
             resultsPanel.appendChild(row);
@@ -10719,7 +11103,6 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
         if (furnitureSearchDebounceTimer) {
             clearTimeout(furnitureSearchDebounceTimer);
         }
-        // 400ms Debounce 防抖動
         furnitureSearchDebounceTimer = setTimeout(async () => {
             const q = inputEl.value.trim();
             if (q.length < 2) return;
@@ -10750,10 +11133,9 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
         inputEl.value = '';
         clearBtn?.classList.add('hidden');
         lastSelectedSearchCandidate = null;
-        addFurniturePinToActiveGroup(lng, lat, label);
+        addFurniturePinToWorkspace(lng, lat, label);
     });
 
-    // 點擊外部自動收合搜尋結果清單
     document.addEventListener('pointerdown', (e) => {
         if (resultsPanel.classList.contains('hidden')) return;
         if (!resultsPanel.contains(e.target) && e.target !== inputEl) {
@@ -10768,8 +11150,7 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
 let isFurnitureOsrmBusy = false;
 document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click', async () => {
     if (isFurnitureOsrmBusy) return;
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData || !Array.isArray(gData.pins) || gData.pins.length < 2) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 2) return;
 
     if (isFurnitureManualConnecting) {
         stopFurnitureManualConnectMode(false);
@@ -10782,37 +11163,36 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
     }
-    setFurniturePrompt(`🤖 正在依序計算 1 ➔ ${gData.pins.length} 號針的 OSRM 最佳道路軌跡...`, 'default');
+    showFurnitureToast(`🤖 正在計算 1 ➔ ${furnitureActiveData.pins.length} 號針的道路軌跡...`);
 
     try {
-        const combinedCoords = [[gData.pins[0].lng, gData.pins[0].lat]];
-        let fallbackCount = 0;
+        const combinedCoords = [[furnitureActiveData.pins[0].lng, furnitureActiveData.pins[0].lat]];
 
-        for (let i = 0; i < gData.pins.length - 1; i++) {
-            const pA = gData.pins[i];
-            const pB = gData.pins[i + 1];
-            const { coords, usedOsrm } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat);
-            if (!usedOsrm) fallbackCount++;
+        for (let i = 0; i < furnitureActiveData.pins.length - 1; i++) {
+            const pA = furnitureActiveData.pins[i];
+            const pB = furnitureActiveData.pins[i + 1];
+            const { coords } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat);
             const densified = densifyRoadCoordinates(coords, 8);
             for (let k = 1; k < densified.length; k++) {
                 combinedCoords.push(densified[k]);
             }
         }
 
-        gData.routeCoords = combinedCoords;
-        gData.distanceKm = computeCoordsDistanceKm(combinedCoords);
-        gData.updatedAt = Date.now();
-        isLocalFurnitureGroupDirty = true;
-        saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+        furnitureActiveData.routeCoords = combinedCoords;
+        furnitureActiveData.distanceKm = computeCoordsDistanceKm(combinedCoords);
+        furnitureActiveData.updatedAt = Date.now();
+        isLocalFurnitureDirty = true;
+        saveLocalFurnitureBackup();
         vibrate([40, 25, 40]);
 
         renderAllFurnitureMapElements();
-        syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+        await syncActiveFurnitureToFirebase(false);
+        showFurnitureToast(`✅ 已完成自動沿路串聯（共 ${furnitureActiveData.distanceKm} km）`);
     } finally {
         isFurnitureOsrmBusy = false;
         if (btn) {
             btn.innerHTML = origHtml;
-            btn.disabled = (gData.pins.length < 2);
+            btn.disabled = (furnitureActiveData.pins.length < 2);
         }
     }
 });
@@ -10821,33 +11201,28 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
 // ✍️ 串聯方式 2：手動拉線串（依序從 1 號針手繪或點連向 2、3… 號針，靠近目標針 25m 內自動吸附）
 // ==========================================
 function startFurnitureManualConnectMode() {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData || !Array.isArray(gData.pins) || gData.pins.length < 2) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 2) return;
 
     isFurnitureManualConnecting = true;
     furnitureManualTargetPinIdx = 1;
-    const p0 = gData.pins[0];
+    const p0 = furnitureActiveData.pins[0];
     furnitureManualConnectedCoords = [[p0.lng, p0.lat]];
     furnitureManualSegmentDraft = [[p0.lng, p0.lat]];
     isFurnitureDrawingStroke = false;
 
-    gData.routeCoords = [...furnitureManualConnectedCoords];
-    setFurniturePrompt(
-        `✍️ 手動拉線串：請從 #1 號針單指拉線（或點選路面）連向 #2 號針（靠近 25 公尺內自動吸附）`,
-        'manual'
-    );
+    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+    showFurnitureToast('✍️ 手動拉線串：請從 #1 號針拉線或點選路面連向 #2 號針');
     renderAllFurnitureMapElements();
 }
 
 function stopFurnitureManualConnectMode(commitDraft = true) {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (commitDraft && gData && furnitureManualConnectedCoords.length >= 2) {
-        gData.routeCoords = [...furnitureManualConnectedCoords];
-        gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
-        gData.updatedAt = Date.now();
-        isLocalFurnitureGroupDirty = true;
-        saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
-        syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+    if (commitDraft && furnitureManualConnectedCoords.length >= 2) {
+        furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+        furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
+        furnitureActiveData.updatedAt = Date.now();
+        isLocalFurnitureDirty = true;
+        saveLocalFurnitureBackup();
+        syncActiveFurnitureToFirebase(false);
     }
     isFurnitureManualConnecting = false;
     isFurnitureDrawingStroke = false;
@@ -10857,11 +11232,10 @@ function stopFurnitureManualConnectMode(commitDraft = true) {
 }
 
 function handleManualConnectSnapToPin(targetIdx) {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData || !isFurnitureManualConnecting) return;
-    if (targetIdx < 1 || targetIdx >= gData.pins.length) return;
+    if (!isFurnitureManualConnecting) return;
+    if (targetIdx < 1 || targetIdx >= furnitureActiveData.pins.length) return;
 
-    const targetPin = gData.pins[targetIdx];
+    const targetPin = furnitureActiveData.pins[targetIdx];
     const targetCoord = [targetPin.lng, targetPin.lat];
     const segCoords = furnitureManualSegmentDraft.length >= 1
         ? [...furnitureManualSegmentDraft, targetCoord]
@@ -10872,39 +11246,30 @@ function handleManualConnectSnapToPin(targetIdx) {
         furnitureManualConnectedCoords.push(densified[i]);
     }
 
-    gData.routeCoords = [...furnitureManualConnectedCoords];
-    gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
-    gData.updatedAt = Date.now();
-    isLocalFurnitureGroupDirty = true;
-    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+    furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
+    furnitureActiveData.updatedAt = Date.now();
+    isLocalFurnitureDirty = true;
+    saveLocalFurnitureBackup();
     vibrate(35);
 
-    if (targetIdx >= gData.pins.length - 1) {
-        // 已完成最後一支針的串聯！
+    if (targetIdx >= furnitureActiveData.pins.length - 1) {
         stopFurnitureManualConnectMode(true);
-        setFurniturePrompt(
-            `🎉 已完成手動拉線串聯 1 ➔ ${gData.pins.length} 號針（總距離 ${gData.distanceKm} km）！請按「📤 發布同步今日路線」`,
-            'success'
-        );
+        showFurnitureToast(`🎉 已完成手動拉線串聯 1 ➔ ${furnitureActiveData.pins.length} 號針（${furnitureActiveData.distanceKm} km）`);
     } else {
         furnitureManualTargetPinIdx = targetIdx + 1;
         furnitureManualSegmentDraft = [targetCoord];
         renderAllFurnitureMapElements();
-        setFurniturePrompt(
-            `✅ 已吸附 #${targetIdx + 1} 號針！請繼續拉線或點擊連向 #${furnitureManualTargetPinIdx + 1} 號針`,
-            'manual'
-        );
+        showFurnitureToast(`✅ 已吸附 #${targetIdx + 1} 號針！請繼續連向 #${furnitureManualTargetPinIdx + 1} 號針`);
     }
 }
 
 function handleFurnitureManualClickPoint(lng, lat) {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData || !isFurnitureManualConnecting) return;
-    const targetPin = gData.pins[furnitureManualTargetPinIdx];
+    if (!isFurnitureManualConnecting) return;
+    const targetPin = furnitureActiveData.pins[furnitureManualTargetPinIdx];
     if (!targetPin) return;
 
     const distToTargetM = getDistanceKm(lng, lat, targetPin.lng, targetPin.lat) * 1000;
-    // 靠近目標針 25 公尺內自動吸附
     if (distToTargetM <= 25) {
         handleManualConnectSnapToPin(furnitureManualTargetPinIdx);
         return;
@@ -10912,12 +11277,11 @@ function handleFurnitureManualClickPoint(lng, lat) {
 
     furnitureManualSegmentDraft.push([lng, lat]);
     furnitureManualConnectedCoords.push([lng, lat]);
-    gData.routeCoords = [...furnitureManualConnectedCoords];
-    gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
+    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+    furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
     renderAllFurnitureMapElements();
 }
 
-// 支援在「手動拉線串」下直接單指從當前端點拖曳畫線連向下一支針（靠近目標針 25m 自動吸附）
 (function setupFurnitureManualFreehandGesture() {
     const canvasContainer = map.getCanvasContainer();
 
@@ -10930,13 +11294,11 @@ function handleFurnitureManualClickPoint(lng, lat) {
         if (!isFurnitureModeActive || !isFurnitureManualConnecting) return;
         const targetEl = rawEv?.target;
         if (targetEl && targetEl.closest && targetEl.closest('.furniture-pin-wrapper, .furniture-popup-wrapper')) return;
-        const gData = furnitureGroupsData[activeFurnitureGroupId];
-        if (!gData || furnitureManualConnectedCoords.length === 0) return;
+        if (furnitureManualConnectedCoords.length === 0) return;
 
         const lngLat = getLngLat(clientX, clientY);
         const lastAnchor = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
         const distFromAnchorM = getDistanceKm(lngLat.lng, lngLat.lat, lastAnchor[0], lastAnchor[1]) * 1000;
-        // 僅在靠近當前拉線端點 55 公尺內按下時啟動單指畫線，否則保留地圖平移
         if (distFromAnchorM > 55) return;
 
         isFurnitureDrawingStroke = true;
@@ -10946,8 +11308,7 @@ function handleFurnitureManualClickPoint(lng, lat) {
 
     function onMove(clientX, clientY) {
         if (!isFurnitureModeActive || !isFurnitureManualConnecting || !isFurnitureDrawingStroke) return;
-        const gData = furnitureGroupsData[activeFurnitureGroupId];
-        const targetPin = gData?.pins?.[furnitureManualTargetPinIdx];
+        const targetPin = furnitureActiveData?.pins?.[furnitureManualTargetPinIdx];
         if (!targetPin) return;
 
         const lngLat = getLngLat(clientX, clientY);
@@ -10960,7 +11321,6 @@ function handleFurnitureManualClickPoint(lng, lat) {
             renderAllFurnitureMapElements();
         }
 
-        // 靠近目標針 25 公尺內自動吸附！
         const distToTargetM = getDistanceKm(curLng, curLat, targetPin.lng, targetPin.lat) * 1000;
         if (distToTargetM <= 25) {
             isFurnitureDrawingStroke = false;
@@ -10979,11 +11339,8 @@ function handleFurnitureManualClickPoint(lng, lat) {
             }
             const lastPt = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
             furnitureManualSegmentDraft = [lastPt];
-            const gData = furnitureGroupsData[activeFurnitureGroupId];
-            if (gData) {
-                gData.routeCoords = [...furnitureManualConnectedCoords];
-                gData.distanceKm = computeCoordsDistanceKm(gData.routeCoords);
-            }
+            furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+            furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
             renderAllFurnitureMapElements();
         }
     }
@@ -11024,210 +11381,134 @@ function handleFurnitureManualClickPoint(lng, lat) {
 document.getElementById('btnFurnitureManualConnect')?.addEventListener('click', () => {
     if (isFurnitureManualConnecting) {
         stopFurnitureManualConnectMode(true);
-        setFurniturePrompt('✅ 已結束手動拉線串聯！可按「📤 發布同步今日路線」同步給全隊', 'success');
+        showFurnitureToast('✅ 已完成手動拉線串聯並同步雲端');
     } else {
         startFurnitureManualConnectMode();
     }
 });
 
-// 撤銷上一支針與清空本組按鈕
+// 撤銷上一支針與清空全部家具定位針按鈕
 document.getElementById('btnFurnitureUndoPin')?.addEventListener('click', () => {
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData || gData.pins.length === 0) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length === 0) return;
     if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(false);
-    gData.pins.pop();
-    if (gData.pins.length < 2) {
-        gData.routeCoords = [];
-        gData.distanceKm = '0.00';
+    furnitureActiveData.pins.pop();
+    if (furnitureActiveData.pins.length < 2) {
+        furnitureActiveData.routeCoords = [];
+        furnitureActiveData.distanceKm = '0.00';
     }
-    gData.updatedAt = Date.now();
-    isLocalFurnitureGroupDirty = true;
-    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    furnitureActiveData.updatedAt = Date.now();
+    isLocalFurnitureDirty = true;
+    saveLocalFurnitureBackup();
     vibrate(25);
     renderAllFurnitureMapElements();
-    syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, false);
+    syncActiveFurnitureToFirebase(false);
+    showFurnitureToast('↩️ 已撤銷上一支定位針');
 });
 
 document.getElementById('btnFurnitureClearPins')?.addEventListener('click', async () => {
-    const gCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    if (!gData) return;
-    if (!confirm(`確定要清空【${gCfg.name}】今日的所有定位針與路線嗎？`)) return;
+    if (!furnitureActiveData) return;
+    if (!confirm('確定要清空今日的家具定位針與路線嗎？')) return;
     if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(false);
-    gData.pins = [];
-    gData.routeCoords = [];
-    gData.distanceKm = '0.00';
-    gData.updatedAt = Date.now();
-    isLocalFurnitureGroupDirty = false;
-    saveLocalFurnitureGroupBackup(activeFurnitureGroupId);
+    furnitureActiveData.pins = [];
+    furnitureActiveData.routeCoords = [];
+    furnitureActiveData.distanceKm = '0.00';
+    furnitureActiveData.updatedAt = Date.now();
+    isLocalFurnitureDirty = false;
+    saveLocalFurnitureBackup();
     renderAllFurnitureMapElements();
-    await syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
-    setFurniturePrompt(`🗑️ 已清空${gCfg.name}今日定位針與路線並同步雲端`, 'default');
-});
-
-// 組別切換器與顯示他組路線開關
-document.querySelectorAll('.furniture-group-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const nextGroup = btn.getAttribute('data-group');
-        if (!nextGroup || !FURNITURE_GROUPS_CONFIG[nextGroup] || nextGroup === activeFurnitureGroupId) return;
-        if (isFurnitureManualConnecting) stopFurnitureManualConnectMode(true);
-        activeFurnitureGroupId = nextGroup;
-        isLocalFurnitureGroupDirty = false;
-        try {
-            localStorage.setItem(FURNITURE_GROUP_STORAGE_KEY, activeFurnitureGroupId);
-        } catch (e) {}
-        const gCfg = FURNITURE_GROUPS_CONFIG[activeFurnitureGroupId];
-        setFurniturePrompt(`🛋️ 已切換身分為【${gCfg.name}】，點擊地圖或搜尋地址即可為${gCfg.name}插針`, 'default');
-        renderAllFurnitureMapElements();
-    });
-});
-
-document.getElementById('btnToggleOtherFurnitureGroups')?.addEventListener('click', () => {
-    showOtherFurnitureGroups = !showOtherFurnitureGroups;
-    try {
-        localStorage.setItem(FURNITURE_SHOW_OTHERS_STORAGE_KEY, String(showOtherFurnitureGroups));
-    } catch (e) {}
-    renderAllFurnitureMapElements();
+    await syncActiveFurnitureToFirebase(false);
+    showFurnitureToast('🗑️ 已清空家具定位針與路線');
 });
 
 // ==========================================
-// ☁️ Firebase 當日家具協作雙向同步：furniture_collab/{YYYY-MM-DD}/groups/{groupId}
+// ☁️ Firebase 當日家具單一共用作業空間雙向同步：furniture_collab/{YYYY-MM-DD}/active
 // ==========================================
-function getFurnitureDayFirebaseUrl(dateStr = currentFurnitureDateStr) {
-    return `${FIREBASE_BASE_URL}/furniture_collab/${dateStr}/groups.json`;
+function getFurnitureActiveFirebaseUrl(dateStr = currentFurnitureDateStr) {
+    return `${FIREBASE_BASE_URL}/furniture_collab/${dateStr}/active.json`;
 }
 
-function getFurnitureGroupFirebaseUrl(groupId, dateStr = currentFurnitureDateStr) {
-    return `${FIREBASE_BASE_URL}/furniture_collab/${dateStr}/groups/${groupId}.json`;
-}
-
-async function syncSingleFurnitureGroupToFirebase(groupId = activeFurnitureGroupId, showToast = true) {
-    const gCfg = FURNITURE_GROUPS_CONFIG[groupId];
-    const gData = furnitureGroupsData[groupId];
-    if (!gCfg || !gData) return false;
-
-    const publishBtn = document.getElementById('btnFurniturePublishCloud');
-    const publishText = document.getElementById('furniturePublishBtnText');
-    const origText = publishText ? publishText.textContent : '📤 發布同步今日路線';
-
-    if (showToast && publishText) {
-        publishText.textContent = '⏳ 雲端同步中...';
-        if (publishBtn) publishBtn.disabled = true;
-    }
-
-    const authorName = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || gCfg.name;
+async function syncActiveFurnitureToFirebase(showToast = false) {
+    if (!furnitureActiveData) return false;
+    const authorName = localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '家具清運隊員';
     const payload = {
-        groupId,
-        groupName: gCfg.name,
         author: authorName,
         updatedAt: Date.now(),
-        distanceKm: computeCoordsDistanceKm(gData.routeCoords),
-        pins: gData.pins || [],
-        routeCoords: gData.routeCoords || []
+        distanceKm: computeCoordsDistanceKm(furnitureActiveData.routeCoords),
+        pins: furnitureActiveData.pins || [],
+        routeCoords: furnitureActiveData.routeCoords || []
     };
 
     try {
-        const res = await fetchWithTimeout(getFurnitureGroupFirebaseUrl(groupId), {
+        const res = await fetchWithTimeout(getFurnitureActiveFirebaseUrl(currentFurnitureDateStr), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         }, 5000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-        gData.updatedAt = payload.updatedAt;
-        gData.author = authorName;
-        if (groupId === activeFurnitureGroupId) {
-            isLocalFurnitureGroupDirty = false;
-        }
-        saveLocalFurnitureGroupBackup(groupId);
+        furnitureActiveData.updatedAt = payload.updatedAt;
+        furnitureActiveData.author = authorName;
+        isLocalFurnitureDirty = false;
+        saveLocalFurnitureBackup();
         updateWoodSupportTopLeftAlertUI();
 
         if (showToast) {
-            if (publishText) publishText.textContent = `✅ 已同步${gCfg.name}今日路線！`;
-            setFurniturePrompt(`☁️ ${gCfg.name}今日路線與定位針已同步至 Firebase 全車隊！`, 'success');
-            setTimeout(() => {
-                if (publishText) publishText.textContent = origText;
-                if (publishBtn) publishBtn.disabled = false;
-            }, 1400);
+            showFurnitureToast('☁️ 已同步家具定位針與路線至全車隊');
         }
         return true;
     } catch (e) {
         if (showToast) {
-            if (publishText) publishText.textContent = '⚠️ 同步失敗，已存本機';
-            setFurniturePrompt('⚠️ 網路訊號不佳，已先自動保存在本機，稍後可再按發布同步', 'fire');
-            setTimeout(() => {
-                if (publishText) publishText.textContent = origText;
-                if (publishBtn) publishBtn.disabled = false;
-            }, 1800);
+            showFurnitureToast('⚠️ 網路訊號不佳，已先自動保存在本機');
         }
         return false;
     }
 }
-
-document.getElementById('btnFurniturePublishCloud')?.addEventListener('click', async () => {
-    if (isFurnitureManualConnecting) {
-        stopFurnitureManualConnectMode(true);
-    }
-    const gData = furnitureGroupsData[activeFurnitureGroupId];
-    // 若使用者插了 >= 2 支針但還沒按串聯就直接按發布，自動幫他執行一次 OSRM 沿路串再發布！
-    if (gData && gData.pins.length >= 2 && (!Array.isArray(gData.routeCoords) || gData.routeCoords.length < 2)) {
-        document.getElementById('btnFurnitureAutoOsrmConnect')?.click();
-        setTimeout(() => {
-            syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
-        }, 1200);
-        return;
-    }
-    await syncSingleFurnitureGroupToFirebase(activeFurnitureGroupId, true);
-});
 
 let isFetchingFurnitureCloud = false;
 async function fetchAndSyncTodayFurnitureCollab() {
     if (isFetchingFurnitureCloud) return;
     isFetchingFurnitureCloud = true;
 
-    // 跨日自動切換當日日期路徑
     const todayStr = getTodayDateString();
     if (todayStr !== currentFurnitureDateStr) {
         currentFurnitureDateStr = todayStr;
-        furnitureGroupsData = {
-            group1: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
-            group2: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' },
-            group3: { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' }
+        furnitureActiveData = {
+            pins: [],
+            routeCoords: [],
+            distanceKm: '0.00',
+            updatedAt: 0,
+            author: ''
         };
-        isLocalFurnitureGroupDirty = false;
+        isLocalFurnitureDirty = false;
     }
 
     try {
-        const res = await fetchWithTimeout(getFurnitureDayFirebaseUrl(currentFurnitureDateStr), { cache: 'no-store' }, 5000);
+        if (isFurnitureModeActive && isLocalFurnitureDirty) {
+            return;
+        }
+        const res = await fetchWithTimeout(getFurnitureActiveFirebaseUrl(currentFurnitureDateStr), { cache: 'no-store' }, 5000);
         if (!res.ok) return;
-        const cloudGroups = await res.json();
+        const rawActive = await res.json();
 
         let hasAnyChange = false;
-        ['group1', 'group2', 'group3'].forEach(gId => {
-            // 若本組正在本地插針且尚未按發布，保留本組草稿不被覆蓋；其他兩組則隨時即時覆蓋更新
-            if (isFurnitureModeActive && gId === activeFurnitureGroupId && isLocalFurnitureGroupDirty) {
-                return;
+        if (rawActive && typeof rawActive === 'object') {
+            const normalized = normalizeFurniturePayload(rawActive);
+            const curUpdated = furnitureActiveData?.updatedAt || 0;
+            if (normalized.updatedAt !== curUpdated || JSON.stringify(normalized.pins) !== JSON.stringify(furnitureActiveData?.pins)) {
+                furnitureActiveData = normalized;
+                saveLocalFurnitureBackup();
+                hasAnyChange = true;
             }
-            const rawGroup = cloudGroups && cloudGroups[gId] ? cloudGroups[gId] : null;
-            if (rawGroup) {
-                const normalized = normalizeFurnitureGroupPayload(rawGroup);
-                const curUpdated = furnitureGroupsData[gId]?.updatedAt || 0;
-                if (normalized.updatedAt !== curUpdated || JSON.stringify(normalized.pins) !== JSON.stringify(furnitureGroupsData[gId]?.pins)) {
-                    furnitureGroupsData[gId] = normalized;
-                    saveLocalFurnitureGroupBackup(gId);
-                    hasAnyChange = true;
-                }
-            } else {
-                const localBackup = loadLocalFurnitureGroupBackup(gId);
-                if (localBackup && (furnitureGroupsData[gId]?.pins?.length || 0) === 0 && localBackup.pins.length > 0) {
-                    furnitureGroupsData[gId] = localBackup;
-                    hasAnyChange = true;
-                } else if (!localBackup && ((furnitureGroupsData[gId]?.pins?.length || 0) > 0 || (furnitureGroupsData[gId]?.routeCoords?.length || 0) > 0)) {
-                    furnitureGroupsData[gId] = { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' };
-                    hasAnyChange = true;
-                }
+        } else {
+            const localBackup = loadLocalFurnitureBackup();
+            if (localBackup && (furnitureActiveData?.pins?.length || 0) === 0 && localBackup.pins.length > 0) {
+                furnitureActiveData = localBackup;
+                hasAnyChange = true;
+            } else if (!localBackup && ((furnitureActiveData?.pins?.length || 0) > 0 || (furnitureActiveData?.routeCoords?.length || 0) > 0)) {
+                furnitureActiveData = { pins: [], routeCoords: [], distanceKm: '0.00', updatedAt: 0, author: '' };
+                hasAnyChange = true;
             }
-        });
+        }
 
         if (hasAnyChange) {
             renderAllFurnitureMapElements();
@@ -11235,18 +11516,497 @@ async function fetchAndSyncTodayFurnitureCollab() {
             updateWoodSupportTopLeftAlertUI();
         }
     } catch (e) {
-        // 離線時載入本機當日快取
-        ['group1', 'group2', 'group3'].forEach(gId => {
-            if ((furnitureGroupsData[gId]?.pins?.length || 0) === 0) {
-                const backup = loadLocalFurnitureGroupBackup(gId);
-                if (backup) furnitureGroupsData[gId] = backup;
-            }
-        });
+        if ((furnitureActiveData?.pins?.length || 0) === 0) {
+            const backup = loadLocalFurnitureBackup();
+            if (backup) furnitureActiveData = backup;
+        }
         updateWoodSupportTopLeftAlertUI();
     } finally {
         isFetchingFurnitureCloud = false;
     }
 }
+
+// ==========================================
+// ✨ 11.5 家具模式「✨ AI 批次派工自動插針」（結合全隊已標註橘色水滴社區大樓＋門牌定位＋純木頭火紅標記）
+// ==========================================
+async function fetchAllSharedCommunityBuildings() {
+    const buildingMap = new Map();
+
+    // 1. 先收錄目前已載入在記憶體 pinsLayerGroup 中的橘色水滴社區大樓
+    if (typeof pinsLayerGroup === 'object' && pinsLayerGroup) {
+        Object.values(pinsLayerGroup).forEach(entry => {
+            const d = entry?.data;
+            if (d && d.pinType === 'building' && d.title && !isNaN(Number(d.lat)) && !isNaN(Number(d.lng))) {
+                const titleClean = String(d.title).trim();
+                buildingMap.set(titleClean, {
+                    title: titleClean,
+                    lat: Number(Number(d.lat).toFixed(6)),
+                    lng: Number(Number(d.lng).toFixed(6))
+                });
+            }
+        });
+    }
+
+    // 2. 再從 Firebase 即時抓取最新 /map_pins.json 確保不漏掉任何社區大樓
+    try {
+        const res = await fetchWithTimeout(MAP_PINS_ALL_URL, { cache: 'no-store' }, 4500);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && typeof data === 'object') {
+                Object.values(data).forEach(pin => {
+                    if (pin && pin.pinType === 'building' && pin.title && !isNaN(Number(pin.lat)) && !isNaN(Number(pin.lng))) {
+                        const titleClean = String(pin.title).trim();
+                        buildingMap.set(titleClean, {
+                            title: titleClean,
+                            lat: Number(Number(pin.lat).toFixed(6)),
+                            lng: Number(Number(pin.lng).toFixed(6))
+                        });
+                    }
+                });
+            }
+        }
+    } catch (e) {}
+
+    return Array.from(buildingMap.values());
+}
+
+// 取得按啟用順序排列的 API Key 候選清單（當遇到 HTTP 429 時自動輪替下一組）
+function getOrderedGeminiApiKeysForDispatch() {
+    const keys = normalizeAiApiKeysArray(systemNavConfig.aiApiKeys);
+    const activeId = systemNavConfig.activeAiKeyId;
+    const ordered = [];
+    const activeObj = keys.find(k => k.id === activeId);
+    if (activeObj) ordered.push(activeObj);
+    keys.forEach(k => {
+        if (!activeObj || k.id !== activeObj.id) {
+            ordered.push(k);
+        }
+    });
+    return ordered;
+}
+
+// 直接從瀏覽器端呼叫 Gemini REST API（當靜態託管環境無 Node server.js 時自動無縫接手）
+async function callGeminiRestDirectly(apiKey, modelName, dispatchText, communities) {
+    const communityContext = communities.length > 0
+        ? communities.map((c, idx) => `${idx + 1}. 「${c.title}」 -> lat: ${c.lat}, lng: ${c.lng}`).join('\n')
+        : '（目前尚無已標註之社區大樓）';
+
+    const promptText = `你是新北市鶯歌區清潔隊的「大型家具智慧派工解析助手」。
+請將以下清潔隊收到的「大型家具派工單文字」，按文字出現的先後順序拆解為結構化 JSON 陣列。
+
+【已標註之鶯歌社區大樓資料庫（橘色水滴精確座標）】：
+${communityContext}
+
+【解析規則】：
+1. 順序 (order)：依照派工單內的順序由 1 開始編號 (1, 2, 3...)。
+2. 優先比對社區大樓：若該筆派工地點與上方【已標註之鶯歌社區大樓資料庫】中的社區名稱相同或高度相符（例如「龍鳳呈祥」、「幸福社區」），請將 matchedCommunity 填寫該社區名稱，並直接填入該社區的精確 lat 與 lng！
+3. 一般街路門牌地址：若不屬於上述已知社區大樓，請將 matchedCommunity 設為空字串 ""，lat 與 lng 設為 0，並在 normalizedAddress 補齊完整地址（若未寫縣市行政區，一律自動補上「新北市鶯歌區」，例如「建國路120號」補為「新北市鶯歌區建國路120號」；同時剔除樓層如「3樓」、「5F」以便地圖門牌定位）。
+4. 純木頭判斷 (isPureWood)：若該筆派工內容提到「純木頭」、「全木頭」、「木頭」、「木櫃/木桌/木床（標明純木或需垃圾車支援）」、「需垃圾車支援」，請將 isPureWood 設為 true，否則設為 false。
+5. 備註 (note)：保留該點位的家具品項、數量、聯絡事項或原文字摘要（例如「純木頭衣櫃x2、沙發x1」）。
+6. 請僅輸出合法的 JSON 陣列，不要加任何 markdown 語法或額外說明。每個元素格式為：
+[{"order":1,"rawName":"地點名稱","matchedCommunity":"","lat":0,"lng":0,"normalizedAddress":"新北市鶯歌區...","isPureWood":false,"note":"家具品項備註"}]
+
+【使用者貼上的派工單文字】：
+${dispatchText}`;
+
+    const candidateRestModels = modelName === 'gemini-4-hydrogen'
+        ? ['gemini-2.5-pro', 'gemini-2.5-flash']
+        : ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
+
+    let lastStatus = 500;
+    let lastErrText = '';
+    for (const restModel of candidateRestModels) {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${restModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const resp = await fetchWithTimeout(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: promptText }] }],
+                generationConfig: {
+                    temperature: 0.1,
+                    responseMimeType: 'application/json'
+                }
+            })
+        }, 20000);
+
+        lastStatus = resp.status;
+        if (resp.status === 429) {
+            const err429 = new Error('API Key 額度已滿 (HTTP 429)');
+            err429.status = 429;
+            throw err429;
+        }
+        if (resp.ok) {
+            const data = await resp.json();
+            const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+            const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+            const items = JSON.parse(cleaned);
+            return Array.isArray(items) ? items : [];
+        } else {
+            lastErrText = await resp.text().catch(() => '');
+        }
+    }
+    const err = new Error(lastErrText || `Gemini HTTP ${lastStatus}`);
+    err.status = lastStatus;
+    throw err;
+}
+
+// 呼叫 AI 解析派工單（支援多組 API Key 遇 429 自動輪替下一組）
+async function requestAiDispatchParseWithRotation(dispatchText, communities, onStatusUpdate) {
+    const selectedModel = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+    const orderedKeys = getOrderedGeminiApiKeysForDispatch();
+
+    // 候選嘗試清單：若有設定自訂 API Key 則依序嘗試每一組，最後或無設定時也嘗試伺服器環境金鑰 ('')
+    const attempts = orderedKeys.length > 0
+        ? [...orderedKeys, { id: '__server_env__', key: '', note: '系統預設金鑰' }]
+        : [{ id: '__server_env__', key: '', note: '系統預設金鑰' }];
+
+    let lastError = null;
+
+    for (let i = 0; i < attempts.length; i++) {
+        const candidate = attempts[i];
+        if (i > 0 && candidate.key && typeof onStatusUpdate === 'function') {
+            onStatusUpdate(`🔄 前一組金鑰額度達上限，自動切換至「${candidate.note}」重試中...`);
+        }
+
+        try {
+            const res = await fetchWithTimeout('/api/gemini/dispatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dispatchText,
+                    model: selectedModel,
+                    apiKey: candidate.key,
+                    communities
+                })
+            }, 25000);
+
+            if (res.status === 429) {
+                lastError = new Error(`金鑰「${candidate.note}」額度已達上限 (HTTP 429)`);
+                continue;
+            }
+
+            if (res.ok) {
+                const payload = await res.json();
+                // 若輪替到新的有效自訂金鑰成功，自動將該組設為目前啟用中並同步
+                if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
+                    systemNavConfig.activeAiKeyId = candidate.id;
+                    editingActiveAiKeyId = candidate.id;
+                    persistAdminAiSettingsImmediately();
+                }
+                return Array.isArray(payload.items) ? payload.items : [];
+            }
+
+            // 若為 404/405（例如純靜態伺服器無 /api/gemini/dispatch），且有自訂 API Key，直接改走瀏覽器端 Gemini REST
+            if ((res.status === 404 || res.status === 405) && candidate.key) {
+                const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
+                if (candidate.id !== '__server_env__' && candidate.id !== systemNavConfig.activeAiKeyId) {
+                    systemNavConfig.activeAiKeyId = candidate.id;
+                    editingActiveAiKeyId = candidate.id;
+                    persistAdminAiSettingsImmediately();
+                }
+                return items;
+            }
+
+            const errData = await res.json().catch(() => ({}));
+            if (errData?.isQuotaError) {
+                lastError = new Error(errData.error || 'HTTP 429 額度限制');
+                continue;
+            }
+            lastError = new Error(errData?.error || `AI 服務回應錯誤 (HTTP ${res.status})`);
+        } catch (err) {
+            if (err && err.status === 429) {
+                lastError = err;
+                continue;
+            }
+            // 若 fetch /api/gemini/dispatch 網路失敗且有自訂 Key，嘗試直接連 Gemini REST
+            if (candidate.key) {
+                try {
+                    const items = await callGeminiRestDirectly(candidate.key, selectedModel, dispatchText, communities);
+                    return items;
+                } catch (restErr) {
+                    lastError = restErr;
+                    if (restErr && restErr.status === 429) continue;
+                }
+            } else {
+                lastError = err;
+            }
+        }
+    }
+
+    throw lastError || new Error('無法完成 AI 解析，請至管理員設定檢查或新增 Gemini API Key');
+}
+
+// 本地模糊比對已標註社區大樓（雙重保障：即便 AI 回傳 rawName 也能直接命中 Firebase 橘色水滴座標）
+function findMatchingCommunityBuilding(item, communities) {
+    if (!Array.isArray(communities) || communities.length === 0) return null;
+    const candidates = [
+        String(item?.matchedCommunity || '').trim(),
+        String(item?.rawName || '').trim(),
+        String(item?.normalizedAddress || '').trim()
+    ].filter(Boolean);
+
+    for (const cText of candidates) {
+        const cleanTarget = cText.replace(/社區|大樓|大廈|公寓|新北市|鶯歌區/g, '').trim();
+        for (const b of communities) {
+            const bTitle = String(b.title || '').trim();
+            const bClean = bTitle.replace(/社區|大樓|大廈|公寓/g, '').trim();
+            if (bTitle === cText || (bClean.length >= 2 && (cText.includes(bClean) || cleanTarget === bClean))) {
+                return b;
+            }
+        }
+    }
+    return null;
+}
+
+let cachedAiDispatchCommunities = [];
+
+async function openAiDispatchModal() {
+    const modal = document.getElementById('aiDispatchModal');
+    const modelBadge = document.getElementById('aiDispatchActiveModelBadge');
+    const communityBadge = document.getElementById('aiDispatchCommunityCountBadge');
+    const resultBox = document.getElementById('aiDispatchResultBox');
+    const textInput = document.getElementById('aiDispatchTextInput');
+
+    if (!modal) return;
+    if (modelBadge) {
+        modelBadge.textContent = systemNavConfig.aiDispatchModel || 'gemini-3.5-flash-lite';
+    }
+    if (resultBox) {
+        resultBox.classList.add('hidden');
+        resultBox.innerHTML = '';
+    }
+
+    window.history.pushState({ pwa: true }, '');
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        textInput?.focus();
+    }, 80);
+
+    if (communityBadge) {
+        communityBadge.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步社區大樓...';
+    }
+    cachedAiDispatchCommunities = await fetchAllSharedCommunityBuildings();
+    if (communityBadge) {
+        communityBadge.innerHTML = `<i class="fa-solid fa-building"></i> 已同步社區大樓：${cachedAiDispatchCommunities.length} 處`;
+    }
+}
+
+function closeAiDispatchModal() {
+    document.getElementById('aiDispatchModal')?.classList.add('hidden');
+}
+
+(function setupAiDispatchModalEvents() {
+    const modalEl = document.getElementById('aiDispatchModal');
+    if (modalEl) {
+        ['pointerdown', 'touchstart', 'mousedown', 'wheel'].forEach(evtName => {
+            modalEl.addEventListener(evtName, (e) => {
+                e.stopPropagation();
+            }, { passive: true });
+        });
+    }
+
+    const openBtn = document.getElementById('btnOpenAiDispatchModal');
+    openBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        vibrate(20);
+        openAiDispatchModal();
+    });
+
+    document.getElementById('btnCloseAiDispatchTop')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeAiDispatchModal();
+    });
+
+    document.getElementById('btnCancelAiDispatch')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeAiDispatchModal();
+    });
+
+    document.getElementById('btnClearAiDispatchText')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ta = document.getElementById('aiDispatchTextInput');
+        if (ta) {
+            ta.value = '';
+            ta.focus();
+        }
+        const resultBox = document.getElementById('aiDispatchResultBox');
+        if (resultBox) resultBox.classList.add('hidden');
+    });
+
+    const taEl = document.getElementById('aiDispatchTextInput');
+    if (taEl) {
+        ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(evt => {
+            taEl.addEventListener(evt, (e) => {
+                e.stopPropagation();
+            }, { passive: true });
+        });
+    }
+
+    const runBtn = document.getElementById('btnRunAiDispatch');
+    runBtn?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const textInput = document.getElementById('aiDispatchTextInput');
+        const resultBox = document.getElementById('aiDispatchResultBox');
+        const replaceCheckbox = document.getElementById('aiDispatchReplaceExistingInput');
+        const rawText = (textInput?.value || '').trim();
+
+        if (!rawText) {
+            if (resultBox) {
+                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-amber-50 border-amber-300 text-amber-800';
+                resultBox.textContent = '⚠️ 請先在上方輸入框貼上今日派工單文字！';
+                resultBox.classList.remove('hidden');
+            }
+            textInput?.focus();
+            return;
+        }
+
+        const origBtnHtml = runBtn.innerHTML;
+        runBtn.disabled = true;
+        runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>AI 正在解析派工單與定位...</span>';
+
+        const showProgressStatus = (msg, style = 'info') => {
+            if (!resultBox) return;
+            resultBox.classList.remove('hidden');
+            if (style === 'error') {
+                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
+            } else if (style === 'success') {
+                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
+            } else {
+                resultBox.className = 'rounded-2xl p-3 text-xs font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
+            }
+            resultBox.innerHTML = msg;
+        };
+
+        try {
+            showProgressStatus('<i class="fa-solid fa-wand-magic-sparkles fa-fade mr-1"></i> 正在比對已標註社區大樓並呼叫 Gemini AI 解析...');
+            const communities = cachedAiDispatchCommunities.length > 0
+                ? cachedAiDispatchCommunities
+                : await fetchAllSharedCommunityBuildings();
+
+            const parsedItems = await requestAiDispatchParseWithRotation(rawText, communities, (rotMsg) => {
+                showProgressStatus(rotMsg, 'info');
+            });
+
+            if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+                showProgressStatus('⚠️ AI 未能從文字中識別出任何有效地址或社區名稱，請確認派工單內容。', 'error');
+                return;
+            }
+
+            // 依 order 排序確保 1, 2, 3... 順序一致
+            parsedItems.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+
+            if (replaceCheckbox?.checked) {
+                furnitureActiveData.pins = [];
+                furnitureActiveData.routeCoords = [];
+                furnitureActiveData.distanceKm = '0.00';
+            }
+
+            const addedPins = [];
+            const unresolvedAddresses = [];
+            let woodCount = 0;
+
+            for (let i = 0; i < parsedItems.length; i++) {
+                const item = parsedItems[i];
+                const rawLabel = String(item.rawName || item.matchedCommunity || item.normalizedAddress || `派工點 #${i + 1}`).trim();
+                const noteText = String(item.note || '').trim();
+                const isWood = Boolean(
+                    item.isPureWood ||
+                    /純木|全木|木頭|垃圾車支援/.test(rawLabel) ||
+                    /純木|全木|木頭|垃圾車支援/.test(noteText)
+                );
+
+                // 1. 優先檢查是否命中已標註社區大樓（橘色水滴座標）
+                const matchedBld = findMatchingCommunityBuilding(item, communities);
+                if (matchedBld) {
+                    addFurniturePinToWorkspace(matchedBld.lng, matchedBld.lat, `🏢 ${matchedBld.title}`, {
+                        note: noteText,
+                        needsWoodTruckSupport: isWood,
+                        silent: true
+                    });
+                    if (isWood) woodCount++;
+                    addedPins.push({ lng: matchedBld.lng, lat: matchedBld.lat, label: matchedBld.title });
+                    continue;
+                }
+
+                // 2. 若 AI 已回傳有效鶯歌區附近經緯度
+                const aiLat = Number(item.lat);
+                const aiLng = Number(item.lng);
+                if (!isNaN(aiLat) && !isNaN(aiLng) && aiLat > 24.85 && aiLat < 25.08 && aiLng > 121.25 && aiLng < 121.48) {
+                    addFurniturePinToWorkspace(aiLng, aiLat, rawLabel, {
+                        note: noteText,
+                        needsWoodTruckSupport: isWood,
+                        silent: true
+                    });
+                    if (isWood) woodCount++;
+                    addedPins.push({ lng: aiLng, lat: aiLat, label: rawLabel });
+                    continue;
+                }
+
+                // 3. 一般門牌地址：自動呼叫免費 OSM Nominatim 轉換經緯度
+                const queryAddr = String(item.normalizedAddress || rawLabel).trim();
+                showProgressStatus(`<i class="fa-solid fa-location-crosshairs fa-spin mr-1"></i> 正在定位門牌 (${i + 1}/${parsedItems.length})：${queryAddr}...`);
+                const geoList = await searchYinggeAddressNominatim(queryAddr);
+                if (Array.isArray(geoList) && geoList.length > 0) {
+                    const best = geoList[0];
+                    const gLng = Number(parseFloat(best.lon).toFixed(6));
+                    const gLat = Number(parseFloat(best.lat).toFixed(6));
+                    if (!isNaN(gLng) && !isNaN(gLat)) {
+                        addFurniturePinToWorkspace(gLng, gLat, rawLabel, {
+                            note: noteText,
+                            needsWoodTruckSupport: isWood,
+                            silent: true
+                        });
+                        if (isWood) woodCount++;
+                        addedPins.push({ lng: gLng, lat: gLat, label: rawLabel });
+                        continue;
+                    }
+                }
+
+                unresolvedAddresses.push(`${rawLabel}${noteText ? `（${noteText}）` : ''}`);
+            }
+
+            renderAllFurnitureMapElements();
+            await syncActiveFurnitureToFirebase(false);
+            vibrate([40, 30, 50]);
+
+            // 自動將地圖視野縮放涵蓋所有新插的定位針
+            if (addedPins.length === 1) {
+                setCameraFollow(false);
+                map.flyTo({ center: [addedPins[0].lng, addedPins[0].lat], zoom: 17.5, duration: 650 });
+            } else if (addedPins.length >= 2) {
+                setCameraFollow(false);
+                const bounds = new maplibregl.LngLatBounds();
+                addedPins.forEach(p => bounds.extend([p.lng, p.lat]));
+                map.fitBounds(bounds, { padding: { top: 90, bottom: 90, left: 60, right: 60 }, maxZoom: 17.5, duration: 700 });
+            }
+
+            if (unresolvedAddresses.length === 0) {
+                showProgressStatus(
+                    `✅ 成功自動插針 <b>${addedPins.length}</b> 處！${woodCount > 0 ? `（含 🔥 純木頭支援 <b>${woodCount}</b> 處）` : ''}`,
+                    'success'
+                );
+                showFurnitureToast(`✨ AI 已自動插針 ${addedPins.length} 處${woodCount > 0 ? `（含 🔥 純木頭 ${woodCount} 處）` : ''}`);
+                setTimeout(() => {
+                    closeAiDispatchModal();
+                }, 1100);
+            } else {
+                const missingHtml = unresolvedAddresses.map(a => `<li class="ml-4 list-disc">${a}</li>`).join('');
+                showProgressStatus(
+                    `<div>✅ 已自動插針 <b>${addedPins.length}</b> 處${woodCount > 0 ? `（含 🔥 純木頭 <b>${woodCount}</b> 處）` : ''}。</div>` +
+                    `<div class="mt-1.5 text-amber-800">⚠️ 以下 <b>${unresolvedAddresses.length}</b> 筆門牌在免費圖資查無精確座標，請關閉視窗後手動點擊地圖插針：</div>` +
+                    `<ul class="mt-1 text-amber-900">${missingHtml}</ul>`,
+                    'info'
+                );
+                showFurnitureToast(`✨ 已插針 ${addedPins.length} 處（${unresolvedAddresses.length} 筆請手動補插）`);
+            }
+        } catch (err) {
+            showProgressStatus(`❌ ${err?.message || 'AI 解析失敗，請檢查管理員 API Key 設定或網路連線'}`, 'error');
+        } finally {
+            runBtn.disabled = false;
+            runBtn.innerHTML = origBtnHtml;
+        }
+    });
+})();
 
 // ==========================================
 // 🔀 管理員專區「🛋️ 家具模式」與「一般收運模式」嚴格隔離切換邏輯
@@ -11271,7 +12031,7 @@ function syncAdminFurnitureEntryButtonUI() {
             adminLaunchBtn.className = 'bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1.5';
         }
         if (adminBtnIcon) adminBtnIcon.textContent = '🛋️';
-        if (adminBtnLabel) adminBtnLabel.textContent = '進入家具模式';
+        if (adminBtnLabel) adminBtnLabel.textContent = '切換家具模式';
         if (cloudAdminLaunchBtn) {
             cloudAdminLaunchBtn.innerHTML = '<span>🛋️ 家具模式</span>';
         }
@@ -11295,7 +12055,6 @@ function setFurnitureModeActive(enable) {
         isFurnitureModeActive = true;
         window.isFurnitureModeActive = true;
 
-        // 儲存一般收運模式當前顯示狀態與路線圖層快照
         normalModeRestoreSnapshot = {
             mainHidden: mainUI ? mainUI.classList.contains('hidden') : false,
             detailHidden: routeDetailUI ? routeDetailUI.classList.contains('hidden') : true,
@@ -11311,7 +12070,6 @@ function setFurnitureModeActive(enable) {
             calloutGeoJSON: cachedCalloutLinesGeoJSON
         };
 
-        // 隱藏一般收運模式所有底部面板與一般路線圖層，避免畫面擁擠或誤觸
         mainUI?.classList.add('hidden');
         routeDetailUI?.classList.add('hidden');
         editRouteBar?.classList.add('hidden');
@@ -11320,7 +12078,6 @@ function setFurnitureModeActive(enable) {
         manualDrawTopBanner?.classList.add('hidden');
         topBackBtn?.classList.add('hidden');
 
-        // 暫時清空一般收運路線圖層與一般路線標記（快照已保存，切回時完整還原）
         clearDomMarkers();
         cachedBgRouteGeoJSON = emptyGeoJSON();
         cachedSilentRouteGeoJSON = emptyGeoJSON();
@@ -11336,9 +12093,10 @@ function setFurnitureModeActive(enable) {
         if (appStatusTitle) {
             appStatusTitle.innerText = '🛋️ 家具模式';
         }
+        // 往下移至 top-16 (64px)，徹底避開頂部搜尋框與右側「✨ AI 派工」按鈕，確保手機窄螢幕絕不重疊遮擋
         if (topNavHeaderBar) {
-            topNavHeaderBar.classList.remove('top-6');
-            topNavHeaderBar.classList.add('top-14');
+            topNavHeaderBar.classList.remove('top-6', 'top-14');
+            topNavHeaderBar.classList.add('top-16');
         }
 
         furnitureUI?.classList.remove('hidden');
@@ -11352,6 +12110,7 @@ function setFurnitureModeActive(enable) {
         }
         clearFurnitureSearchPreviewMarker();
         closeFurniturePinPopup();
+        closeAiDispatchModal();
 
         isFurnitureModeActive = false;
         window.isFurnitureModeActive = false;
@@ -11359,12 +12118,11 @@ function setFurnitureModeActive(enable) {
         furnitureUI?.classList.add('hidden');
         furnitureLeftConnectControls?.classList.add('hidden');
         if (topNavHeaderBar) {
-            topNavHeaderBar.classList.remove('top-14');
+            topNavHeaderBar.classList.remove('top-14', 'top-16');
             topNavHeaderBar.classList.add('top-6');
         }
         syncAdminFurnitureEntryButtonUI();
 
-        // 完整還原一般收運模式的面板與路線圖層
         if (normalModeRestoreSnapshot) {
             if (mainUI) mainUI.classList.toggle('hidden', normalModeRestoreSnapshot.mainHidden);
             if (routeDetailUI) routeDetailUI.classList.toggle('hidden', normalModeRestoreSnapshot.detailHidden);
@@ -11386,7 +12144,6 @@ function setFurnitureModeActive(enable) {
                 map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON);
             } catch (e) {}
 
-            // 若切進家具模式前正處於某條路線的預覽或編輯狀態，自動重繪該路線的標記點
             if (!normalModeRestoreSnapshot.editHidden && isEditingMode) {
                 const activeRoute = getActiveWorkingRoute();
                 if (activeRoute) {
@@ -11423,16 +12180,13 @@ document.getElementById('btnExitFurnitureMode')?.addEventListener('click', (e) =
     setFurnitureModeActive(false);
 });
 
-// 啟動時載入當日本機備份並每 6 秒從 Firebase 同步當日 3 組家具路線與「🔥 需垃圾車支援（純木頭）」火紅標記
+// 啟動時載入當日本機備份並每 6 秒從 Firebase 同步當日家具路線與「🔥 需垃圾車支援（純木頭）」火紅標記
 (function initFurnitureCollabSystem() {
-    ['group1', 'group2', 'group3'].forEach(gId => {
-        const localData = loadLocalFurnitureGroupBackup(gId);
-        if (localData) {
-            furnitureGroupsData[gId] = localData;
-        }
-    });
+    const localData = loadLocalFurnitureBackup();
+    if (localData) {
+        furnitureActiveData = localData;
+    }
     updateFurniturePanelUI();
     fetchAndSyncTodayFurnitureCollab();
     setInterval(fetchAndSyncTodayFurnitureCollab, 6000);
 })();
-

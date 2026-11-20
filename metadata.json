@@ -1,0 +1,11 @@
+{
+  "name": "鶯歌清運路線助手 Pro Max",
+  "description": "專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.25)",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

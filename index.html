@@ -8,6 +8,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
+    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.25)">
+    <meta property="og:title" content="鶯歌清運路線助手 Pro Max">
+    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.25)">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -120,7 +123,7 @@
                 <div class="bg-white/95 backdrop-blur px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-sm flex items-center gap-2">
                     <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500"></span>
                     <span id="appStatusTitle" class="cursor-pointer select-none">鶯歌清運路線助手 Pro Max</span>
-                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform" title="點擊開啟管理員設定">v3.24</span>
+                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform" title="點擊開啟管理員設定">v3.25</span>
                 </div>
             </div>
             <button id="fleetUserBadgeBtn" type="button" class="bg-white/95 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-emerald-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all" title="點擊修改您的車隊顯示名稱">
@@ -256,24 +259,33 @@
     </div>
 
     <!-- 🛋️ 家具模式專屬邊角懸浮控制層（中央地圖視野完全淨空） -->
-    <div id="furnitureModeUI" class="hidden fixed inset-0 pointer-events-none z-40">
-        <!-- 🔍 畫面正上方（頂部中央）：地址／地標搜尋框（包含搜尋無結果提示與下拉候選清單） -->
-        <div class="absolute top-2.5 left-1/2 -translate-x-1/2 w-[calc(100vw-24px)] max-w-xs sm:max-w-sm pointer-events-auto z-50">
+    <div id="furnitureModeUI" class="hidden fixed inset-0 pointer-events-none z-[65]">
+        <!-- 🔍 畫面正上方（頂部中央）：地址／地標搜尋框 ＋ ✨ AI 派工按鈕（包含搜尋無結果提示與下拉候選清單，窄螢幕手機不溢出不裁切） -->
+        <div class="absolute top-2.5 left-2.5 right-2.5 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-[calc(100vw-24px)] sm:max-w-md pointer-events-auto z-[75]">
             <div class="relative">
-                <div class="flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-lg border border-gray-200">
-                    <div class="relative flex-1 min-w-0">
-                        <i class="fa-solid fa-magnifying-glass absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
-                        <input id="furnitureAddressSearchInput" type="text" class="w-full bg-transparent text-gray-900 text-xs sm:text-sm font-bold pl-6 pr-6 py-1 outline-none" placeholder="搜尋鶯歌地址或地標（如：建國路）...">
-                        <button id="btnClearFurnitureSearch" type="button" class="hidden absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 text-[10px] font-black flex items-center justify-center">✕</button>
+                <div class="flex items-center gap-1.5 w-full">
+                    <div class="flex-1 min-w-0 flex items-center gap-1 bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-2xl shadow-lg border border-gray-200">
+                        <div class="relative flex-1 min-w-0">
+                            <i class="fa-solid fa-magnifying-glass absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none"></i>
+                            <input id="furnitureAddressSearchInput" type="text" class="w-full bg-transparent text-gray-900 text-xs sm:text-sm font-bold pl-5 pr-5 py-1 outline-none pointer-events-auto select-text" placeholder="搜尋鶯歌地址或地標...">
+                            <button id="btnClearFurnitureSearch" type="button" class="hidden absolute right-0.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 text-[10px] font-black flex items-center justify-center pointer-events-auto">✕</button>
+                        </div>
+                        <button id="btnQuickDropSearchPin" type="button" class="hidden bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-2 py-1.5 rounded-xl shadow-sm active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 pointer-events-auto">
+                            <span>📍 插針</span>
+                        </button>
                     </div>
-                    <button id="btnQuickDropSearchPin" type="button" class="hidden bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-2.5 py-1.5 rounded-xl shadow-sm active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0">
-                        <span>📍 插針</span>
+                    <!-- ✨ AI 批次派工按鈕（高 z-index、緊湊不裁切） -->
+                    <button id="btnOpenAiDispatchModal" type="button" class="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white font-black text-xs px-2.5 sm:px-3 py-2.5 rounded-2xl shadow-lg border border-violet-300/80 active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 pointer-events-auto cursor-pointer relative z-[80]" title="貼上派工單文字，由 AI 結合已標註社區大樓自動批次插針">
+                        <span>✨ AI 派工</span>
                     </button>
                 </div>
                 <!-- 搜尋結果下拉清單（向下展開） -->
                 <div id="furnitureSearchResultsPanel" class="hidden absolute left-0 right-0 top-full mt-1.5 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border-2 border-amber-300 max-h-60 overflow-y-auto z-[99999] divide-y divide-gray-100"></div>
             </div>
         </div>
+
+        <!-- 💬 家具模式輕量狀態快顯膠囊（如「🗑️ 已清空家具定位針與路線」，顯示後自動淡出） -->
+        <div id="furnitureToastBanner" class="hidden absolute bottom-16 left-1/2 -translate-x-1/2 bg-gray-900/90 backdrop-blur-md text-white text-xs font-extrabold px-4 py-2 rounded-full shadow-xl border border-white/20 pointer-events-none whitespace-nowrap z-50"></div>
 
         <!-- 📍 左下角：輕巧半透明插針統計小膠囊（📍 0 支針 ｜ 0.00 km） -->
         <div class="absolute bottom-4 left-4 pointer-events-auto">
@@ -291,6 +303,56 @@
             </button>
             <button id="btnFurnitureClearPins" type="button" class="bg-red-600/95 hover:bg-red-700 backdrop-blur-md text-white border border-red-400 font-extrabold text-xs px-3 py-2 rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-40 whitespace-nowrap flex items-center gap-1" disabled title="清除全部定位針">
                 <span>🗑️ 清空</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ✨ 家具模式：AI 批次派工自動插針彈窗（結合全隊已標註之橘色水滴社區大樓＋門牌定位＋純木頭火紅標記） -->
+    <div id="aiDispatchModal" class="hidden fixed inset-0 bg-black/75 z-[100003] flex items-center justify-center p-3 sm:p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-md rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 border-2 border-violet-500 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between gap-2">
+                <div>
+                    <h3 class="text-base sm:text-lg font-black text-violet-800 flex items-center gap-1.5">
+                        <span>✨ AI 批次派工自動插針</span>
+                    </h3>
+                    <p class="text-[11px] font-bold text-gray-500 mt-0.5">自動比對已標註社區大樓、鶯歌門牌與純木頭火紅標記</p>
+                </div>
+                <button type="button" id="btnCloseAiDispatchTop" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center active:scale-90 flex-shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="flex items-center justify-between gap-2 bg-violet-50 border border-violet-200 px-3 py-2 rounded-2xl text-[11px] font-extrabold">
+                <span id="aiDispatchCommunityCountBadge" class="text-orange-700 flex items-center gap-1">
+                    <i class="fa-solid fa-building"></i> 已同步社區大樓：讀取中...
+                </span>
+                <span id="aiDispatchActiveModelBadge" class="bg-white text-violet-800 border border-violet-200 px-2 py-0.5 rounded-full font-black">
+                    gemini-3.5-flash-lite
+                </span>
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+                <div class="flex items-center justify-between">
+                    <label for="aiDispatchTextInput" class="text-xs font-black text-gray-700">貼上派工單文字（社區大樓／門牌地址／純木頭混搭）</label>
+                    <button type="button" id="btnClearAiDispatchText" class="text-[11px] font-extrabold text-gray-400 hover:text-gray-600">清空文字</button>
+                </div>
+                <textarea id="aiDispatchTextInput" rows="6" class="w-full bg-gray-50 border-2 border-gray-200 focus:border-violet-500 text-gray-900 text-xs sm:text-sm font-bold rounded-2xl p-3 outline-none transition-colors leading-relaxed" placeholder="請貼上整段派工單文字，例如：&#10;1. 龍鳳呈祥（沙發1組）&#10;2. 建國路120號（純木頭衣櫃2件）&#10;3. 幸福社區（雙人床墊1張）"></textarea>
+            </div>
+
+            <label class="flex items-center gap-2 text-xs font-extrabold text-gray-700 bg-gray-50 px-3 py-2 rounded-xl border border-gray-200 cursor-pointer select-none">
+                <input type="checkbox" id="aiDispatchReplaceExistingInput" class="w-4 h-4 accent-violet-600 rounded cursor-pointer">
+                <span>插針前先清空目前地圖上已有的家具定位針</span>
+            </label>
+
+            <!-- 解析進度與未查到門牌提醒區塊 -->
+            <div id="aiDispatchResultBox" class="hidden rounded-2xl p-3 text-xs font-bold leading-relaxed border"></div>
+
+            <button type="button" id="btnRunAiDispatch" class="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white font-black py-3.5 rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 text-sm sm:text-base">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span id="btnRunAiDispatchText">開始 AI 解析並自動插針</span>
+            </button>
+            <button type="button" id="btnCancelAiDispatch" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 text-xs">
+                關閉視窗
             </button>
         </div>
     </div>
@@ -902,19 +964,19 @@
         </div>
     </div>
 
-    <!-- 👀 點擊藍色水滴地標／橘色水滴社區大樓：檢視詳情、修改名稱與全隊同步銷案彈窗 -->
+    <!-- 👀 點擊藍色水滴地標／長按 0.5 秒橘色水滴社區大樓：檢視詳情、編輯備註、修改名稱與全隊同步銷案彈窗 -->
     <div id="viewMapPinModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto transition-opacity">
-        <div id="viewMapPinModalCard" class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto border-2 border-blue-500">
+        <div id="viewMapPinModalCard" class="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col gap-3 max-h-[90vh] overflow-y-auto border-2 border-blue-500">
             <div class="flex items-center justify-between">
                 <span id="viewMapPinCategoryBadge" class="bg-blue-100 text-blue-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5">
                     <i class="fa-solid fa-location-dot text-blue-600"></i> 全車隊共享現場地標
                 </span>
-                <button type="button" id="btnCloseViewMapPinTop" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center active:scale-90">
+                <button type="button" id="btnCloseViewMapPinTop" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center active:scale-90">
                     <i class="fa-solid fa-xmark"></i>
                 </button>
             </div>
-            <div id="viewMapPinTitleText" class="text-xl font-black text-gray-900 px-1 break-words leading-snug">現場地標說明</div>
-            <div class="flex items-center justify-between text-xs font-bold text-gray-500 bg-gray-50 px-3 py-2 rounded-xl border border-gray-100">
+            <div id="viewMapPinTitleText" class="text-lg sm:text-xl font-black text-gray-900 px-1 break-words leading-snug">現場地標說明</div>
+            <div class="flex items-center justify-between text-xs font-bold text-gray-500 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100">
                 <span class="flex items-center gap-1.5 text-blue-700">
                     <i class="fa-solid fa-user-check"></i>
                     <span>標記人：</span>
@@ -924,27 +986,50 @@
             </div>
             <div id="viewMapPinPhotoWrap" class="hidden flex flex-col gap-1.5">
                 <div class="relative">
-                    <img id="viewMapPinPhotoImg" src="" alt="現場地標完整照片" class="w-full max-h-64 object-cover rounded-2xl border border-gray-200 shadow-md cursor-pointer active:scale-[0.99]">
+                    <img id="viewMapPinPhotoImg" src="" alt="現場地標完整照片" class="w-full max-h-60 object-cover rounded-2xl border border-gray-200 shadow-md cursor-pointer active:scale-[0.99]">
                     <span class="absolute bottom-2.5 right-2.5 bg-black/65 text-white text-xs font-bold px-2.5 py-1 rounded-full pointer-events-none">🔍 點擊照片放大檢視</span>
                 </div>
             </div>
-            <div class="grid grid-cols-2 gap-2.5 mt-1">
-                <button type="button" id="btnGoogleNavMapPin" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+
+            <!-- 1. 上方行動按鈕：並排「Google 導航」與「距離指引」 -->
+            <div class="grid grid-cols-2 gap-2">
+                <button type="button" id="btnGoogleNavMapPin" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-2.5 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
                     🧭 Google 導航
                 </button>
-                <button type="button" id="btnDistanceGuideMapPin" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
+                <button type="button" id="btnDistanceGuideMapPin" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2.5 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm">
                     🎯 距離指引
                 </button>
             </div>
-            <button type="button" id="btnEditMapPinTitle" class="hidden bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm">
-                ✏️ 修改社區大樓名稱
-            </button>
-            <button type="button" id="btnDeleteMapPin" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-sm">
-                🗑️ 已清理／移除地標
-            </button>
-            <button type="button" id="btnCloseViewMapPin" class="bg-gray-100 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 text-xs">
-                關閉視窗
-            </button>
+
+            <!-- 2. 中間「備註編輯方塊」（社區大樓顯示，支援儲存後同步寫入 Firebase note 欄位供全車隊共享查看） -->
+            <div id="viewMapPinBuildingNoteWrap" class="hidden bg-orange-50/75 border border-orange-200 rounded-2xl p-3 flex flex-col gap-2">
+                <div class="flex items-center justify-between">
+                    <label for="viewMapPinBuildingNoteInput" class="text-xs font-black text-orange-900 flex items-center gap-1">
+                        <i class="fa-solid fa-clipboard-list text-orange-600"></i> 社區收運備註（全隊共享）
+                    </label>
+                    <span id="viewMapPinNoteSavedStatus" class="hidden text-[11px] font-black text-emerald-600">✅ 已同步</span>
+                </div>
+                <textarea id="viewMapPinBuildingNoteInput" rows="2" maxlength="160" class="w-full bg-white border border-orange-300 focus:border-orange-500 text-gray-900 text-xs sm:text-sm font-bold rounded-xl p-2.5 outline-none transition-colors leading-relaxed select-text pointer-events-auto" placeholder="輸入社區清運備註（如：後門進／地下室／純木頭）..."></textarea>
+                <button type="button" id="btnSaveMapPinBuildingNote" class="self-end bg-orange-600 hover:bg-orange-700 text-white font-black text-xs px-3.5 py-1.5 rounded-xl shadow-sm active:scale-95 transition-all flex items-center gap-1.5">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    <span id="btnSaveMapPinBuildingNoteText">儲存備註</span>
+                </button>
+            </div>
+
+            <!-- 3. 下方精簡操作圖示與關閉列 -->
+            <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-gray-100">
+                <div class="flex items-center gap-1.5">
+                    <button type="button" id="btnEditMapPinTitle" class="hidden bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-extrabold py-2 px-3 rounded-xl active:scale-95 transition-all flex items-center gap-1 text-xs">
+                        ✏️ 編輯名稱
+                    </button>
+                    <button type="button" id="btnDeleteMapPin" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold py-2 px-3 rounded-xl active:scale-95 transition-all flex items-center gap-1 text-xs">
+                        🗑️ 刪除
+                    </button>
+                </div>
+                <button type="button" id="btnCloseViewMapPin" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-extrabold py-2 px-4 rounded-xl active:scale-95 text-xs ml-auto">
+                    關閉
+                </button>
+            </div>
         </div>
     </div>
 
@@ -976,7 +1061,7 @@
                     <h3 class="text-base sm:text-lg font-black text-amber-700 flex items-center gap-2">
                         <span>⚙️</span> 管理員導航與車隊參數設定
                     </h3>
-                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.24)</p>
+                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.25)</p>
                 </div>
                 <button type="button" id="btnCloseAdminSettings" class="w-8 h-8 rounded-full bg-white text-gray-500 hover:bg-gray-100 flex items-center justify-center active:scale-90 shadow-sm border border-amber-200 flex-shrink-0">
                     <i class="fa-solid fa-xmark"></i>
@@ -986,19 +1071,84 @@
             <!-- 可捲動內容區塊 -->
             <div class="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
 
-                <!-- 0. 🛋️ 管理員專屬：家具模式切換入口（開發中） -->
+                <!-- 0. 🛋️ 管理員專屬：家具模式切換入口 -->
                 <div class="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-400 rounded-2xl p-3.5 flex items-center justify-between gap-3 shadow-sm">
                     <div class="min-w-0">
                         <div class="text-xs font-black text-amber-900 flex items-center gap-1.5">
-                            <span>🛋️ 家具協作模式（管理員專區）</span>
-                            <span class="bg-amber-200 text-amber-900 text-[10px] font-black px-1.5 py-0.5 rounded-md">開發中</span>
+                            <span>🛋️ 家具模式（管理員專區）</span>
+                            <span class="bg-amber-200 text-amber-900 text-[10px] font-black px-1.5 py-0.5 rounded-md">AI 派工</span>
                         </div>
-                        <div class="text-[11px] font-bold text-amber-700/90 mt-0.5">3 組大型家具路線規劃 ＋ 純木頭垃圾車支援標記</div>
+                        <div class="text-[11px] font-bold text-amber-700/90 mt-0.5">大型家具智慧派工插針 ＋ 純木頭垃圾車支援標記</div>
                     </div>
                     <button type="button" id="btnAdminLaunchFurnitureMode" class="bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition-all whitespace-nowrap flex-shrink-0 flex items-center gap-1.5">
                         <span id="adminFurnitureBtnIcon">🛋️</span>
                         <span id="adminFurnitureBtnLabel">切換家具模式</span>
                     </button>
+                </div>
+
+                <!-- 0.5 🤖 AI 智慧派工設定（模型切換＋多組 API Key 管理） -->
+                <div class="bg-violet-50/75 border-2 border-violet-200 rounded-2xl p-3.5 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-black text-violet-900 flex items-center gap-1.5">
+                            <i class="fa-solid fa-robot text-violet-600"></i> 🤖 AI 智慧派工設定（模型切換＋多組 API Key）
+                        </span>
+                        <span class="text-[10px] font-extrabold bg-violet-100 text-violet-800 px-2 py-0.5 rounded-full border border-violet-200">全隊同步</span>
+                    </div>
+
+                    <!-- 模型選擇器 -->
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] font-extrabold text-gray-700">1. Gemini 模型選擇器（全隊共用）</label>
+                        <div class="grid grid-cols-1 gap-1.5" id="adminAiModelOptions">
+                            <button type="button" data-ai-model="gemini-3.5-flash-lite" class="admin-ai-model-btn bg-violet-600 text-white border-2 border-violet-600 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between shadow-sm">
+                                <div>
+                                    <div class="text-xs font-black">gemini-3.5-flash-lite</div>
+                                    <div class="text-[10px] font-bold opacity-90">預設：極速輕量版（回應最快、省額度）</div>
+                                </div>
+                                <i class="fa-solid fa-circle-check text-sm"></i>
+                            </button>
+                            <button type="button" data-ai-model="gemini-4-hydrogen" class="admin-ai-model-btn bg-white hover:bg-violet-50 text-gray-800 border-2 border-gray-200 rounded-xl p-2.5 text-left active:scale-[0.99] transition-all flex items-center justify-between">
+                                <div>
+                                    <div class="text-xs font-black">gemini-4-hydrogen</div>
+                                    <div class="text-[10px] font-bold text-gray-500">進階：強理解力版（複雜派工單深度解析）</div>
+                                </div>
+                                <i class="fa-regular fa-circle text-sm text-gray-300"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 多組 API Key 管理清單 -->
+                    <div class="space-y-2 pt-1 border-t border-violet-200/70">
+                        <div class="flex items-center justify-between">
+                            <label class="text-[11px] font-extrabold text-gray-700">2. 已儲存 Gemini API Key 清單（遇 429 自動輪替）</label>
+                            <span id="adminAiKeyCountBadge" class="text-[10px] font-black text-violet-700">0 組</span>
+                        </div>
+                        <div id="adminAiKeyListContainer" class="space-y-1.5"></div>
+
+                        <!-- ➕ 新增填入新一組 API Key 按鈕 -->
+                        <button type="button" id="btnToggleAddAiKeyForm" class="w-full bg-white hover:bg-violet-100/70 text-violet-800 border-2 border-dashed border-violet-400 font-black py-2.5 px-3 rounded-xl text-xs active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-sm pointer-events-auto cursor-pointer">
+                            <span>+ 新增填入新一組 API Key</span>
+                        </button>
+
+                        <!-- 展開式新增 API Key 表單 -->
+                        <div id="adminAddAiKeyFormWrap" class="hidden bg-white border-2 border-violet-300 rounded-xl p-3 space-y-2 shadow-inner pointer-events-auto">
+                            <div class="flex flex-col gap-1">
+                                <label for="adminNewAiKeyNoteInput" class="text-[11px] font-extrabold text-gray-700">Key 備註名稱（選填）</label>
+                                <input type="text" id="adminNewAiKeyNoteInput" maxlength="25" class="bg-gray-50 border border-gray-300 focus:border-violet-500 text-gray-900 text-xs font-bold rounded-xl p-2 w-full outline-none pointer-events-auto select-text" placeholder="例如：車隊主帳號、備用金鑰 2">
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <label for="adminNewAiKeyInput" class="text-[11px] font-extrabold text-gray-700">API Key 輸入框</label>
+                                <input type="text" id="adminNewAiKeyInput" autocomplete="off" spellcheck="false" class="bg-gray-50 border border-gray-300 focus:border-violet-500 text-gray-900 text-xs font-mono font-bold rounded-xl p-2.5 w-full outline-none pointer-events-auto select-text" placeholder="請貼上 Gemini API Key（例如：AIzaSy...）">
+                            </div>
+                            <div class="flex items-center gap-2 pt-1">
+                                <button type="button" id="btnSaveNewAiKey" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white font-black py-2 px-3 rounded-xl text-xs shadow active:scale-95 pointer-events-auto cursor-pointer">
+                                    確認新增
+                                </button>
+                                <button type="button" id="btnCancelNewAiKey" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-extrabold py-2 px-3 rounded-xl text-xs active:scale-95 pointer-events-auto cursor-pointer">
+                                    取消
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 1. 📢 全隊即時公告橫幅 -->

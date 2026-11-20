@@ -49,13 +49,16 @@ html, body {
     padding: 3px 8px; border-radius: 999px; font-weight: 800; font-size: 12px;
     color: #fff; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
     display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    transform: scale(var(--map-pin-scale, 1));
+    transform-origin: center center;
+    transition: transform 0.12s ease-out;
 }
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
 
 /* ⚠️ 橘黃色語音／警示標記點：
    1. 最外層 .alert-compact-pin 為傳給 MapLibre Marker 的容器（anchor: 'bottom'），嚴禁設定任何 transform 或負 margin，避免覆寫 MapLibre 的 translate3d 經緯度定位！
-   2. 內層 .alert-compact-pill 為精簡文字（最多 5 字）＋ 22x22 照片縮圖膠囊，縮放動畫僅作用於內層。
+   2. 內層 .alert-compact-scale-wrap 依地圖 zoom 等比例縮放（最小 0.55 倍），transform-origin: bottom center 對準底部尖端不位移。
    3. 底部 .alert-compact-arrow 為小橘色倒三角形指標，尖端精準對齊綠色路線上的觸發座標 [lng, lat]。 */
 .alert-compact-pin {
     display: flex;
@@ -68,6 +71,14 @@ html, body {
 }
 .alert-compact-pin.is-active {
     z-index: 35;
+}
+.alert-compact-scale-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: scale(var(--map-pin-scale, 1));
+    transform-origin: bottom center;
+    transition: transform 0.12s ease-out;
 }
 .alert-compact-pill {
     display: inline-flex;
@@ -197,7 +208,11 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 .nav-alert-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
 
-/* 📍 全車隊共享地圖地標：藍色水滴＋縮圖照片樣式（外層禁止設定 transform） */
+/* 📍 全車隊共享地圖地標：藍色水滴＋橘色社區大樓水滴（外層 .shared-pin-wrapper 禁止設定 transform）
+   🏢 社區大樓三段式階層縮放（依 #map 上的 zoom-tier-far / zoom-tier-mid / zoom-tier-near 自動切換）：
+   - 遠景 (zoom < 14.2)：隱藏水滴與名稱標籤，只顯示直徑 9px 的橘紅色實心小圓點（加 1.5px 白色外框）
+   - 中景 (14.2 <= zoom < 15.6)：顯示縮小版橘色水滴（0.65 倍，transform-origin 對齊底部尖端），隱藏名稱標籤
+   - 近景 (zoom >= 15.6)：完整顯示正常大小橘色水滴＋上方社區大樓名稱標籤 */
 .shared-pin-wrapper {
     display: flex;
     flex-direction: column;
@@ -207,6 +222,53 @@ input[type=range]::-webkit-slider-runnable-track {
     -webkit-user-select: none;
     filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.45));
 }
+.shared-pin-scale-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform-origin: bottom center;
+    transition: transform 0.14s ease-out;
+}
+.shared-pin-dot {
+    display: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: #ea580c;
+    border: 1.5px solid #ffffff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    margin-bottom: -4.5px;
+}
+/* 按住 0.5 秒期間的輕微視覺回饋（作用於內層，不影響外層定位） */
+.shared-pin-wrapper.is-pressing .shared-pin-scale-inner {
+    filter: brightness(1.12);
+}
+.shared-pin-wrapper.is-pressing .shared-pin-dot {
+    transform: scale(1.35);
+}
+
+/* 遠景 zoom < 14.2：社區大樓只顯示 9px 橘紅實心小圓點 */
+#map.zoom-tier-far .shared-pin-wrapper.is-building-pin {
+    filter: none;
+}
+#map.zoom-tier-far .shared-pin-wrapper.is-building-pin .shared-pin-label,
+#map.zoom-tier-far .shared-pin-wrapper.is-building-pin .shared-pin-teardrop {
+    display: none !important;
+}
+#map.zoom-tier-far .shared-pin-wrapper.is-building-pin .shared-pin-dot {
+    display: block !important;
+}
+
+/* 中景 14.2 <= zoom < 15.6：社區大樓隱藏上方標籤，水滴縮小為 0.65 倍（錨點對齊底部尖端） */
+#map.zoom-tier-mid .shared-pin-wrapper.is-building-pin .shared-pin-label {
+    display: none !important;
+}
+#map.zoom-tier-mid .shared-pin-wrapper.is-building-pin .shared-pin-scale-inner {
+    transform: scale(0.65);
+    transform-origin: bottom center;
+}
+
 .shared-pin-label {
     background: rgba(30, 58, 138, 0.92);
     color: #ffffff;
@@ -346,6 +408,8 @@ input[type=range]::-webkit-slider-runnable-track {
     border: 3px solid #ffffff;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
     box-sizing: border-box;
+    transform: scale(var(--map-pin-scale, 1));
+    transform-origin: center center;
     transition: transform 0.15s ease-out;
 }
 .callout-anchor-dot.theme-yellow-black {
@@ -395,6 +459,9 @@ input[type=range]::-webkit-slider-runnable-track {
     user-select: none;
     -webkit-user-select: none;
     cursor: grab;
+    transform: scale(var(--map-pin-scale, 1));
+    transform-origin: center center;
+    transition: transform 0.12s ease-out;
 }
 .callout-box-card:active {
     cursor: grabbing;
@@ -513,7 +580,7 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 
 /* ==========================================
-   🛋️ 家具模式（3 組大型家具協作＋純木頭垃圾車支援火紅標記）
+   🛋️ 家具模式（單一共用大型家具智慧派工＋純木頭垃圾車支援火紅標記）
    重要規範：傳給 new maplibregl.Marker({ element }) 的外層容器 (.furniture-pin-wrapper / .furniture-popup-wrapper)
    嚴禁設定任何 CSS transform，動畫與縮放一律放在內層子元素，確保縮放或旋轉地圖時 100% 精準不位移！
    ========================================== */
@@ -530,9 +597,6 @@ input[type=range]::-webkit-slider-runnable-track {
 .furniture-pin-wrapper.is-wood-support {
     z-index: 44;
 }
-.furniture-pin-wrapper.is-other-group {
-    z-index: 33;
-}
 
 .furniture-pin-pill {
     display: inline-flex;
@@ -540,6 +604,7 @@ input[type=range]::-webkit-slider-runnable-track {
     gap: 4px;
     padding: 3px 8px;
     border-radius: 999px;
+    background: linear-gradient(135deg, #7c3aed, #6d28d9);
     color: #ffffff;
     font-size: 11px;
     font-weight: 900;
@@ -551,15 +616,6 @@ input[type=range]::-webkit-slider-runnable-track {
 }
 .furniture-pin-pill:active {
     transform: scale(0.92);
-}
-.furniture-pin-pill.group-group1 {
-    background: linear-gradient(135deg, #9333ea, #7e22ce);
-}
-.furniture-pin-pill.group-group2 {
-    background: linear-gradient(135deg, #2563eb, #1d4ed8);
-}
-.furniture-pin-pill.group-group3 {
-    background: linear-gradient(135deg, #0d9488, #0f766e);
 }
 .furniture-pin-pill.is-collected {
     background: #64748b !important;
@@ -614,5 +670,12 @@ input[type=range]::-webkit-slider-runnable-track {
 .furniture-popup-card.is-wood-support {
     border-color: #dc2626;
 }
+
+input, textarea {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    pointer-events: auto !important;
+}
+
 
 

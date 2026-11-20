@@ -1,0 +1,17 @@
+{
+  "name": "yingge-cleaning-route-assistant-pro-max",
+  "version": "3.27.0",
+  "private": true,
+  "description": "鶯歌清運路線助手 Pro Max - 整合離線底圖、即時 GPS 追蹤、語音播報、轉彎警示與大型家具清運協作系統",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node --check app.js && node --check sw.js && node --check server.js",
+    "lint": "node --check app.js && node --check sw.js && node --check server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^1.29.0",
+    "express": "^5.1.0"
+  }
+}

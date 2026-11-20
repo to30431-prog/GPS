@@ -14,15 +14,31 @@ if (appVersionBadgeEl) {
 // ==========================================
 // 🛡️ 行車弱訊號防凍結保護：5 秒超時中斷 Fetch 封裝
 // ==========================================
-async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, customAbortReason = '') {
     const controller = new AbortController();
-    const timerId = setTimeout(() => controller.abort(), timeoutMs);
+    const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
+    const abortReason = customAbortReason || `連線逾時（超過 ${timeoutSec} 秒），請檢查網路狀態`;
+    const timerId = setTimeout(() => {
+        controller.abort(abortReason);
+    }, timeoutMs);
     try {
         const response = await fetch(url, {
             ...options,
             signal: controller.signal
         });
         return response;
+    } catch (err) {
+        if (controller.signal.aborted) {
+            const reason = controller.signal.reason;
+            const msg = typeof reason === 'string' && reason.trim()
+                ? reason.trim()
+                : abortReason;
+            const timeoutErr = new Error(msg);
+            timeoutErr.name = 'AbortError';
+            timeoutErr.isTimeout = true;
+            throw timeoutErr;
+        }
+        throw err;
     } finally {
         clearTimeout(timerId);
     }
@@ -10637,6 +10653,47 @@ function getCurrentSelectedAiModel(preferredModel) {
     return 'gemini-3.6-flash';
 }
 
+let isTestingGeminiKeyInProgress = false;
+
+function formatGeminiTestErrorMessage(err) {
+    if (!err) return '未知連線錯誤，請檢查網路狀態';
+    if (typeof err === 'string') {
+        if (/aborted without reason|AbortError|timeout|逾時/i.test(err)) {
+            return '連線逾時（超過 20 秒），請檢查網路狀態';
+        }
+        return err;
+    }
+    const rawMsg = String(err?.message || err || '').trim();
+    if (
+        err?.isTimeout ||
+        err?.name === 'AbortError' ||
+        err?.name === 'TimeoutError' ||
+        /signal is aborted|aborted without reason|The user aborted a request|The operation was aborted|連線逾時/i.test(rawMsg)
+    ) {
+        return rawMsg && rawMsg.includes('連線逾時')
+            ? rawMsg
+            : '連線逾時（超過 20 秒），請檢查網路狀態';
+    }
+    if (/Failed to fetch|NetworkError|Load failed|網路/i.test(rawMsg)) {
+        return `網路連線異常（${rawMsg}），請檢查行動網路或 Wi-Fi 狀態`;
+    }
+    return rawMsg || '未知錯誤';
+}
+
+function setAllAiKeyTestButtonsDisabled(disabled, activeBtn = null) {
+    document.querySelectorAll('.admin-ai-key-test-btn, #btnTestNewAiKeyInput').forEach(btn => {
+        btn.disabled = disabled;
+        if (disabled) {
+            btn.classList.add('opacity-60', 'cursor-not-allowed');
+        } else {
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+        if (btn === activeBtn && disabled) {
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 測試中...';
+        }
+    });
+}
+
 function renderAdminAiKeyListUI() {
     const listContainer = document.getElementById('adminAiKeyListContainer');
     const countBadge = document.getElementById('adminAiKeyCountBadge');
@@ -10682,6 +10739,7 @@ function renderAdminAiKeyListUI() {
         `;
         infoDiv.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (isTestingGeminiKeyInProgress) return;
             editingActiveAiKeyId = item.id;
             renderAdminAiKeyListUI();
             persistAdminAiSettingsImmediately();
@@ -10711,26 +10769,39 @@ function renderAdminAiKeyListUI() {
         const actionsDiv = document.createElement('div');
         actionsDiv.className = 'flex items-center gap-1 flex-shrink-0';
 
-        // ⚡ 測試連線按鈕（動態讀取當下選中模型與該列輸入框 .trim() 金鑰，發送純文字 ping 輕量測試）
+        // ⚡ 測試連線按鈕（獨立 AbortController 20秒逾時、鎖定測試中狀態防止連點或重繪中斷）
         const testBtn = document.createElement('button');
         testBtn.type = 'button';
-        testBtn.className = 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer whitespace-nowrap';
+        testBtn.className = 'admin-ai-key-test-btn bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-black px-2 py-1.5 rounded-lg active:scale-95 pointer-events-auto cursor-pointer whitespace-nowrap';
         testBtn.innerHTML = '⚡ 測試連線';
         testBtn.title = '以當前選中模型測試此組 API Key 連線狀態';
         testBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
+            if (isTestingGeminiKeyInProgress) return;
+
             const keyLabel = item.note || `金鑰 #${idx + 1}`;
             const liveKey = (rowKeyInput.value || item.key || '').trim();
             item.key = liveKey;
             const liveModel = getCurrentSelectedAiModel();
             const testStatusBox = document.getElementById('adminAiKeyTestStatusBox');
-            const origHtml = testBtn.innerHTML;
-            testBtn.disabled = true;
-            testBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 測試中';
+
+            if (!liveKey) {
+                if (testStatusBox) {
+                    testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-amber-50 border-amber-300 text-amber-800';
+                    testStatusBox.innerHTML = `⚠️ 「${keyLabel}」尚未填入 API Key，請先貼上金鑰後再測試！`;
+                    testStatusBox.classList.remove('hidden');
+                }
+                rowKeyInput.focus();
+                return;
+            }
+
+            const origHtml = '⚡ 測試連線';
+            isTestingGeminiKeyInProgress = true;
+            setAllAiKeyTestButtonsDisabled(true, testBtn);
 
             if (testStatusBox) {
                 testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
-                testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${keyLabel}」純文字輕量連線...`;
+                testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${keyLabel}」純文字輕量連線（逾時上限 20 秒）...`;
                 testStatusBox.classList.remove('hidden');
             }
 
@@ -10738,17 +10809,19 @@ function renderAdminAiKeyListUI() {
                 const resInfo = await testSingleGeminiApiKey(liveKey, liveModel);
                 if (testStatusBox) {
                     testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
-                    testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜使用 Key：${keyLabel}｜耗時 ${resInfo.elapsedSec}s）`;
+                    testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜實際回應端點：${resInfo.actualEndpointModel || resInfo.testedModel || liveModel}｜Key：${keyLabel}｜耗時 ${resInfo.elapsedSec}s）`;
                     testStatusBox.classList.remove('hidden');
                 }
             } catch (err) {
+                const detailedMsg = formatGeminiTestErrorMessage(err);
                 if (testStatusBox) {
                     testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
-                    testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${keyLabel}）：${err?.message || '未知錯誤'}`;
+                    testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${keyLabel}）：${detailedMsg}`;
                     testStatusBox.classList.remove('hidden');
                 }
             } finally {
-                testBtn.disabled = false;
+                isTestingGeminiKeyInProgress = false;
+                setAllAiKeyTestButtonsDisabled(false);
                 testBtn.innerHTML = origHtml;
             }
         });
@@ -10761,6 +10834,7 @@ function renderAdminAiKeyListUI() {
             useBtn.textContent = '設為啟用';
             useBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                if (isTestingGeminiKeyInProgress) return;
                 editingActiveAiKeyId = item.id;
                 renderAdminAiKeyListUI();
                 persistAdminAiSettingsImmediately();
@@ -10775,6 +10849,7 @@ function renderAdminAiKeyListUI() {
         delBtn.title = '刪除此組 API Key';
         delBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (isTestingGeminiKeyInProgress) return;
             editingAdminAiKeys = editingAdminAiKeys.filter(k => k.id !== item.id);
             if (editingActiveAiKeyId === item.id) {
                 editingActiveAiKeyId = editingAdminAiKeys[0]?.id || '';
@@ -10880,6 +10955,8 @@ async function persistAdminAiSettingsImmediately() {
     // 新增金鑰表單內的「⚡ 測試連線」按鈕：即使還沒按「確認新增」或「儲存並同步」，也立即用當下點選的模型與輸入框 .trim() 金鑰測試
     testNewKeyBtn?.addEventListener('click', async (e) => {
         e.stopPropagation();
+        if (isTestingGeminiKeyInProgress) return;
+
         const rawKey = (keyInput?.value || '').trim();
         const rawNote = (noteInput?.value || '').trim() || '新輸入金鑰';
         const liveModel = getCurrentSelectedAiModel();
@@ -10895,13 +10972,13 @@ async function persistAdminAiSettingsImmediately() {
             return;
         }
 
-        const origHtml = testNewKeyBtn.innerHTML;
-        testNewKeyBtn.disabled = true;
-        testNewKeyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 測試中';
+        const origHtml = '⚡ 測試連線';
+        isTestingGeminiKeyInProgress = true;
+        setAllAiKeyTestButtonsDisabled(true, testNewKeyBtn);
 
         if (testStatusBox) {
             testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-violet-50 border-violet-200 text-violet-800';
-            testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${rawNote}」純文字輕量連線...`;
+            testStatusBox.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在使用模型 <b>${liveModel}</b> 測試「${rawNote}」純文字輕量連線（逾時上限 20 秒）...`;
             testStatusBox.classList.remove('hidden');
         }
 
@@ -10909,17 +10986,19 @@ async function persistAdminAiSettingsImmediately() {
             const resInfo = await testSingleGeminiApiKey(rawKey, liveModel);
             if (testStatusBox) {
                 testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-emerald-50 border-emerald-300 text-emerald-800';
-                testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜使用 Key：${rawNote}｜耗時 ${resInfo.elapsedSec}s）`;
+                testStatusBox.innerHTML = `🟢 Gemini 連線成功（模型：${resInfo.testedModel || liveModel}｜實際回應端點：${resInfo.actualEndpointModel || resInfo.testedModel || liveModel}｜Key：${rawNote}｜耗時 ${resInfo.elapsedSec}s）`;
                 testStatusBox.classList.remove('hidden');
             }
         } catch (err) {
+            const detailedMsg = formatGeminiTestErrorMessage(err);
             if (testStatusBox) {
                 testStatusBox.className = 'rounded-xl p-2.5 text-[11px] font-extrabold leading-relaxed border bg-red-50 border-red-300 text-red-700';
-                testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${rawNote}）：${err?.message || '未知錯誤'}`;
+                testStatusBox.innerHTML = `🔴 Gemini 連線失敗（模型：${liveModel}｜Key：${rawNote}）：${detailedMsg}`;
                 testStatusBox.classList.remove('hidden');
             }
         } finally {
-            testNewKeyBtn.disabled = false;
+            isTestingGeminiKeyInProgress = false;
+            setAllAiKeyTestButtonsDisabled(false);
             testNewKeyBtn.innerHTML = origHtml;
         }
     });
@@ -11078,6 +11157,10 @@ async function openAdminSettingsPanel() {
     modal.classList.remove('hidden');
 
     const cloudCfg = await fetchSystemConfig();
+    // 若使用者此時已經按了「⚡ 測試連線」正在測試中，不要重繪表單避免打斷測試狀態顯示
+    if (isTestingGeminiKeyInProgress) {
+        return;
+    }
     // 若本機已有剛新增的 API Keys 而雲端還是空的，保留合併本機 Keys
     if (editingAdminAiKeys.length > 0 && (!Array.isArray(cloudCfg.aiApiKeys) || cloudCfg.aiApiKeys.length === 0)) {
         cloudCfg.aiApiKeys = editingAdminAiKeys;
@@ -12686,26 +12769,63 @@ function getGeminiModelCandidates(selectedModel) {
     return ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 }
 
-// ⚡ 單組 API Key 純文字輕量連線測試（嚴禁帶入 google_search 工具，避免免費額度觸發 HTTP 429 RESOURCE_EXHAUSTED）
+// ⚡ 單組 API Key 純文字輕量連線測試（獨立 AbortController 20秒逾時＋明確 abort 原因＋保留完整 HTTP 狀態碼與 API 原始錯誤訊息）
 async function testSingleGeminiApiKey(rawApiKey, rawModelName) {
     const apiKey = String(rawApiKey || '').trim();
     const selectedModel = getCurrentSelectedAiModel(rawModelName);
     const startMs = performance.now();
+    const TIMEOUT_MS = 20000;
+    const TIMEOUT_REASON = '連線逾時（超過 20 秒），請檢查網路狀態';
+
+    // 封裝獨立綁定於本次測試點擊的 20 秒 AbortController 請求，確保 finally 必執行 clearTimeout
+    const runSingleTestFetch = async (url, fetchOptions) => {
+        const controller = new AbortController();
+        const timerId = setTimeout(() => {
+            controller.abort(TIMEOUT_REASON);
+        }, TIMEOUT_MS);
+
+        try {
+            const response = await fetch(url, {
+                ...fetchOptions,
+                signal: controller.signal
+            });
+            return response;
+        } catch (fetchErr) {
+            if (controller.signal.aborted) {
+                const reason = controller.signal.reason;
+                const msg = typeof reason === 'string' && reason.trim()
+                    ? reason.trim()
+                    : TIMEOUT_REASON;
+                const abortError = new Error(msg);
+                abortError.name = 'AbortError';
+                abortError.isTimeout = true;
+                throw abortError;
+            }
+            throw new Error(formatGeminiTestErrorMessage(fetchErr));
+        } finally {
+            clearTimeout(timerId);
+        }
+    };
 
     if (!apiKey) {
-        // 若未提供自訂 Key，測試後端預設環境金鑰（同樣為純文字 ping、不含 google_search）
-        const res = await fetchWithTimeout('/api/gemini/test', {
+        // 若未提供自訂 Key，測試後端預設環境金鑰（同樣為純文字 ping、不含 google_search，逾時 20 秒）
+        const res = await runSingleTestFetch('/api/gemini/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 apiKey: '',
                 model: selectedModel
             })
-        }, 15000);
+        });
         if (res.ok) {
             const data = await res.json().catch(() => ({}));
             const elapsedSec = data?.elapsedSec || ((performance.now() - startMs) / 1000).toFixed(1);
-            return { ok: true, elapsedSec, testedModel: selectedModel };
+            return {
+                ok: true,
+                elapsedSec,
+                testedModel: selectedModel,
+                actualEndpointModel: data?.testedModel || selectedModel
+            };
         }
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData?.error || `HTTP ${res.status} 連線失敗`);
@@ -12714,11 +12834,11 @@ async function testSingleGeminiApiKey(rawApiKey, rawModelName) {
     // 直接對標準 v1beta REST 端點發送最輕量純文字 "ping"（maxOutputTokens: 10，嚴禁附加 tools: [{ google_search: {} }]）
     const candidateModels = getGeminiModelCandidates(selectedModel);
     let lastStatus = 500;
-    let lastReason = '未知錯誤';
+    let lastDetailedReason = '未知錯誤';
 
     for (const modelId of candidateModels) {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
-        const resp = await fetchWithTimeout(endpoint, {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const resp = await runSingleTestFetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -12727,27 +12847,39 @@ async function testSingleGeminiApiKey(rawApiKey, rawModelName) {
                     maxOutputTokens: 10
                 }
             })
-        }, 15000);
+        });
 
         lastStatus = resp.status;
         if (resp.ok) {
             const elapsedSec = ((performance.now() - startMs) / 1000).toFixed(1);
-            return { ok: true, elapsedSec, testedModel: selectedModel };
+            return {
+                ok: true,
+                elapsedSec,
+                testedModel: selectedModel,
+                actualEndpointModel: modelId
+            };
         }
 
-        const errJson = await resp.json().catch(() => null);
-        lastReason = errJson?.error?.message || errJson?.error?.status || `HTTP ${resp.status}`;
+        const rawBodyText = await resp.text().catch(() => '');
+        let errJson = null;
+        try {
+            errJson = rawBodyText ? JSON.parse(rawBodyText) : null;
+        } catch (e) {}
 
-        // 若為無效金鑰 (400 API_KEY_INVALID / 403 PERMISSION_DENIED) 則立即停止並回報
+        const apiErrStatus = errJson?.error?.status ? ` (${errJson.error.status})` : '';
+        const apiErrMsg = errJson?.error?.message || rawBodyText.slice(0, 200) || `HTTP ${resp.status}`;
+        lastDetailedReason = `HTTP ${resp.status}${apiErrStatus}：${apiErrMsg}`;
+
+        // 若為無效金鑰或權限錯誤 (400 API_KEY_INVALID / 403 PERMISSION_DENIED) 則立即停止並顯示原始錯誤訊息
         if (resp.status === 400 || resp.status === 403) {
-            if (/API_KEY_INVALID|key not valid|PERMISSION_DENIED|unregistered callers/i.test(lastReason)) {
-                throw new Error(`HTTP ${resp.status}：${lastReason}`);
+            if (/API_KEY_INVALID|key not valid|PERMISSION_DENIED|unregistered callers|API_KEY_SERVICE_BLOCKED/i.test(apiErrMsg + apiErrStatus)) {
+                throw new Error(lastDetailedReason);
             }
         }
         // 若為 404 (自訂別名模型在官方端點需對應底層模型) 或 429，繼續嘗試下一個相容模型 ID
     }
 
-    throw new Error(`HTTP ${lastStatus}：${lastReason}`);
+    throw new Error(lastDetailedReason);
 }
 
 // 一、Gemini API 只負責「整理地址與社區名稱」（不掛載 google_search 工具以避免 429 錯誤，嚴禁由 AI 推測經緯度）

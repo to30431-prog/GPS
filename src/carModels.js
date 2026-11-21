@@ -65,13 +65,14 @@
     style.textContent = `
       .vehicle-puck-stage {
         position: relative;
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
         line-height: 1;
         overflow: visible;
         user-select: none;
         -webkit-user-drag: none;
+        transform-origin: 50% 50%;
       }
       .vehicle-nav-ring {
         display: none !important;
@@ -79,18 +80,20 @@
       .vehicle-heading-rotator {
         position: relative;
         z-index: 1;
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
         overflow: visible;
-        transition: transform 0.35s cubic-bezier(0.21, 1.02, 0.33, 1);
+        transform-origin: 50% 50%;
+        transition: none;
         will-change: transform;
       }
       .vehicle-img-wrap {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
         overflow: visible;
+        transform-origin: 50% 50%;
       }
       .vehicle-img-wrap img {
         display: block;
@@ -99,6 +102,43 @@
         max-height: none !important;
         pointer-events: none;
         filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
+      }
+      /* 本機自車車標 (#my-puck / .my-car-marker / .nav-puck) 維持醒目大尺寸且盒模型正中對齊 */
+      #my-puck .vehicle-puck-stage,
+      #my-puck .vehicle-heading-rotator,
+      #my-puck .vehicle-img-wrap,
+      .my-car-marker .vehicle-puck-stage,
+      .my-car-marker .vehicle-heading-rotator,
+      .my-car-marker .vehicle-img-wrap {
+        width: 80px;
+        height: 80px;
+      }
+      #my-puck .vehicle-img-wrap img,
+      .my-car-marker .vehicle-img-wrap img {
+        width: 80px !important;
+        height: 80px !important;
+        max-width: 80px !important;
+        max-height: 80px !important;
+        object-fit: contain !important;
+      }
+      /* 車隊雷達隊友小車標 (.fleet-car-svg-wrap / .fleet-truck-marker) 強制限制在 48px，避免 124~140px 撐爆畫面或蓋住「開發者」等名稱標籤 */
+      .fleet-car-svg-wrap .vehicle-puck-stage,
+      .fleet-car-svg-wrap .vehicle-heading-rotator,
+      .fleet-car-svg-wrap .vehicle-img-wrap,
+      .fleet-truck-marker .vehicle-puck-stage,
+      .fleet-truck-marker .vehicle-heading-rotator,
+      .fleet-truck-marker .vehicle-img-wrap {
+        width: 48px !important;
+        height: 48px !important;
+      }
+      .fleet-car-svg-wrap .vehicle-img-wrap img,
+      .fleet-truck-marker .vehicle-img-wrap img,
+      .fleet-car-svg-wrap img {
+        width: 48px !important;
+        height: 48px !important;
+        max-width: 48px !important;
+        max-height: 48px !important;
+        object-fit: contain !important;
       }
       /* 換車選單卡片內縮圖限制在合理預覽大小，避免撐爆選單 */
       button .vehicle-img-wrap img,
@@ -146,12 +186,12 @@
     const pausedByPowerSave = document.body.classList.contains('power-saving');
     const active = Boolean(isMoving) && !pausedByPowerSave;
 
-    document.querySelectorAll('.vehicle-anim, .vehicle-img-wrap').forEach((el) => {
+    document.querySelectorAll('#my-puck .vehicle-anim, #my-puck .vehicle-img-wrap, .my-car-marker .vehicle-anim, .my-car-marker .vehicle-img-wrap').forEach((el) => {
       el.classList.toggle('is-moving', active);
     });
   }
 
-  // 依據地圖方位角與車頭方向平滑旋轉（針對車頭朝上圖檔優化）
+  // 依據地圖方位角與車頭方向即時同步旋轉（僅針對本機自車 #my-puck / .my-car-marker，不影響車隊雷達隊友）
   function syncCarHeading(courseDeg, mapBearingDeg = 0) {
     if (typeof courseDeg !== 'number' || Number.isNaN(courseDeg)) return;
 

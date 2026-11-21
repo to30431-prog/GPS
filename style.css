@@ -180,16 +180,48 @@ html, body {
     margin-top: -1px;
 }
 
-/* 導航車頭圖示 (SVG 完美透明版) */
+/* 導航本機車頭圖示（正方形置中盒模型，確保 360° 旋轉不偏心且清晰醒目） */
 .nav-puck {
-    width: 42px; height: 70px;
+    width: 80px;
+    height: 80px;
     background: transparent; 
     border: none;
-    display: flex; align-items: center; justify-content: center;
-    transition: transform 0.1s ease-out;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.45));
 }
-.nav-puck img { width: 100%; height: 100%; object-fit: contain; }
+.nav-puck svg,
+.nav-puck img {
+    width: 80px;
+    height: 80px;
+    max-width: 80px !important;
+    max-height: 80px !important;
+    object-fit: contain;
+}
+
+/* 車隊雷達隊友小車標（限制於 48px 內，避免 124px~140px 原圖撐爆覆蓋隊友名稱） */
+.fleet-car-svg-wrap {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fleet-car-svg-wrap .vehicle-puck-stage,
+.fleet-car-svg-wrap .vehicle-heading-rotator,
+.fleet-car-svg-wrap .vehicle-img-wrap {
+    width: 48px !important;
+    height: 48px !important;
+}
+.fleet-car-svg-wrap svg,
+.fleet-car-svg-wrap img {
+    width: 48px !important;
+    height: 48px !important;
+    max-width: 48px !important;
+    max-height: 48px !important;
+    object-fit: contain !important;
+}
 
 /* 進度條拉桿 */
 input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }

@@ -1686,17 +1686,37 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
         if (el.dataset.carType !== effectiveCarType || !carWrap.firstElementChild) {
             el.dataset.carType = effectiveCarType;
             carWrap.innerHTML = getCarSvg(effectiveCarType, effectiveMoving);
+            const stageEl = carWrap.querySelector('.vehicle-puck-stage');
+            if (stageEl) {
+                stageEl.style.width = '48px';
+                stageEl.style.height = '48px';
+            }
+            const rotatorEl = carWrap.querySelector('.vehicle-heading-rotator');
+            if (rotatorEl) {
+                rotatorEl.style.width = '48px';
+                rotatorEl.style.height = '48px';
+                rotatorEl.style.transform = 'rotate(0deg)';
+            }
             const svgEl = carWrap.querySelector('svg');
             if (svgEl) {
-                svgEl.style.width = '100%';
-                svgEl.style.height = '100%';
+                svgEl.style.width = '48px';
+                svgEl.style.height = '48px';
                 svgEl.style.display = 'block';
             }
-        } else {
-            const animSvg = carWrap.querySelector('.vehicle-anim');
-            if (animSvg) {
-                animSvg.classList.toggle('is-moving', effectiveMoving);
+            const imgEl = carWrap.querySelector('img');
+            if (imgEl) {
+                imgEl.style.width = '48px';
+                imgEl.style.height = '48px';
+                imgEl.style.maxWidth = '48px';
+                imgEl.style.maxHeight = '48px';
+                imgEl.style.objectFit = 'contain';
+                imgEl.style.display = 'block';
             }
+        } else {
+            const animEls = carWrap.querySelectorAll('.vehicle-anim, .vehicle-img-wrap');
+            animEls.forEach((animEl) => {
+                animEl.classList.toggle('is-moving', effectiveMoving);
+            });
         }
         carWrap.querySelectorAll('.turtle-anim-el').forEach((anim) => {
             try {
@@ -1790,10 +1810,10 @@ function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerC
     wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
     wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
     wrapper.innerHTML = `
-        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-0.5 rounded-full border-2 border-white font-black text-[11px] flex items-center gap-1 whitespace-nowrap shadow-md mb-0.5">
+        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-0.5 rounded-full border-2 border-white font-black text-[11px] flex items-center gap-1 whitespace-nowrap shadow-md mb-1">
             <span class="fleet-member-name"></span>
         </div>
-        <div class="fleet-car-svg-wrap w-9 h-[72px] flex items-center justify-center"></div>
+        <div class="fleet-car-svg-wrap w-12 h-12 flex items-center justify-center"></div>
     `;
     updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt, Date.now(), peerCarType, peerIsMoving);
     return wrapper;

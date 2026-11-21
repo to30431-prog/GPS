@@ -1231,19 +1231,29 @@ document.getElementById('locateBtn').onclick = () => {
     const resumeZoom = (followWatchId !== null || isRecording)
         ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
         : Math.max(map.getZoom(), 17);
-    const targetBearing = isHeadingUpMode ? currentHeading : 0;
+    const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
+        ? vehicleVisualHeading
+        : currentHeading;
+    currentHeading = activeHeading;
+    vehicleVisualHeading = activeHeading;
+    const targetBearing = isHeadingUpMode ? activeHeading : 0;
     map.easeTo({
         center: lastKnownLngLat, zoom: resumeZoom,
         bearing: targetBearing, offset: [0, 100], duration: 400
     });
-    window.syncCarHeading?.(currentHeading, targetBearing);
+    window.syncCarHeading?.(activeHeading, map.getBearing());
 };
 
 document.getElementById('headingModeBtn').onclick = () => {
     isHeadingUpMode = !isHeadingUpMode;
     const btn = document.getElementById('headingModeBtn');
     const label = document.getElementById('headingLabel');
-    const targetBearing = isHeadingUpMode ? currentHeading : 0;
+    const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
+        ? vehicleVisualHeading
+        : currentHeading;
+    currentHeading = activeHeading;
+    vehicleVisualHeading = activeHeading;
+    const targetBearing = isHeadingUpMode ? activeHeading : 0;
     if (isHeadingUpMode) {
         btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
         label.innerText = "車頭上";
@@ -1253,7 +1263,7 @@ document.getElementById('headingModeBtn').onclick = () => {
         label.innerText = "正北上";
         if (isFollowingCamera) map.easeTo({ bearing: targetBearing, duration: 300 });
     }
-    window.syncCarHeading?.(currentHeading, isFollowingCamera ? targetBearing : map.getBearing());
+    window.syncCarHeading?.(activeHeading, map.getBearing());
 };
 
 // --- 3. 幾何數學計算 ---

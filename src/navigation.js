@@ -544,6 +544,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     // 🚀 按下導航瞬間，強制將鏡頭拉近到「實戰特寫視角」並傾斜
     const initBearing = isHeadingUpMode ? currentHeading : 0;
+    vehicleVisualHeading = currentHeading;
     map.flyTo({
         center: lastKnownLngLat,
         zoom: 18.5, // 💡 導航專用的超近視角 (數字越大越近，18.5 是最佳實戰比例)
@@ -569,6 +570,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
             ? filtered.heading
             : (rawGpsHeading !== null ? rawGpsHeading : currentHeading);
         currentHeading = heading;
+        vehicleVisualHeading = heading;
 
         if (typeof window.onFleetPositionUpdate === 'function') {
             window.onFleetPositionUpdate(lat, lng);
@@ -592,7 +594,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     });
                 }
             }
-            window.syncCarHeading?.(heading, map.getBearing());
+            window.syncCarHeading?.(heading, map ? map.getBearing() : 0);
         }
 
         // 即時計算路線進度索引 currentTrackIndex：

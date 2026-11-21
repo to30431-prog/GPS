@@ -293,10 +293,18 @@ document.getElementById('recordBtn').onclick = async () => {
             }
 
             if (routePoints.length === 0) {
+                if (typeof filtered.heading === 'number' && !isNaN(filtered.heading)) {
+                    currentHeading = filtered.heading;
+                }
                 lastKnownLngLat = [lng, lat];
-                routePoints.push({ lng, lat, time: now, musicActive, music: musicActive, bearing: 0 });
+                vehicleVisualLngLat = [lng, lat];
+                vehicleVisualHeading = currentHeading;
+                routePoints.push({ lng, lat, time: now, musicActive, music: musicActive, bearing: currentHeading });
                 addPinMarker([lng, lat], '<div class="pin-s"><span>S</span></div>');
-                if (!isPowerSaveMapPaused() && vehicleMarker) vehicleMarker.setLngLat([lng, lat]);
+                if (!isPowerSaveMapPaused()) {
+                    if (vehicleMarker) vehicleMarker.setLngLat([lng, lat]);
+                    window.syncCarHeading?.(currentHeading, map ? map.getBearing() : 0);
+                }
                 lastRecordTime = now;
                 return;
             }
@@ -310,12 +318,13 @@ document.getElementById('recordBtn').onclick = async () => {
 
             if (distM >= minMoveMeters || (now - lastRecordTime >= gpsFreqMs && distM >= 1.5)) {
                 const minLockSpeed = Number(systemNavConfig.minLockSpeedKmh) || DEFAULT_SYSTEM_CONFIG.minLockSpeedKmh;
-                // 車速 >= minLockSpeed 且位移 >= 5m 才更新真實移動方位角，否則鎖死最後角度
-                if (distM >= 5 && filtered.speedKmh >= minLockSpeed) {
+                // 有實際移動時計算兩點方位角，同步更新 currentHeading 與 vehicleVisualHeading
+                if (distM >= 2 && (filtered.speedKmh >= minLockSpeed || distM >= 4)) {
                     currentHeading = getBearing(prev.lng, prev.lat, lng, lat);
-                } else {
+                } else if (typeof filtered.heading === 'number' && !isNaN(filtered.heading)) {
                     currentHeading = filtered.heading;
                 }
+                vehicleVisualHeading = currentHeading;
                 totalDistanceKm += distKm;
                 lastKnownLngLat = [lng, lat];
                 routePoints.push({ lng, lat, time: now, musicActive, music: musicActive, bearing: currentHeading });
@@ -323,6 +332,7 @@ document.getElementById('recordBtn').onclick = async () => {
                 if (!isPowerSaveMapPaused()) {
                     document.getElementById('distanceText').innerText = totalDistanceKm.toFixed(2);
                     if (vehicleMarker) smoothMoveVehicleMarker([lng, lat], currentHeading, 750);
+                    window.syncCarHeading?.(currentHeading, map ? map.getBearing() : 0);
                     updateRouteLayers(routePoints, 250);
 
                     if (isFollowingCamera) {

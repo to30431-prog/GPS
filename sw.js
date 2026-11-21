@@ -109,9 +109,9 @@ self.addEventListener('fetch', function(event) {
         return;
     }
 
-    // 本機核心靜態資源採用 Network-First 策略：有網路時取最新檔案並更新快取，斷網時降級使用離線快取
+    // 本機核心靜態資源採用 Network-First 策略：有網路時強制略過陳舊 HTTP 快取取最新檔案並更新快取，斷網時降級使用離線快取
     event.respondWith(
-        fetch(req)
+        fetch(req, { cache: 'no-cache' })
             .then(function(networkRes) {
                 if (networkRes && networkRes.status === 200 && url.origin === self.location.origin) {
                     const resClone = networkRes.clone();
@@ -123,7 +123,10 @@ self.addEventListener('fetch', function(event) {
             })
             .catch(function() {
                 return caches.match(req).then(function(cached) {
-                    return cached || new Response('', { status: 503, statusText: 'Offline' });
+                    if (cached) return cached;
+                    return caches.match(req, { ignoreSearch: true }).then(function(fallbackCached) {
+                        return fallbackCached || new Response('', { status: 503, statusText: 'Offline' });
+                    });
                 });
             })
     );

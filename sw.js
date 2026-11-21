@@ -5,6 +5,7 @@ const CACHE_ASSETS = [
     './index.html',
     './style.css',
     './src/config-state.js',
+    './src/carModels.js',
     './src/map-core.js',
     './src/route-editor.js',
     './src/navigation.js',

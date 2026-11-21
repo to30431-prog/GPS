@@ -198,12 +198,14 @@ function startSmoothPlayback() {
         });
     }
     isPlaying = true; lastFrameTime = 0;
+    if (typeof window.setMyVehicleMovingState === 'function') window.setMyVehicleMovingState(true);
     playPauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
     animFrameId = requestAnimationFrame(playbackLoop);
 }
 
 function stopSmoothPlayback() {
     isPlaying = false;
+    if (typeof window.setMyVehicleMovingState === 'function') window.setMyVehicleMovingState(false);
     if (animFrameId !== null) {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
@@ -298,6 +300,7 @@ async function enterBlackPowerSaveMode(fromUserGesture = true) {
     ensurePureBlackSystemBars();
     isBlackScreenActive = true;
     isScreenAutoWoken = false;
+    document.body?.classList.add('power-saving');
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.style.backgroundColor = '#000000';
@@ -330,6 +333,7 @@ async function enterBlackPowerSaveMode(fromUserGesture = true) {
 function exitBlackPowerSaveMode(fromUserGesture = true) {
     isBlackScreenActive = false;
     isScreenAutoWoken = false;
+    document.body?.classList.remove('power-saving');
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.classList.add('hidden');

@@ -192,22 +192,132 @@ updateMapMarkersZoomScale();
 setTimeout(() => { map.resize(); updateMapMarkersZoomScale(); }, 500);
 window.addEventListener('resize', () => map.resize());
 
+if (typeof injectCarAnimations === 'function') {
+    injectCarAnimations();
+}
+
 const puckEl = document.createElement('div');
 puckEl.className = 'nav-puck';
-puckEl.innerHTML = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 100" style="width:100%; height:100%; transform: rotate(0deg);">
-    <rect x="4" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
-    <rect x="48" y="15" width="8" height="20" rx="3" fill="#1f2937"/>
-    <rect x="4" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
-    <rect x="48" y="65" width="8" height="20" rx="3" fill="#1f2937"/>
-    <rect x="8" y="5" width="44" height="90" rx="10" fill="#facc15" stroke="#ca8a04" stroke-width="2"/>
-    <path d="M 14 30 L 46 30 L 42 12 L 18 12 Z" fill="#1e293b"/>
-    <rect x="22" y="6" width="16" height="3" rx="1.5" fill="#ef4444"/>
-    <rect x="12" y="62" width="36" height="30" rx="4" fill="#eab308" stroke="#ca8a04" stroke-width="1.5"/>
-    <rect x="14" y="85" width="32" height="6" fill="#ffffff"/>
-    <polygon points="14,91 22,85 30,91" fill="#ef4444"/>
-    <polygon points="30,91 38,85 46,91" fill="#3b82f6"/>
-</svg>`;
+puckEl.style.cursor = 'pointer';
+puckEl.style.pointerEvents = 'auto';
+puckEl.title = '點擊切換車款';
+
+let isMyVehicleMovingAnim = false;
+
+function renderMyVehicleCarSvg() {
+    if (typeof getCarSvg === 'function' && typeof getMyCarType === 'function') {
+        puckEl.innerHTML = getCarSvg(getMyCarType(), isMyVehicleMovingAnim);
+    }
+    const svgEl = puckEl.querySelector('svg');
+    if (svgEl) {
+        svgEl.style.width = '100%';
+        svgEl.style.height = '100%';
+        svgEl.style.display = 'block';
+    }
+}
+
+function setMyVehicleMovingState(isMoving) {
+    const nextState = Boolean(isMoving);
+    isMyVehicleMovingAnim = nextState;
+    const animSvg = puckEl.querySelector('.vehicle-anim');
+    if (animSvg) {
+        animSvg.classList.toggle('is-moving', nextState);
+    }
+}
+
+renderMyVehicleCarSvg();
+
+// 🚗 點擊自己車輛 Marker 彈出橫向「換車選單」（選單內動態展示烏龜划水與千陽號破浪）
+function closeCarModelPickerMenu() {
+    const overlay = document.getElementById('carModelPickerOverlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function openCarModelPickerMenu() {
+    if (typeof window.CAR_MODELS !== 'object' || !window.CAR_MODELS) return;
+    if (typeof injectCarAnimations === 'function') injectCarAnimations();
+
+    let overlay = document.getElementById('carModelPickerOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'carModelPickerOverlay';
+        overlay.className = 'fixed inset-0 z-[100001] bg-black/45 backdrop-blur-[2px] flex items-end justify-center pb-24 px-3 pointer-events-auto';
+        overlay.innerHTML = `
+            <div id="carModelPickerSheet" class="w-full max-w-md bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border-2 border-amber-300 p-3.5">
+                <div class="flex items-center justify-between mb-2.5 px-1">
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-base">🚗</span>
+                        <span class="text-sm font-black text-slate-900">切換專屬車款</span>
+                        <span class="text-[10px] font-bold text-slate-400">全車隊雷達同步顯示</span>
+                    </div>
+                    <button type="button" id="btnCloseCarModelPicker" class="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center active:scale-90">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+                <div id="carModelPickerList" class="flex items-stretch gap-2.5 overflow-x-auto pb-1.5 pt-0.5 px-0.5 snap-x"></div>
+            </div>
+        `;
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeCarModelPickerMenu();
+        });
+        document.body.appendChild(overlay);
+        overlay.querySelector('#btnCloseCarModelPicker')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeCarModelPickerMenu();
+        });
+    }
+
+    const listEl = overlay.querySelector('#carModelPickerList');
+    const currentId = typeof getMyCarType === 'function' ? getMyCarType() : 'garbage_yellow';
+    if (listEl) {
+        listEl.innerHTML = '';
+        Object.values(window.CAR_MODELS).forEach(model => {
+            const isSelected = model.id === currentId;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = isSelected
+                ? 'flex-shrink-0 w-[86px] snap-center flex flex-col items-center justify-between gap-1.5 p-2 rounded-2xl bg-amber-50 border-2 border-amber-500 shadow-md active:scale-95 transition-all'
+                : 'flex-shrink-0 w-[86px] snap-center flex flex-col items-center justify-between gap-1.5 p-2 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 active:scale-95 transition-all';
+            btn.innerHTML = `
+                <div class="w-12 h-16 flex items-center justify-center pointer-events-none">
+                    ${getCarSvg(model.id, true)}
+                </div>
+                <div class="text-[11px] font-black leading-tight text-center ${isSelected ? 'text-amber-800' : 'text-slate-700'} truncate w-full">${model.name}</div>
+            `;
+            const previewSvg = btn.querySelector('svg');
+            if (previewSvg) {
+                previewSvg.style.width = '100%';
+                previewSvg.style.height = '100%';
+            }
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (typeof setMyCarType === 'function') setMyCarType(model.id);
+                renderMyVehicleCarSvg();
+                try { navigator.vibrate?.(25); } catch (_) {}
+                if (typeof window.broadcastRadarNow === 'function') {
+                    window.broadcastRadarNow();
+                }
+                closeCarModelPickerMenu();
+                if (typeof showMapRefreshToast === 'function') {
+                    showMapRefreshToast(`🚗 已切換為「${model.name}」並同步車隊雷達`, 2000);
+                }
+            });
+            listEl.appendChild(btn);
+        });
+    }
+
+    overlay.classList.remove('hidden');
+}
+
+puckEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openCarModelPickerMenu();
+});
+
+window.setMyVehicleMovingState = setMyVehicleMovingState;
+window.renderMyVehicleCarSvg = renderMyVehicleCarSvg;
+window.openCarModelPickerMenu = openCarModelPickerMenu;
+window.closeCarModelPickerMenu = closeCarModelPickerMenu;
 
 let vehicleMarker = null;
 let lastRecordedSpeedKmh = 0;

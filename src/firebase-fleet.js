@@ -1564,11 +1564,14 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     lastFleetUploadTime = now;
     isUploadingFleetLocation = true;
 
+    const currentSpeedRounded = Math.round(Math.max(0, lastRecordedSpeedKmh || 0));
     const payload = {
         name: fleetUserName,
         lat: Number(lat.toFixed(6)),
         lng: Number(lng.toFixed(6)),
-        speedKmh: Math.round(Math.max(0, lastRecordedSpeedKmh || 0)),
+        speedKmh: currentSpeedRounded,
+        speed: currentSpeedRounded,
+        carType: (typeof getMyCarType === 'function') ? getMyCarType() : 'garbage_yellow',
         updatedAt: now
     };
 
@@ -1620,6 +1623,19 @@ window.onFleetPositionUpdate = function(lat, lng) {
     }
 };
 
+window.broadcastRadarNow = function() {
+    if (!fleetUserName || isDeviceRestrictedByGatekeeper()) return;
+    const lat = (typeof currentFleetLat === 'number' && !isNaN(currentFleetLat))
+        ? currentFleetLat
+        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[1]) : null);
+    const lng = (typeof currentFleetLng === 'number' && !isNaN(currentFleetLng))
+        ? currentFleetLng
+        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[0]) : null);
+    if (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng)) {
+        uploadMyFleetLocation(lat, lng, true);
+    }
+};
+
 // ==========================================
 // 🟢 左上角「車隊雷達在線名單」即時清單（支援超過 3 人自動收折＋點擊快速 flyTo 追蹤隊友＋超過 30 秒休眠提示）
 // ==========================================
@@ -1647,7 +1663,7 @@ function getFleetStaleStatus(updatedAt, now = Date.now()) {
     return { isStale, isOver30s, isExceededMaxMinutes, staleMinutes, staleText, elapsedMs };
 }
 
-function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now()) {
+function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now(), peerCarType = null, peerIsMoving = false) {
     if (!el) return;
     const cleanName = (memberName || '隊員').trim();
     const { isStale, staleText } = getFleetStaleStatus(updatedAt, now);
@@ -1659,6 +1675,29 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
         el.classList.add('is-stale-sleeping');
     } else {
         el.classList.remove('is-stale-sleeping');
+    }
+
+    const carWrap = el.querySelector('.fleet-car-svg-wrap');
+    if (carWrap && typeof getCarSvg === 'function') {
+        const effectiveCarType = (peerCarType && window.CAR_MODELS && window.CAR_MODELS[peerCarType])
+            ? peerCarType
+            : (el.dataset.carType || 'garbage_yellow');
+        const effectiveMoving = !isStale && Boolean(peerIsMoving);
+        if (el.dataset.carType !== effectiveCarType || !carWrap.firstElementChild) {
+            el.dataset.carType = effectiveCarType;
+            carWrap.innerHTML = getCarSvg(effectiveCarType, effectiveMoving);
+            const svgEl = carWrap.querySelector('svg');
+            if (svgEl) {
+                svgEl.style.width = '100%';
+                svgEl.style.height = '100%';
+                svgEl.style.display = 'block';
+            }
+        } else {
+            const animSvg = carWrap.querySelector('.vehicle-anim');
+            if (animSvg) {
+                animSvg.classList.toggle('is-moving', effectiveMoving);
+            }
+        }
     }
 }
 
@@ -1740,18 +1779,17 @@ function renderOnlineFleetListUI() {
     }
 }
 
-function createFleetTruckMarkerElement(memberName, updatedAt = Date.now()) {
+function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerCarType = 'garbage_yellow', peerIsMoving = false) {
     const wrapper = document.createElement('div');
     wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
     wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
     wrapper.innerHTML = `
-        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-1 rounded-full border-2 border-white font-black text-xs flex items-center gap-1.5 whitespace-nowrap shadow-md">
-            <i class="fleet-truck-icon fa-solid fa-truck text-amber-300 text-xs"></i>
+        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-0.5 rounded-full border-2 border-white font-black text-[11px] flex items-center gap-1 whitespace-nowrap shadow-md mb-0.5">
             <span class="fleet-member-name"></span>
         </div>
-        <div class="fleet-truck-arrow w-2.5 h-2.5 bg-emerald-600 border-r-2 border-b-2 border-white transform rotate-45 -mt-1.5"></div>
+        <div class="fleet-car-svg-wrap w-9 h-[72px] flex items-center justify-center"></div>
     `;
-    updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt);
+    updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt, Date.now(), peerCarType, peerIsMoving);
     return wrapper;
 }
 
@@ -1785,13 +1823,16 @@ async function fetchAndRenderFleetRadar() {
                 const memberName = (info.name || '隊員').trim();
                 const isStaleMember = (now - updatedAt) > FLEET_STALE_SLEEP_THRESHOLD_MS;
 
-                // 計算同事即時時速 (km/h)：優先採用雲端回報之 speedKmh，若超過 30 秒休眠則歸零
+                // 計算同事即時時速 (km/h)：優先採用雲端回報之 speedKmh / speed，若超過 30 秒休眠則歸零
                 let memberSpeedKmh = 0;
                 const existingEntry = fleetLayerGroup[devId];
+                const rawCloudSpeed = (typeof info.speedKmh === 'number' && !isNaN(info.speedKmh))
+                    ? info.speedKmh
+                    : ((typeof info.speed === 'number' && !isNaN(info.speed)) ? info.speed : null);
                 if (isStaleMember) {
                     memberSpeedKmh = 0;
-                } else if (typeof info.speedKmh === 'number' && !isNaN(info.speedKmh) && info.speedKmh >= 0) {
-                    memberSpeedKmh = Math.round(info.speedKmh);
+                } else if (rawCloudSpeed !== null && rawCloudSpeed >= 0) {
+                    memberSpeedKmh = Math.round(rawCloudSpeed);
                 } else if (existingEntry && existingEntry.lastLat !== undefined && existingEntry.lastUpdatedAt && updatedAt > existingEntry.lastUpdatedAt) {
                     const distKm = getDistanceKm(existingEntry.lastLng, existingEntry.lastLat, lng, lat);
                     const dtSec = Math.max(1, (updatedAt - existingEntry.lastUpdatedAt) / 1000);
@@ -1802,6 +1843,11 @@ async function fetchAndRenderFleetRadar() {
                     memberSpeedKmh = existingEntry.speedKmh;
                 }
 
+                const peerCarType = (info.carType && window.CAR_MODELS && window.CAR_MODELS[info.carType])
+                    ? info.carType
+                    : 'garbage_yellow';
+                const peerIsMoving = !isStaleMember && memberSpeedKmh > 1.8;
+
                 if (existingEntry) {
                     existingEntry.marker.setLngLat([lng, lat]);
                     existingEntry.name = memberName;
@@ -1809,9 +1855,10 @@ async function fetchAndRenderFleetRadar() {
                     existingEntry.lastLng = lng;
                     existingEntry.lastUpdatedAt = updatedAt;
                     existingEntry.speedKmh = memberSpeedKmh;
-                    updateFleetTruckMarkerAppearance(existingEntry.el, memberName, updatedAt, now);
+                    existingEntry.carType = peerCarType;
+                    updateFleetTruckMarkerAppearance(existingEntry.el, memberName, updatedAt, now, peerCarType, peerIsMoving);
                 } else {
-                    const el = createFleetTruckMarkerElement(memberName, updatedAt);
+                    const el = createFleetTruckMarkerElement(memberName, updatedAt, peerCarType, peerIsMoving);
                     const marker = new maplibregl.Marker({
                         element: el,
                         anchor: 'bottom',
@@ -1827,7 +1874,8 @@ async function fetchAndRenderFleetRadar() {
                         lastLat: lat,
                         lastLng: lng,
                         lastUpdatedAt: updatedAt,
-                        speedKmh: memberSpeedKmh
+                        speedKmh: memberSpeedKmh,
+                        carType: peerCarType
                     };
                 }
 

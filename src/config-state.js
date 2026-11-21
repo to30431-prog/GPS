@@ -373,6 +373,9 @@ function processFilteredGpsPosition(pos, options = {}) {
         lastRawGpsFixWallTime = now;
         lastFilteredGpsResult = stationaryRes;
         lastRecordedSpeedKmh = stationaryRes.speedKmh;
+        if (!isReplaying && typeof window.setMyVehicleMovingState === 'function') {
+            window.setMyVehicleMovingState(effectiveSpeedKmh > 1.8);
+        }
         return stationaryRes;
     }
 
@@ -408,6 +411,9 @@ function processFilteredGpsPosition(pos, options = {}) {
     lastRawGpsFixWallTime = now;
     lastFilteredGpsResult = movingRes;
     lastRecordedSpeedKmh = movingSpeedKmh;
+    if (!isReplaying && typeof window.setMyVehicleMovingState === 'function') {
+        window.setMyVehicleMovingState(movingSpeedKmh > 1.8);
+    }
     return movingRes;
 }
 

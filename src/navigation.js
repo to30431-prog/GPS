@@ -462,6 +462,10 @@ function updateTacticalDisplay() {
 }
 
 document.getElementById('startFollowBtn').onclick = async () => {
+    // 🔊 在使用者點擊「遵循路線」手勢當下同步喚醒瀏覽器 TTS 引擎，解除手機自動播放限制
+    if (typeof unlockSpeechSynthesis === 'function') {
+        unlockSpeechSynthesis();
+    }
     isReplaying = false;
     window.isReplaying = false;
     stopSmoothPlayback();
@@ -516,6 +520,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
     }
 
     let currentTrackIndex = 0;
+    let hasInitializedTrackIndex = false;
     updateProgressRouteLayers(route.points, 0, null, 0);
     if (window.isFurnitureNavOrReplayActive) {
         if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
@@ -566,9 +571,30 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        // 即時計算路線進度索引 currentTrackIndex（採用前方滑動視窗 Sliding Window：往後最多 30 節點且沿線 150m 內，防止原路進出巷口跳號）
-        const progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary, followCumMeters);
-        currentTrackIndex = progressInfo.trackIndex;
+        // 即時計算路線進度索引 currentTrackIndex：
+        // 1. 初次進入導航：起點 80m 內優先由起點端匹配；半路切入則找最近軌跡段（排除終點末端）
+        // 2. 導航進行中：嚴格限制在前方滑動視窗（沿線約 220m 內）順序推進，防止折返重疊跳號
+        const prevTrackIndex = currentTrackIndex;
+        let progressInfo;
+        if (!hasInitializedTrackIndex) {
+            progressInfo = (typeof findInitialFollowTrackIndex === 'function')
+                ? findInitialFollowTrackIndex(pts, lng, lat, currentHeading, !filtered.isStationary, followCumMeters)
+                : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary, followCumMeters);
+            currentTrackIndex = progressInfo.trackIndex;
+            hasInitializedTrackIndex = true;
+            // 若為半路切入（距起點 > 80m 且起算索引 > 0），將起始點之前的舊事件標記為已略過避免回溯誤報
+            if (currentTrackIndex > 0) {
+                mappedEvents.forEach(ev => {
+                    if ((ev.ptIdx || 0) < currentTrackIndex - 2) {
+                        ev.played = true;
+                        ev.prePlayed = true;
+                    }
+                });
+            }
+        } else {
+            progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, currentHeading, !filtered.isStationary, followCumMeters);
+            currentTrackIndex = progressInfo.trackIndex;
+        }
         const minDist = progressInfo.minDistMeters;
         let isOffRoute = true;
 
@@ -684,17 +710,21 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     autoSleepScreen();
                 }
             }
+        }
 
-            // 🔊 綁定路線進度的雙層語音預警（300m 簡短預告 + 50m 完整確認 + 方向 ±30° 一致 + played 鎖定防重複）
+        // 🔊 遵循路線提醒點雙重防呆觸發（半徑 >= 40m 容錯 OR 路線進度越過提醒點），即便 GPS 飄移 15~30m 仍必定觸發不漏接
+        if (minDist <= 55) {
             evaluateVoiceMarkersWithProgress({
                 events: mappedEvents,
                 pts,
                 cumMeters: followCumMeters,
                 currentTrackIndex,
+                prevTrackIndex,
                 lng,
                 lat,
                 vehicleBearing: currentHeading,
-                onTriggerWake: true
+                onTriggerWake: true,
+                isFollowMode: true
             });
         }
     };

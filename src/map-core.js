@@ -1356,6 +1356,20 @@ const VoiceQueue = {
 };
 window.VoiceQueue = VoiceQueue;
 
+function unlockSpeechSynthesis() {
+    if (!('speechSynthesis' in window)) return;
+    try {
+        if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+        }
+        const wakeUtterance = new SpeechSynthesisUtterance('');
+        wakeUtterance.lang = 'zh-TW';
+        wakeUtterance.volume = 0;
+        window.speechSynthesis.speak(wakeUtterance);
+    } catch (e) {}
+}
+window.unlockSpeechSynthesis = unlockSpeechSynthesis;
+
 function speakText(text) {
     VoiceQueue.enqueue(text);
 }
@@ -1698,14 +1712,66 @@ function getRouteSegmentBearing(pts, idx) {
 }
 
 // 進度鎖定追蹤器（前方滑動視窗 Sliding Window）：
-// 僅從目前 prevTrackIndex 往後搜尋一小段合理範圍（最多往後 30 個節點且沿線距離 150 公尺內），
-// 嚴禁搜尋整條路線全部節點，徹底防止「原路進出／巷口設終點 E、裡面繞圈」在巷口直接跳號到回程或終點
+// 初次進入「遵循路線」導航時決定起始進度索引：
+// 1. 起點 80m 內優先從起點端開始匹配（防止與回程重疊誤跳後段）
+// 2. 半路切入時僅從最接近的軌跡段起算，禁止直接跳至路線終點末端
+function findInitialFollowTrackIndex(pts, lng, lat, vehicleHeading, isMoving, cumMeters = null) {
+    if (!Array.isArray(pts) || pts.length === 0) return { trackIndex: 0, minDistMeters: Infinity };
+    const maxIdx = pts.length - 1;
+    const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+
+    // 情況 1：起點在 80 公尺內 -> 僅於起點前端 80 公尺視窗內匹配
+    if (distToStart <= 80) {
+        let bestIdx = 0;
+        let bestDist = distToStart;
+        for (let i = 0; i <= maxIdx; i++) {
+            const alongM = (Array.isArray(cumMeters) && cumMeters.length === pts.length)
+                ? (cumMeters[i] || 0)
+                : 0;
+            if (i > 1 && alongM > 80) break;
+            const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+            if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+            }
+        }
+        return { trackIndex: bestIdx, minDistMeters: bestDist };
+    }
+
+    // 情況 2：半路切入 -> 搜尋最接近軌跡段，但排除路線終點最末端（避免直接跳至終點）
+    const safeMaxInitialIdx = pts.length >= 15
+        ? Math.max(0, Math.min(maxIdx - 5, Math.floor(maxIdx * 0.9)))
+        : Math.max(0, maxIdx - 1);
+
+    let bestIdx = 0;
+    let bestScore = Infinity;
+    let bestDist = Infinity;
+    for (let i = 0; i <= safeMaxInitialIdx; i++) {
+        const d = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+        let penalty = 0;
+        if (isMoving) {
+            const segB = getRouteSegmentBearing(pts, i);
+            const angDiff = Math.abs(getAngleDiff(vehicleHeading, segB));
+            if (angDiff > 60) penalty += 35;
+        }
+        const score = d + penalty;
+        if (score < bestScore) {
+            bestScore = score;
+            bestIdx = i;
+            bestDist = d;
+        }
+    }
+    return { trackIndex: bestIdx, minDistMeters: bestDist };
+}
+
+// 僅從目前 prevTrackIndex 往前方合理視窗範圍（沿線約 220 公尺內、最多 60 個節點）順序搜尋下一進度點，
+// 嚴禁無限制全域搜尋跳躍至後半段重疊軌跡，防止折返或重複路口瞬間跳過中間語音點
 function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, isMoving, cumMeters = null) {
     if (!Array.isArray(pts) || pts.length === 0) return { trackIndex: 0, minDistMeters: Infinity };
     const maxIdx = pts.length - 1;
     const startIdx = Math.min(Math.max(0, prevTrackIndex), maxIdx);
-    const maxWindowNodeIdx = Math.min(maxIdx, startIdx + 30);
-    const MAX_WINDOW_ALONG_METERS = 150;
+    const maxWindowNodeIdx = Math.min(maxIdx, startIdx + 60);
+    const MAX_WINDOW_ALONG_METERS = 220;
 
     let bestLocalIdx = startIdx;
     let bestLocalScore = Infinity;
@@ -1719,7 +1785,7 @@ function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, is
             } else {
                 accumulatedAlongMeters += getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat) * 1000;
             }
-            // 至少允許檢查緊鄰的下一個節點 (startIdx + 1)，超過沿線 150 公尺則停止往後擴張視窗
+            // 至少允許檢查緊鄰的下一個節點 (startIdx + 1)，超過沿線 220 公尺則停止往後擴張視窗
             if (i > startIdx + 1 && accumulatedAlongMeters > MAX_WINDOW_ALONG_METERS) {
                 break;
             }
@@ -1740,8 +1806,8 @@ function computeNextTrackIndex(pts, prevTrackIndex, lng, lat, vehicleHeading, is
         }
     }
 
-    // 僅在車輛位於前方滑動視窗軌跡附近 (<= 35m) 時推進 currentTrackIndex，絕不全域跳號
-    if (bestLocalDist <= 35) {
+    // 僅在車輛位於前方滑動視窗軌跡附近 (<= 45m，容許現場 GPS 15~30m 飄移) 時順序推進 currentTrackIndex，絕不全域跳號
+    if (bestLocalDist <= 45) {
         return {
             trackIndex: Math.max(startIdx, bestLocalIdx),
             minDistMeters: bestLocalDist
@@ -1830,19 +1896,26 @@ function evaluateVoiceMarkersWithProgress({
     pts,
     cumMeters,
     currentTrackIndex,
+    prevTrackIndex = null,
     lng,
     lat,
     vehicleBearing,
-    onTriggerWake = false
+    onTriggerWake = false,
+    isFollowMode = false
 }) {
     if (!Array.isArray(events) || events.length === 0 || !Array.isArray(pts) || pts.length < 2) return;
     const maxIdx = pts.length - 1;
     const trackIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
+    const prevIdx = (typeof prevTrackIndex === 'number' && !isNaN(prevTrackIndex))
+        ? Math.min(Math.max(Math.floor(prevTrackIndex), 0), maxIdx)
+        : trackIdx;
     const currentTrackCumM = cumMeters[trackIdx] || 0;
     const currentSegBearing = getRouteSegmentBearing(pts, trackIdx);
 
     const lookAheadDist = Number(systemNavConfig.lookAheadDistMeters) || DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters;
-    const confirmDist = Number(systemNavConfig.confirmDistMeters) || DEFAULT_SYSTEM_CONFIG.confirmDistMeters;
+    const rawConfirmDist = Number(systemNavConfig.confirmDistMeters) || DEFAULT_SYSTEM_CONFIG.confirmDistMeters;
+    // 遵循導航模式確保至少 40 公尺容錯半徑，吸收現場 GPS 15~30 公尺飄移
+    const confirmDist = isFollowMode ? Math.max(rawConfirmDist, 40) : rawConfirmDist;
     const bearingTol = Number(systemNavConfig.bearingToleranceDeg) || DEFAULT_SYSTEM_CONFIG.bearingToleranceDeg;
     const lookAheadLabel = Math.round(lookAheadDist);
 
@@ -1856,16 +1929,25 @@ function evaluateVoiceMarkersWithProgress({
             ? ev.segmentBearing
             : getRouteSegmentBearing(pts, evIdx);
 
-        // --- 第二層：進入近距離確認半徑 (預設 45 公尺) 內觸發完整確認語音 ---
-        // 條件 1：車輛與標記點物理距離 <= confirmDist（且沿線距離不超過 confirmDist + 5）
-        const isWithinConfirmRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
-        // 條件 2：當前車輛行進方向與標記點所屬路段方向一致（誤差 ±bearingTol° 以內）
-        const bearingDiffConfirm = Math.abs(getAngleDiff(vehicleBearing, markerSegBearing));
-        const isConfirmDirectionAligned = (bearingDiffConfirm <= bearingTol);
-        // 條件 3：當前導航進度 currentTrackIndex 已推進至該標記點綁定之路線索引區間，且 played !== true
-        const isConfirmIndexInZone = (trackIdx <= evIdx + 12 && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+        // --- 第二層：近距離確認提醒（含語音開啟、關閉、注意點） ---
+        let shouldTriggerConfirm = false;
+        if (isFollowMode) {
+            // 雙重防呆觸發條件（擇一滿足即觸發，確保沿線經過絕不漏接）：
+            // A. 車輛實際座標進入容錯半徑（>= 40m），且位於該路段合理前後區間內（避免誤觸遠端重疊回程）
+            const enteredRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 25) && aheadRouteMeters >= -60);
+            // B. 路線進度索引已順序推進越過該提醒點所在軌跡位置（且該點尚未觸發過）
+            const passedByProgress = (prevIdx <= evIdx && trackIdx >= evIdx && (trackIdx - prevIdx) <= 60);
+            shouldTriggerConfirm = (enteredRadius || passedByProgress);
+        } else {
+            // 重播模式維持原有嚴格三條件
+            const isWithinConfirmRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+            const bearingDiffConfirm = Math.abs(getAngleDiff(vehicleBearing, markerSegBearing));
+            const isConfirmDirectionAligned = (bearingDiffConfirm <= bearingTol);
+            const isConfirmIndexInZone = (trackIdx <= evIdx + 12 && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+            shouldTriggerConfirm = (isWithinConfirmRadius && isConfirmDirectionAligned && isConfirmIndexInZone);
+        }
 
-        if (isWithinConfirmRadius && isConfirmDirectionAligned && isConfirmIndexInZone && ev.played !== true) {
+        if (shouldTriggerConfirm && ev.played !== true) {
             ev.played = true;
             ev.prePlayed = true;
             if (ev.sourceEvent) {
@@ -1894,8 +1976,11 @@ function evaluateVoiceMarkersWithProgress({
         // 條件 1：沿路線前方距離到達預警區間（且物理距離 > lookAheadLower 避免與第二層重疊）
         const isWithinLookAheadZone = (aheadRouteMeters <= lookAheadUpper && aheadRouteMeters > lookAheadLower && directDistMeters > lookAheadLower);
         // 條件 2：當前車輛行進方向與當前行駛路段（或標記點路段）方向一致（誤差 ±bearingTol° 以內）
+        const bearingDiffConfirm = Math.abs(getAngleDiff(vehicleBearing, markerSegBearing));
         const bearingDiffCurrentSeg = Math.abs(getAngleDiff(vehicleBearing, currentSegBearing));
-        const isLookAheadDirectionAligned = (bearingDiffCurrentSeg <= bearingTol || bearingDiffConfirm <= bearingTol);
+        const isLookAheadDirectionAligned = isFollowMode
+            ? (bearingDiffCurrentSeg <= Math.max(bearingTol, 60) || bearingDiffConfirm <= Math.max(bearingTol, 60))
+            : (bearingDiffCurrentSeg <= bearingTol || bearingDiffConfirm <= bearingTol);
         // 條件 3：currentTrackIndex 位於標記點前瞻索引區間（trackIdx < evIdx）且尚未播報
         const isLookAheadIndexInZone = (trackIdx < evIdx);
 

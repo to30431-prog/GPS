@@ -204,6 +204,11 @@ puckEl.style.pointerEvents = 'auto';
 puckEl.title = '點擊切換車款';
 
 let isMyVehicleMovingAnim = false;
+let vehicleMarker = null;
+let lastRecordedSpeedKmh = 0;
+let vehicleAnimFrameId = null;
+let vehicleVisualLngLat = [...lastKnownLngLat];
+let vehicleVisualHeading = currentHeading;
 
 function renderMyVehicleCarSvg() {
     if (typeof getCarSvg === 'function' && typeof getMyCarType === 'function') {
@@ -329,16 +334,9 @@ window.renderMyVehicleCarSvg = renderMyVehicleCarSvg;
 window.openCarModelPickerMenu = openCarModelPickerMenu;
 window.closeCarModelPickerMenu = closeCarModelPickerMenu;
 
-let vehicleMarker = null;
-let lastRecordedSpeedKmh = 0;
-
 // ==========================================
 // 🏎️ 車輛 Marker 補間動畫（requestAnimationFrame 平滑位移與轉向，消除一秒跳一格瞬移感）
 // ==========================================
-let vehicleAnimFrameId = null;
-let vehicleVisualLngLat = [...lastKnownLngLat];
-let vehicleVisualHeading = currentHeading;
-
 function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) {
     // 🛡️ 重播期間嚴禁真實 GPS 補間動畫介入移動黃色垃圾車 Marker
     if (isReplaying) {

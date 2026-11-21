@@ -1,0 +1,15 @@
+{
+  "name": "yingge-clean-route-assistant-pro-max",
+  "version": "3.29.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node --check server.js && node --check sw.js",
+    "lint": "node --check server.js && node --check sw.js && node --check src/config-state.js && node --check src/carModels.js && node --check src/map-core.js && node --check src/route-editor.js && node --check src/navigation.js && node --check src/firebase-fleet.js && node --check src/shared-pins.js && node --check src/firebase-auth.js && node --check src/ai-settings.js && node --check src/furniture-osrm.js && node --check src/main.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "express": "^5.3.0"
+  }
+}

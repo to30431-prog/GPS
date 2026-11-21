@@ -8555,14 +8555,15 @@ let allCloudFleetUsersMap = {};
 
 function isCurrentDeviceBlocked() {
     if (localUserPermissionRole === 'developer') return false;
-    return Boolean(myCloudUserProfile && myCloudUserProfile.isBlocked === true);
+    return Boolean(myCloudUserProfile && (myCloudUserProfile.isBlocked === true || myCloudUserProfile.blocked === true));
 }
 
 function isCurrentDevicePendingApproval() {
     if (localUserPermissionRole === 'developer') return false;
     if (!systemNavConfig.requireUserApproval) return false;
     if (!myCloudUserProfile) return true;
-    return myCloudUserProfile.isApproved !== true;
+    const approvedVal = (myCloudUserProfile.isApproved !== undefined) ? myCloudUserProfile.isApproved : myCloudUserProfile.approved;
+    return approvedVal !== true;
 }
 
 function isDeviceRestrictedByGatekeeper() {
@@ -8573,7 +8574,11 @@ function canCurrentUserManageBuildings() {
     if (localUserPermissionRole === 'developer' || localUserPermissionRole === 'manager') {
         return true;
     }
-    if (myCloudUserProfile && myCloudUserProfile.canManageBuildings === true && !myCloudUserProfile.isBlocked) {
+    if (
+        myCloudUserProfile &&
+        (myCloudUserProfile.canManageBuildings === true || myCloudUserProfile.canEditCommunity === true) &&
+        !(myCloudUserProfile.isBlocked === true || myCloudUserProfile.blocked === true)
+    ) {
         return true;
     }
     return false;
@@ -8659,7 +8664,8 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
                 displayName: cleanDisplayName,
                 lastActiveAt: now
             };
-            if (options.requestApproval === true && existing.isApproved !== true) {
+            const existingApproved = (existing.isApproved !== undefined) ? existing.isApproved : existing.approved;
+            if (options.requestApproval === true && existingApproved !== true) {
                 patchPayload.requestedAt = now;
             }
         } else {
@@ -8669,8 +8675,11 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
                 displayName: cleanDisplayName,
                 originalName: '',
                 isApproved: defaultApproved,
+                approved: defaultApproved,
                 isBlocked: false,
+                blocked: false,
                 canManageBuildings: false,
+                canEditCommunity: false,
                 createdAt: now,
                 lastActiveAt: now
             };
@@ -11237,74 +11246,532 @@ document.getElementById('btnRefreshFleetUsers')?.addEventListener('click', (e) =
     fetchAndRenderAdminFleetUsersList();
 });
 
-async function fetchAndRenderAdminFleetUsersList() {
-    if (isFetchingAdminFleetUsers) return;
-    isFetchingAdminFleetUsers = true;
+let pendingAdminFleetUsersRefresh = false;
+let adminUserToastTimer = null;
+
+function showAdminUserActionToast(message, tone = 'info') {
+    let toastEl = document.getElementById('adminUserActionToast');
+    const modalBox = document.querySelector('#adminSettingsModal > div') || document.body;
+    if (!toastEl) {
+        toastEl = document.createElement('div');
+        toastEl.id = 'adminUserActionToast';
+        modalBox.appendChild(toastEl);
+    }
+    const toneClasses = tone === 'danger'
+        ? 'bg-rose-600 text-white border-rose-400'
+        : tone === 'success'
+            ? 'bg-emerald-600 text-white border-emerald-400'
+            : 'bg-slate-900 text-white border-slate-700';
+
+    toastEl.className = `fixed top-16 left-1/2 -translate-x-1/2 z-[1400] px-4 py-2 rounded-xl border shadow-xl text-xs font-black tracking-wide transition-all duration-200 pointer-events-none ${toneClasses}`;
+    toastEl.textContent = message;
+    toastEl.classList.remove('hidden');
+
+    if (adminUserToastTimer) clearTimeout(adminUserToastTimer);
+    adminUserToastTimer = setTimeout(() => {
+        toastEl?.classList.add('hidden');
+    }, 2600);
+}
+
+function normalizeFleetUserRecord(devId, u, existingUser = null) {
+    const base = (existingUser && typeof existingUser === 'object') ? existingUser : {};
+    const raw = (u && typeof u === 'object') ? u : {};
+
+    const isBlockedVal = raw.isBlocked !== undefined
+        ? Boolean(raw.isBlocked)
+        : raw.blocked !== undefined
+            ? Boolean(raw.blocked)
+            : Boolean(base.isBlocked || base.blocked);
+
+    let isApprovedVal;
+    if (isBlockedVal) {
+        isApprovedVal = false;
+    } else if (raw.isApproved !== undefined) {
+        isApprovedVal = Boolean(raw.isApproved);
+    } else if (raw.approved !== undefined) {
+        isApprovedVal = Boolean(raw.approved);
+    } else if (base.isApproved !== undefined) {
+        isApprovedVal = Boolean(base.isApproved);
+    } else if (base.approved !== undefined) {
+        isApprovedVal = Boolean(base.approved);
+    } else {
+        isApprovedVal = true;
+    }
+
+    const canEditVal = isBlockedVal
+        ? false
+        : (raw.canManageBuildings !== undefined
+            ? Boolean(raw.canManageBuildings)
+            : raw.canEditCommunity !== undefined
+                ? Boolean(raw.canEditCommunity)
+                : Boolean(base.canManageBuildings || base.canEditCommunity));
+
+    const displayNameVal = String(raw.displayName || raw.name || base.displayName || '車隊隊員').trim() || '車隊隊員';
+    const originalNameVal = String(
+        raw.originalName !== undefined ? raw.originalName : (base.originalName || '')
+    ).trim();
+    const lastActiveVal = Number(raw.lastActiveAt || raw.updatedAt || base.lastActiveAt || raw.createdAt || base.createdAt || 0);
+    const createdAtVal = Number(raw.createdAt || base.createdAt || lastActiveVal || 0);
+
+    return {
+        deviceId: devId,
+        displayName: displayNameVal,
+        originalName: originalNameVal,
+        isApproved: isApprovedVal,
+        approved: isApprovedVal,
+        isBlocked: isBlockedVal,
+        blocked: isBlockedVal,
+        canManageBuildings: canEditVal,
+        canEditCommunity: canEditVal,
+        lastActiveAt: lastActiveVal,
+        createdAt: createdAtVal
+    };
+}
+
+function renderAdminFleetUsersCardsFromMap(mergedMap) {
     const listContainer = document.getElementById('adminUsersListContainer');
     const countSummaryEl = document.getElementById('adminUsersCountSummary');
     const pendingBadgeEl = document.getElementById('adminUsersPendingBadge');
+    const now = Date.now();
+
+    // 確保所有在 Firebase users / fleet_users 節點下的使用者紀錄（不論 canEditCommunity、approved 或 blocked 為 true 或 false）皆完整顯示，絕不過濾隱藏
+    const userList = Object.values(mergedMap || {}).filter(u => u && u.deviceId);
+
+    const ONLINE_HEARTBEAT_MS = 45 * 1000;
+    let onlineCount = 0;
+    let pendingCount = 0;
+
+    userList.forEach(u => {
+        const blocked = Boolean(u.isBlocked || u.blocked);
+        const approved = (u.isApproved !== undefined ? Boolean(u.isApproved) : Boolean(u.approved));
+        u.isOnline = !blocked && (now - Number(u.lastActiveAt || 0) <= ONLINE_HEARTBEAT_MS);
+        if (u.isOnline) onlineCount++;
+        if (!approved && !blocked) pendingCount++;
+    });
+
+    // 排序：1. 待核准優先 ➔ 2. 上線中優先 ➔ 3. 最後活躍時間由新到舊（同時間則以 deviceId 穩定排序避免跳動）
+    userList.sort((a, b) => {
+        const aBlocked = Boolean(a.isBlocked || a.blocked);
+        const bBlocked = Boolean(b.isBlocked || b.blocked);
+        const aPending = (!a.isApproved && !aBlocked) ? 1 : 0;
+        const bPending = (!b.isApproved && !bBlocked) ? 1 : 0;
+        if (aPending !== bPending) return bPending - aPending;
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        const timeDiff = (b.lastActiveAt || 0) - (a.lastActiveAt || 0);
+        if (timeDiff !== 0) return timeDiff;
+        return String(a.deviceId).localeCompare(String(b.deviceId));
+    });
+
+    if (countSummaryEl) {
+        countSummaryEl.textContent = `(共 ${userList.length} 人・🟢 上線 ${onlineCount}${pendingCount > 0 ? `・⏳ 待核准 ${pendingCount}` : ''})`;
+    }
+    if (pendingBadgeEl) {
+        if (pendingCount > 0) {
+            pendingBadgeEl.textContent = String(pendingCount);
+            pendingBadgeEl.classList.remove('hidden');
+        } else {
+            pendingBadgeEl.classList.add('hidden');
+        }
+    }
+
+    if (!listContainer) return;
+    listContainer.innerHTML = '';
+
+    if (userList.length === 0) {
+        listContainer.innerHTML = `
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs font-bold text-slate-400">
+                目前尚無車隊裝置連線紀錄
+            </div>
+        `;
+        return;
+    }
+
+    userList.forEach(user => {
+        const targetDeviceId = user.deviceId;
+        const isSelf = (targetDeviceId === fleetDeviceId);
+        const isBlocked = Boolean(user.isBlocked || user.blocked);
+        const isApproved = !isBlocked && (user.isApproved !== undefined ? Boolean(user.isApproved) : Boolean(user.approved));
+        const isPending = !isApproved && !isBlocked;
+        const canEditCommunity = !isBlocked && Boolean(user.canManageBuildings || user.canEditCommunity);
+
+        const card = document.createElement('div');
+        card.className = isBlocked
+            ? 'bg-rose-50/90 border-2 border-rose-300 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all'
+            : isPending
+                ? 'bg-amber-50/90 border-2 border-amber-400 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all'
+                : 'bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all';
+
+        // 計算最後活躍時間文字（絕不顯示任何裝置 ID 亂碼！）
+        const elapsedSec = Math.max(0, Math.floor((now - Number(user.lastActiveAt || 0)) / 1000));
+        let activeTimeLabel = '剛剛活躍';
+        if (!user.lastActiveAt) {
+            activeTimeLabel = '尚無心跳';
+        } else if (elapsedSec < 45) {
+            activeTimeLabel = '即時在線';
+        } else if (elapsedSec < 3600) {
+            activeTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))} 分鐘前`;
+        } else if (elapsedSec < 86400) {
+            activeTimeLabel = `${Math.floor(elapsedSec / 3600)} 小時前`;
+        } else {
+            activeTimeLabel = `${Math.floor(elapsedSec / 86400)} 天前`;
+        }
+
+        // 頂部資訊列：使用者自取顯示名稱 + 上線燈號 + 開發者單向原名標註（已整合移除右上角重複狀態標籤）
+        const topRow = document.createElement('div');
+        topRow.className = 'flex items-start justify-between gap-2';
+
+        const nameWrap = document.createElement('div');
+        nameWrap.className = 'min-w-0 flex-1';
+
+        const statusDotHtml = user.isOnline
+            ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🟢 上線中</span>`
+            : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">⚪ 離線 (${activeTimeLabel})</span>`;
+
+        const selfBadgeHtml = isSelf
+            ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 text-indigo-800">本機</span>`
+            : '';
+
+        const origNameBadgeHtml = user.originalName
+            ? `<div class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100/90 border border-amber-300 text-amber-950 text-[11px] font-black">
+                   <i class="fa-solid fa-tag text-amber-600 text-[10px]"></i>
+                   <span>原名：${escapeHtmlSafe(user.originalName)}</span>
+               </div>`
+            : `<div class="mt-1 text-[10px] font-bold text-slate-400">尚未標註原名（點下方「✏️ 標註／改原名」單向備註）</div>`;
+
+        nameWrap.innerHTML = `
+            <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
+                ${selfBadgeHtml}
+                ${statusDotHtml}
+            </div>
+            ${origNameBadgeHtml}
+        `;
+
+        topRow.appendChild(nameWrap);
+        card.appendChild(topRow);
+
+        // 中間控制列：1. 帳號存取狀態與「🚫 封鎖 / ✅ 解除封鎖」按鈕  2. 「🏢 社區標註授權」滑動開關 (Toggle Switch)
+        const togglesGrid = document.createElement('div');
+        togglesGrid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1.5 border-t border-slate-100';
+
+        // 控制項 A：整合單一明確狀態標籤 + 封鎖／解除封鎖／核准按鈕
+        const accessToggleBox = document.createElement('div');
+        accessToggleBox.className = isBlocked
+            ? 'bg-rose-100/80 border border-rose-300 rounded-xl p-2.5 flex items-center justify-between gap-2'
+            : isPending
+                ? 'bg-amber-100/70 border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2'
+                : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2';
+
+        const unifiedStatusHtml = isBlocked
+            ? `<div class="text-[11px] font-black text-rose-600">⛔ 已封鎖停用</div>`
+            : isPending
+                ? `<div class="text-[11px] font-black text-amber-600 animate-pulse">⏳ 待核准放行</div>`
+                : `<div class="text-[11px] font-black text-emerald-600">正常授權使用</div>`;
+
+        accessToggleBox.innerHTML = `
+            <div class="min-w-0">
+                <div class="text-[11px] font-black text-slate-800">帳號使用狀態</div>
+                ${unifiedStatusHtml}
+            </div>
+        `;
+
+        const accessActionsWrap = document.createElement('div');
+        accessActionsWrap.className = 'flex items-center gap-1 flex-shrink-0';
+
+        if (isPending) {
+            const approveBtn = document.createElement('button');
+            approveBtn.type = 'button';
+            approveBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap cursor-pointer';
+            approveBtn.textContent = '✓ 核准';
+            approveBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                approveBtn.disabled = true;
+                await updateCloudFleetUserFields(targetDeviceId, {
+                    isApproved: true,
+                    approved: true,
+                    isBlocked: false,
+                    blocked: false
+                });
+                showAdminUserActionToast(`✅ 已核准「${user.displayName}」授權使用`, 'success');
+            });
+            accessActionsWrap.appendChild(approveBtn);
+        }
+
+        const blockToggleBtn = document.createElement('button');
+        blockToggleBtn.type = 'button';
+        if (isBlocked) {
+            blockToggleBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap cursor-pointer';
+            blockToggleBtn.textContent = '✅ 解除封鎖';
+        } else {
+            blockToggleBtn.className = 'bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow-sm active:scale-95 whitespace-nowrap cursor-pointer';
+            blockToggleBtn.textContent = '🚫 封鎖';
+        }
+
+        blockToggleBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            blockToggleBtn.disabled = true;
+            try { navigator.vibrate?.(35); } catch (err) {}
+
+            if (isBlocked) {
+                // 再次點擊解除封鎖 -> 恢復正常授權使用
+                await updateCloudFleetUserFields(targetDeviceId, {
+                    isBlocked: false,
+                    blocked: false,
+                    isApproved: true,
+                    approved: true
+                });
+                showAdminUserActionToast('✅ 已解除封鎖，恢復正常授權使用', 'success');
+            } else {
+                // 點擊「🚫 封鎖」-> 將 blocked 設為 true，並同步將 approved 設為 false、canEditCommunity 設為 false
+                await updateCloudFleetUserFields(targetDeviceId, {
+                    isBlocked: true,
+                    blocked: true,
+                    isApproved: false,
+                    approved: false,
+                    canManageBuildings: false,
+                    canEditCommunity: false
+                });
+                // 同步清除該裝置在 live_fleet 的即時雷達座標節點
+                fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
+                    method: 'DELETE'
+                }, 4000).catch(() => {});
+                showAdminUserActionToast('⛔ 已封鎖該使用者', 'danger');
+            }
+        });
+
+        accessActionsWrap.appendChild(blockToggleBtn);
+        accessToggleBox.appendChild(accessActionsWrap);
+
+        // 控制項 B：社區標註授權 — 明顯滑動開關（Toggle Switch）＋ 即時切換明確狀態文字
+        const bldgToggleBox = document.createElement('div');
+        bldgToggleBox.className = canEditCommunity
+            ? 'bg-emerald-50/70 border border-emerald-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
+            : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
+
+        const bldgStatusTextHtml = canEditCommunity
+            ? `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 已授權可標註</div>`
+            : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 禁止標註（一般唯讀）</div>`;
+
+        const bldgTextCol = document.createElement('div');
+        bldgTextCol.className = 'min-w-0 flex-1';
+        bldgTextCol.innerHTML = `
+            <div class="text-[11px] font-black text-slate-800">🏢 社區標註授權</div>
+            ${bldgStatusTextHtml}
+        `;
+
+        const toggleSwitchBtn = document.createElement('button');
+        toggleSwitchBtn.type = 'button';
+        toggleSwitchBtn.setAttribute('role', 'switch');
+        toggleSwitchBtn.setAttribute('aria-checked', canEditCommunity ? 'true' : 'false');
+        toggleSwitchBtn.className = `admin-user-toggle-switch ${canEditCommunity ? 'is-on' : 'is-off'}`;
+        toggleSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
+
+        const handleToggleCommunityAuth = async (e) => {
+            e.stopPropagation();
+            if (toggleSwitchBtn.disabled) return;
+            toggleSwitchBtn.disabled = true;
+            try { navigator.vibrate?.(25); } catch (err) {}
+
+            const nextState = !canEditCommunity;
+            const patchPayload = {
+                canManageBuildings: nextState,
+                canEditCommunity: nextState
+            };
+            // 若開啟社區標註授權時該帳號原本被封鎖，一併解除封鎖並設為已核准
+            if (nextState && isBlocked) {
+                patchPayload.isBlocked = false;
+                patchPayload.blocked = false;
+                patchPayload.isApproved = true;
+                patchPayload.approved = true;
+            }
+
+            await updateCloudFleetUserFields(targetDeviceId, patchPayload);
+            showAdminUserActionToast(
+                nextState
+                    ? `✅ 已開啟「${user.displayName}」社區標註授權`
+                    : `🔒 已關閉「${user.displayName}」社區標註授權（一般唯讀）`,
+                nextState ? 'success' : 'info'
+            );
+        };
+
+        toggleSwitchBtn.addEventListener('click', handleToggleCommunityAuth);
+        bldgToggleBox.addEventListener('click', handleToggleCommunityAuth);
+
+        bldgToggleBox.appendChild(bldgTextCol);
+        bldgToggleBox.appendChild(toggleSwitchBtn);
+
+        togglesGrid.appendChild(accessToggleBox);
+        togglesGrid.appendChild(bldgToggleBox);
+        card.appendChild(togglesGrid);
+
+        // 內嵌單向原名編輯列（預設隱藏，點擊「✏️ 標註／改原名」展開，解決部分瀏覽器/WebView 阻擋 prompt 彈窗問題）
+        const inlineOrigEditRow = document.createElement('div');
+        inlineOrigEditRow.className = 'hidden bg-amber-50/90 border border-amber-300 rounded-xl p-2 space-y-1.5';
+        inlineOrigEditRow.innerHTML = `
+            <div class="text-[10px] font-black text-amber-900">✏️ 單向標註「${escapeHtmlSafe(user.displayName)}」的真實原名（僅開發者可見，不影響對方自取名稱）：</div>
+            <div class="flex items-center gap-1.5">
+                <input type="text" class="admin-inline-orig-input flex-1 min-w-0 bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="輸入原名備註（如：阿翔）" value="${escapeHtmlSafe(user.originalName || user.displayName || '')}">
+                <button type="button" class="admin-inline-orig-save bg-amber-600 hover:bg-amber-700 text-white font-black text-[11px] px-3 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap">儲存</button>
+                <button type="button" class="admin-inline-orig-cancel bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 font-bold text-[11px] px-2.5 py-1.5 rounded-lg active:scale-95 whitespace-nowrap">取消</button>
+            </div>
+        `;
+        card.appendChild(inlineOrigEditRow);
+
+        const origInputEl = inlineOrigEditRow.querySelector('.admin-inline-orig-input');
+        const origSaveBtn = inlineOrigEditRow.querySelector('.admin-inline-orig-save');
+        const origCancelBtn = inlineOrigEditRow.querySelector('.admin-inline-orig-cancel');
+
+        origSaveBtn?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const cleanOrig = (origInputEl?.value || '').trim();
+            origSaveBtn.disabled = true;
+            await updateCloudFleetUserFields(targetDeviceId, {
+                originalName: cleanOrig
+            });
+            showAdminUserActionToast(cleanOrig ? `🏷️ 已標註原名：${cleanOrig}` : '🏷️ 已清除原名標註', 'success');
+        });
+
+        origCancelBtn?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            inlineOrigEditRow.classList.add('hidden');
+        });
+
+        // 底部動作按鈕列：✏️ 標註／改原名（單向，僅開發者可見與可改） ＋ 🗑️ 刪除紀錄
+        const bottomActions = document.createElement('div');
+        bottomActions.className = 'flex items-center justify-between gap-2 pt-1';
+
+        const editOrigNameBtn = document.createElement('button');
+        editOrigNameBtn.type = 'button';
+        editOrigNameBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
+        editOrigNameBtn.innerHTML = '<span>✏️ 標註／改原名</span>';
+        editOrigNameBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isHidden = inlineOrigEditRow.classList.contains('hidden');
+            if (isHidden) {
+                inlineOrigEditRow.classList.remove('hidden');
+                setTimeout(() => {
+                    origInputEl?.focus();
+                    origInputEl?.select();
+                }, 50);
+            } else {
+                inlineOrigEditRow.classList.add('hidden');
+            }
+        });
+
+        const deleteRecordBtn = document.createElement('button');
+        deleteRecordBtn.type = 'button';
+        deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
+        deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
+        let deleteConfirmPending = false;
+        let deleteResetTimer = null;
+        deleteRecordBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!deleteConfirmPending) {
+                deleteConfirmPending = true;
+                deleteRecordBtn.className = 'bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer shadow';
+                deleteRecordBtn.innerHTML = '<span>⚠️ 再點一次確認刪除</span>';
+                if (deleteResetTimer) clearTimeout(deleteResetTimer);
+                deleteResetTimer = setTimeout(() => {
+                    deleteConfirmPending = false;
+                    deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
+                    deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
+                }, 3500);
+                return;
+            }
+            if (deleteResetTimer) clearTimeout(deleteResetTimer);
+            deleteRecordBtn.disabled = true;
+            deleteRecordBtn.innerHTML = '<span>刪除中...</span>';
+            try {
+                delete allCloudFleetUsersMap[targetDeviceId];
+                renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+                await Promise.all([
+                    fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
+                    fetchWithTimeout(`${FIREBASE_BASE_URL}/users/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
+                    fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
+                ]);
+                showAdminUserActionToast(`🗑️ 已刪除「${user.displayName}」的使用者紀錄`, 'info');
+            } finally {
+                await fetchAndRenderAdminFleetUsersList();
+            }
+        });
+
+        bottomActions.appendChild(editOrigNameBtn);
+        bottomActions.appendChild(deleteRecordBtn);
+        card.appendChild(bottomActions);
+
+        listContainer.appendChild(card);
+    });
+}
+
+async function fetchAndRenderAdminFleetUsersList() {
+    if (isFetchingAdminFleetUsers) {
+        pendingAdminFleetUsersRefresh = true;
+        return;
+    }
+    isFetchingAdminFleetUsers = true;
 
     try {
-        // 同時讀取 fleet_users 與 live_fleet，將目前有在雷達上的裝置也自動納管合併
-        const [usersRes, liveRes] = await Promise.all([
+        // 同時讀取 fleet_users、users（相容舊節點）與 live_fleet，確保所有使用者紀錄完整顯示不遺漏
+        const [usersRes, legacyUsersRes, liveRes] = await Promise.all([
             fetchWithTimeout(FLEET_USERS_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null),
+            fetchWithTimeout(`${FIREBASE_BASE_URL}/users.json`, { cache: 'no-store' }, 5000).catch(() => null),
             fetchWithTimeout(LIVE_FLEET_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null)
         ]);
 
         const rawUsers = (usersRes && usersRes.ok) ? (await usersRes.json() || {}) : {};
+        const rawLegacyUsers = (legacyUsersRes && legacyUsersRes.ok) ? (await legacyUsersRes.json() || {}) : {};
         const rawLive = (liveRes && liveRes.ok) ? (await liveRes.json() || {}) : {};
         const now = Date.now();
 
         const mergedMap = {};
-        if (rawUsers && typeof rawUsers === 'object') {
-            Object.entries(rawUsers).forEach(([devId, u]) => {
+
+        // 1. 先載入 users 節點（若有）
+        if (rawLegacyUsers && typeof rawLegacyUsers === 'object') {
+            Object.entries(rawLegacyUsers).forEach(([devId, u]) => {
                 if (!devId || !u || typeof u !== 'object') return;
-                mergedMap[devId] = {
-                    deviceId: devId,
-                    displayName: String(u.displayName || '未命名隊員').trim(),
-                    originalName: String(u.originalName || '').trim(),
-                    isApproved: u.isApproved !== false,
-                    isBlocked: Boolean(u.isBlocked),
-                    canManageBuildings: Boolean(u.canManageBuildings),
-                    lastActiveAt: Number(u.lastActiveAt || u.createdAt || 0),
-                    createdAt: Number(u.createdAt || 0)
-                };
+                mergedMap[devId] = normalizeFleetUserRecord(devId, u, allCloudFleetUsersMap[devId]);
             });
         }
 
-        // 若 live_fleet 中有尚未寫入 fleet_users 的線上裝置，自動合併並回寫至 fleet_users
+        // 2. 載入並合併 fleet_users 節點（不論 canEditCommunity/canManageBuildings、approved/isApproved 或 blocked/isBlocked 為 true 或 false 皆完整保留）
+        if (rawUsers && typeof rawUsers === 'object') {
+            Object.entries(rawUsers).forEach(([devId, u]) => {
+                if (!devId || !u || typeof u !== 'object') return;
+                mergedMap[devId] = normalizeFleetUserRecord(devId, u, mergedMap[devId] || allCloudFleetUsersMap[devId]);
+            });
+        }
+
+        // 3. 若 live_fleet 中有線上裝置，自動合併最新活躍時間與名稱並回寫至 fleet_users
         if (rawLive && typeof rawLive === 'object') {
             Object.entries(rawLive).forEach(([devId, liveInfo]) => {
                 if (!devId || !liveInfo || typeof liveInfo !== 'object') return;
                 const liveTs = Number(liveInfo.updatedAt || 0);
-                const liveName = String(liveInfo.name || '隊員').trim();
+                const liveName = String(liveInfo.name || '車隊隊員').trim();
                 if (mergedMap[devId]) {
                     if (liveTs > mergedMap[devId].lastActiveAt) {
                         mergedMap[devId].lastActiveAt = liveTs;
                     }
-                    if (liveName && (!mergedMap[devId].displayName || mergedMap[devId].displayName === '未命名隊員')) {
+                    if (liveName && (!mergedMap[devId].displayName || mergedMap[devId].displayName === '未命名隊員' || mergedMap[devId].displayName === '車隊隊員')) {
                         mergedMap[devId].displayName = liveName;
                     }
                 } else {
-                    mergedMap[devId] = {
-                        deviceId: devId,
+                    mergedMap[devId] = normalizeFleetUserRecord(devId, {
                         displayName: liveName || '車隊隊員',
                         originalName: '',
                         isApproved: true,
+                        approved: true,
                         isBlocked: false,
+                        blocked: false,
                         canManageBuildings: false,
+                        canEditCommunity: false,
                         lastActiveAt: liveTs || now,
                         createdAt: liveTs || now
-                    };
+                    }, allCloudFleetUsersMap[devId]);
+
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(devId)}.json`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            displayName: liveName || '車隊隊員',
-                            isApproved: true,
-                            isBlocked: false,
-                            lastActiveAt: liveTs || now
-                        })
+                        body: JSON.stringify(mergedMap[devId])
                     }, 4000).catch(() => {});
                 }
             });
@@ -11315,257 +11782,13 @@ async function fetchAndRenderAdminFleetUsersList() {
             myCloudUserProfile = mergedMap[fleetDeviceId];
         }
 
-        const userList = Object.values(mergedMap);
-        // 判斷「🟢 上線中 / ⚪ 離線」：距離最後心跳 <= 45 秒且未封鎖視為上線中
-        const ONLINE_HEARTBEAT_MS = 45 * 1000;
-        let onlineCount = 0;
-        let pendingCount = 0;
-
-        userList.forEach(u => {
-            u.isOnline = !u.isBlocked && (now - Number(u.lastActiveAt || 0) <= ONLINE_HEARTBEAT_MS);
-            if (u.isOnline) onlineCount++;
-            if (!u.isApproved && !u.isBlocked) pendingCount++;
-        });
-
-        // 排序：1. 待核准優先 ➔ 2. 上線中優先 ➔ 3. 最後活躍時間由新到舊
-        userList.sort((a, b) => {
-            const aPending = (!a.isApproved && !a.isBlocked) ? 1 : 0;
-            const bPending = (!b.isApproved && !b.isBlocked) ? 1 : 0;
-            if (aPending !== bPending) return bPending - aPending;
-            if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
-            return (b.lastActiveAt || 0) - (a.lastActiveAt || 0);
-        });
-
-        if (countSummaryEl) {
-            countSummaryEl.textContent = `(共 ${userList.length} 人・🟢 上線 ${onlineCount}${pendingCount > 0 ? `・⏳ 待核准 ${pendingCount}` : ''})`;
-        }
-        if (pendingBadgeEl) {
-            if (pendingCount > 0) {
-                pendingBadgeEl.textContent = String(pendingCount);
-                pendingBadgeEl.classList.remove('hidden');
-            } else {
-                pendingBadgeEl.classList.add('hidden');
-            }
-        }
-
-        if (!listContainer) return;
-        listContainer.innerHTML = '';
-
-        if (userList.length === 0) {
-            listContainer.innerHTML = `
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs font-bold text-slate-400">
-                    目前尚無車隊裝置連線紀錄
-                </div>
-            `;
-            return;
-        }
-
-        userList.forEach(user => {
-            const isSelf = (user.deviceId === fleetDeviceId);
-            const isPending = !user.isApproved && !user.isBlocked;
-
-            const card = document.createElement('div');
-            card.className = user.isBlocked
-                ? 'bg-rose-50/80 border-2 border-rose-300 rounded-2xl p-3 space-y-2.5 shadow-sm'
-                : isPending
-                    ? 'bg-amber-50/90 border-2 border-amber-400 rounded-2xl p-3 space-y-2.5 shadow-sm'
-                    : 'bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5 shadow-sm';
-
-            // 計算最後活躍時間文字（不顯示任何裝置 ID 亂碼！）
-            const elapsedSec = Math.max(0, Math.floor((now - Number(user.lastActiveAt || 0)) / 1000));
-            let activeTimeLabel = '剛剛活躍';
-            if (!user.lastActiveAt) {
-                activeTimeLabel = '尚無心跳';
-            } else if (elapsedSec < 45) {
-                activeTimeLabel = '即時在線';
-            } else if (elapsedSec < 3600) {
-                activeTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))} 分鐘前`;
-            } else if (elapsedSec < 86400) {
-                activeTimeLabel = `${Math.floor(elapsedSec / 3600)} 小時前`;
-            } else {
-                activeTimeLabel = `${Math.floor(elapsedSec / 86400)} 天前`;
-            }
-
-            // 頂部資訊列：上線燈號 + 使用者自取顯示名稱 + 開發者單向原名標註（絕不顯示裝置 ID 亂碼）
-            const topRow = document.createElement('div');
-            topRow.className = 'flex items-start justify-between gap-2';
-
-            const nameWrap = document.createElement('div');
-            nameWrap.className = 'min-w-0 flex-1';
-
-            const statusDotHtml = user.isOnline
-                ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🟢 上線中</span>`
-                : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">⚪ 離線 (${activeTimeLabel})</span>`;
-
-            const selfBadgeHtml = isSelf
-                ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 text-indigo-800">本機</span>`
-                : '';
-
-            const origNameBadgeHtml = user.originalName
-                ? `<div class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100/90 border border-amber-300 text-amber-950 text-[11px] font-black">
-                       <i class="fa-solid fa-tag text-amber-600 text-[10px]"></i>
-                       <span>原名：${escapeHtmlSafe(user.originalName)}</span>
-                   </div>`
-                : `<div class="mt-1 text-[10px] font-bold text-slate-400">尚未標註原名（點右方「✏️ 標註／改原名」單向備註）</div>`;
-
-            nameWrap.innerHTML = `
-                <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
-                    ${selfBadgeHtml}
-                    ${statusDotHtml}
-                </div>
-                ${origNameBadgeHtml}
-            `;
-
-            // 右上角狀態徽章
-            const stateBadge = document.createElement('div');
-            stateBadge.className = 'flex flex-col items-end gap-1 flex-shrink-0';
-            if (user.isBlocked) {
-                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white">🚫 已封鎖鎖定</span>`;
-            } else if (isPending) {
-                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">⏳ 待核准申請</span>`;
-            } else {
-                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200">✓ 准許使用</span>`;
-            }
-
-            topRow.appendChild(nameWrap);
-            topRow.appendChild(stateBadge);
-            card.appendChild(topRow);
-
-            // 中間開關列：1. 准許使用／封鎖開關  2. 社區標註授權開關
-            const togglesGrid = document.createElement('div');
-            togglesGrid.className = 'grid grid-cols-2 gap-2 pt-1 border-t border-slate-100';
-
-            // 控制項 A：准許使用／封鎖開關
-            const accessToggleBox = document.createElement('div');
-            accessToggleBox.className = 'bg-slate-50 border border-slate-200 rounded-xl p-2 flex items-center justify-between gap-1.5';
-            const isAllowedActive = user.isApproved && !user.isBlocked;
-            accessToggleBox.innerHTML = `
-                <div class="min-w-0">
-                    <div class="text-[11px] font-black text-slate-800">准許使用／封鎖</div>
-                    <div class="text-[10px] font-bold ${user.isBlocked ? 'text-rose-600' : isPending ? 'text-amber-600' : 'text-emerald-600'}">
-                        ${user.isBlocked ? '已封鎖(鎖定畫面)' : isPending ? '待核准放行' : '正常授權使用'}
-                    </div>
-                </div>
-            `;
-            const accessBtn = document.createElement('button');
-            accessBtn.type = 'button';
-            if (isPending) {
-                accessBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap';
-                accessBtn.textContent = '✓ 核准';
-            } else if (user.isBlocked) {
-                accessBtn.className = 'bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap';
-                accessBtn.textContent = '解除封鎖';
-            } else {
-                accessBtn.className = 'bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 text-[11px] font-black px-2.5 py-1.5 rounded-lg active:scale-95 whitespace-nowrap';
-                accessBtn.textContent = '🚫 封鎖';
-            }
-            accessBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                accessBtn.disabled = true;
-                if (isPending || user.isBlocked) {
-                    // 核准或解除封鎖 -> 准許使用
-                    await updateCloudFleetUserFields(user.deviceId, {
-                        isApproved: true,
-                        isBlocked: false
-                    });
-                } else {
-                    // 封鎖此裝置 -> 即時鎖定對方畫面並清除其 live_fleet 雷達節點
-                    if (isSelf && !confirm('⚠️ 這是您目前操作的本機裝置，確定要測試封鎖嗎？')) {
-                        accessBtn.disabled = false;
-                        return;
-                    }
-                    await updateCloudFleetUserFields(user.deviceId, {
-                        isBlocked: true
-                    });
-                    // 立即同步刪除該裝置在 live_fleet 的廣播節點
-                    fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, {
-                        method: 'DELETE'
-                    }, 4000).catch(() => {});
-                }
-                await fetchAndRenderAdminFleetUsersList();
-            });
-            accessToggleBox.appendChild(accessBtn);
-
-            // 控制項 B：社區標註授權開關
-            const bldgToggleBox = document.createElement('label');
-            bldgToggleBox.className = 'bg-slate-50 border border-slate-200 rounded-xl p-2 flex items-center justify-between gap-1.5 cursor-pointer';
-            bldgToggleBox.innerHTML = `
-                <div class="min-w-0">
-                    <div class="text-[11px] font-black text-slate-800">🏢 社區標註授權</div>
-                    <div class="text-[10px] font-bold ${user.canManageBuildings ? 'text-orange-600' : 'text-slate-400'}">
-                        ${user.canManageBuildings ? '可新增/改/刪社區' : '一般唯讀'}
-                    </div>
-                </div>
-            `;
-            const bldgCheckbox = document.createElement('input');
-            bldgCheckbox.type = 'checkbox';
-            bldgCheckbox.checked = Boolean(user.canManageBuildings);
-            bldgCheckbox.className = 'w-5 h-5 accent-orange-600 rounded cursor-pointer flex-shrink-0';
-            bldgCheckbox.addEventListener('change', async (e) => {
-                e.stopPropagation();
-                bldgCheckbox.disabled = true;
-                await updateCloudFleetUserFields(user.deviceId, {
-                    canManageBuildings: Boolean(bldgCheckbox.checked)
-                });
-                await fetchAndRenderAdminFleetUsersList();
-            });
-            bldgToggleBox.appendChild(bldgCheckbox);
-
-            togglesGrid.appendChild(accessToggleBox);
-            togglesGrid.appendChild(bldgToggleBox);
-            card.appendChild(togglesGrid);
-
-            // 底部動作按鈕列：✏️ 標註／改原名（單向，僅開發者可見與可改） ＋ 🗑️ 刪除紀錄
-            const bottomActions = document.createElement('div');
-            bottomActions.className = 'flex items-center justify-between gap-2 pt-1';
-
-            const editOrigNameBtn = document.createElement('button');
-            editOrigNameBtn.type = 'button';
-            editOrigNameBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1';
-            editOrigNameBtn.innerHTML = '<span>✏️ 標註／改原名</span>';
-            editOrigNameBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const currentOrig = user.originalName || '';
-                const inputVal = prompt(
-                    `✏️ 單向標註「${user.displayName}」的真實原名：\n（僅開發者可見，絕不覆蓋對方自己取的顯示名稱；對方後續改暱稱時仍會保留此原名對照）`,
-                    currentOrig || user.displayName
-                );
-                if (inputVal === null) return;
-                const cleanOrig = inputVal.trim();
-                await updateCloudFleetUserFields(user.deviceId, {
-                    originalName: cleanOrig
-                });
-                await fetchAndRenderAdminFleetUsersList();
-            });
-
-            const deleteRecordBtn = document.createElement('button');
-            deleteRecordBtn.type = 'button';
-            deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1';
-            deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
-            deleteRecordBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const label = user.originalName ? `${user.displayName}（原名：${user.originalName}）` : user.displayName;
-                if (!confirm(`確定要刪除「${label}」的使用者紀錄嗎？`)) return;
-                deleteRecordBtn.disabled = true;
-                try {
-                    await Promise.all([
-                        fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
-                        fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
-                    ]);
-                } finally {
-                    await fetchAndRenderAdminFleetUsersList();
-                }
-            });
-
-            bottomActions.appendChild(editOrigNameBtn);
-            bottomActions.appendChild(deleteRecordBtn);
-            card.appendChild(bottomActions);
-
-            listContainer.appendChild(card);
-        });
+        renderAdminFleetUsersCardsFromMap(mergedMap);
     } finally {
         isFetchingAdminFleetUsers = false;
+        if (pendingAdminFleetUsersRefresh) {
+            pendingAdminFleetUsersRefresh = false;
+            fetchAndRenderAdminFleetUsersList();
+        }
     }
 }
 
@@ -11580,20 +11803,57 @@ function escapeHtmlSafe(str) {
 
 async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
     if (!targetDeviceId || !patchFields || typeof patchFields !== 'object') return;
+    const now = Date.now();
+    const existingRecord = allCloudFleetUsersMap[targetDeviceId] || {};
+
+    // 建立局部更新欄位，同時保留既有 displayName / originalName / lastActiveAt，絕不覆蓋或遺失任何原有欄位
+    const syncedPatch = {
+        ...(existingRecord.displayName ? { displayName: existingRecord.displayName } : {}),
+        ...(existingRecord.originalName !== undefined ? { originalName: existingRecord.originalName } : {}),
+        ...(existingRecord.lastActiveAt ? { lastActiveAt: existingRecord.lastActiveAt } : {}),
+        ...(existingRecord.createdAt ? { createdAt: existingRecord.createdAt } : {}),
+        ...patchFields,
+        updatedByAdminAt: now
+    };
+
+    // 同步雙命名欄位（canManageBuildings <-> canEditCommunity、isApproved <-> approved、isBlocked <-> blocked）
+    if (patchFields.canManageBuildings !== undefined || patchFields.canEditCommunity !== undefined) {
+        const val = Boolean(patchFields.canManageBuildings !== undefined ? patchFields.canManageBuildings : patchFields.canEditCommunity);
+        syncedPatch.canManageBuildings = val;
+        syncedPatch.canEditCommunity = val;
+    }
+    if (patchFields.isApproved !== undefined || patchFields.approved !== undefined) {
+        const val = Boolean(patchFields.isApproved !== undefined ? patchFields.isApproved : patchFields.approved);
+        syncedPatch.isApproved = val;
+        syncedPatch.approved = val;
+    }
+    if (patchFields.isBlocked !== undefined || patchFields.blocked !== undefined) {
+        const val = Boolean(patchFields.isBlocked !== undefined ? patchFields.isBlocked : patchFields.blocked);
+        syncedPatch.isBlocked = val;
+        syncedPatch.blocked = val;
+    }
+
+    // 1. 立即更新記憶體中的使用者狀態並重新渲染列表（Optimistic UI，確保卡片絕不消失且狀態秒級切換）
+    allCloudFleetUsersMap[targetDeviceId] = normalizeFleetUserRecord(targetDeviceId, syncedPatch, existingRecord);
+    if (targetDeviceId === fleetDeviceId) {
+        myCloudUserProfile = allCloudFleetUsersMap[targetDeviceId];
+        syncAdminCurrentRoleBadgeUI();
+        evaluateAndRenderAccessGateOverlay();
+    }
+    renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+
+    // 2. 背景發送 Firebase PATCH (update) 局部更新欄位
     try {
         await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                ...patchFields,
-                updatedByAdminAt: Date.now()
-            })
+            body: JSON.stringify(syncedPatch)
         }, 5000);
         if (targetDeviceId === fleetDeviceId) {
             await checkMyFleetUserAccessStatus();
         }
     } catch (e) {
-        alert('⚠️ 更新使用者權限失敗，請檢查網路狀態！');
+        showAdminUserActionToast('⚠️ 更新使用者權限失敗，請檢查網路狀態！', 'danger');
     }
 }
 

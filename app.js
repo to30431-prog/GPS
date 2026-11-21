@@ -8523,7 +8523,8 @@ window.setMode = function(sec, meters, text) {
 // ==========================================
 const LIVE_FLEET_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/live_fleet';
 const LIVE_FLEET_ALL_URL = `${LIVE_FLEET_BASE_URL}.json`;
-const FLEET_USERS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/fleet_users';
+// 使用 Firebase RTDB 已開放讀寫權限的 /system_config/users 作為正式使用者權限節點（並同步寫入 live_fleet/{uid} 確保多端點一致）
+const FLEET_USERS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/system_config/users';
 const FLEET_USERS_ALL_URL = `${FLEET_USERS_BASE_URL}.json`;
 const SYSTEM_CONFIG_URL = `${FIREBASE_BASE_URL}/system_config.json`;
 const DEFAULT_RADAR_INTERVAL_SEC = 5;
@@ -8555,14 +8556,14 @@ let allCloudFleetUsersMap = {};
 
 function isCurrentDeviceBlocked() {
     if (localUserPermissionRole === 'developer') return false;
-    return Boolean(myCloudUserProfile && (myCloudUserProfile.isBlocked === true || myCloudUserProfile.blocked === true));
+    return Boolean(myCloudUserProfile && (myCloudUserProfile.blocked === true || myCloudUserProfile.isBlocked === true));
 }
 
 function isCurrentDevicePendingApproval() {
     if (localUserPermissionRole === 'developer') return false;
     if (!systemNavConfig.requireUserApproval) return false;
     if (!myCloudUserProfile) return true;
-    const approvedVal = (myCloudUserProfile.isApproved !== undefined) ? myCloudUserProfile.isApproved : myCloudUserProfile.approved;
+    const approvedVal = (myCloudUserProfile.approved !== undefined) ? myCloudUserProfile.approved : myCloudUserProfile.isApproved;
     return approvedVal !== true;
 }
 
@@ -8576,8 +8577,8 @@ function canCurrentUserManageBuildings() {
     }
     if (
         myCloudUserProfile &&
-        (myCloudUserProfile.canManageBuildings === true || myCloudUserProfile.canEditCommunity === true) &&
-        !(myCloudUserProfile.isBlocked === true || myCloudUserProfile.blocked === true)
+        (myCloudUserProfile.canEditCommunity === true || myCloudUserProfile.canManageBuildings === true) &&
+        !(myCloudUserProfile.blocked === true || myCloudUserProfile.isBlocked === true)
     ) {
         return true;
     }
@@ -8646,7 +8647,7 @@ function openFleetUserNameModal(isInitial) {
     setTimeout(() => fleetUserNameInput.focus(), 100);
 }
 
-// 同步本機使用者資料至 Firebase fleet_users/{deviceId}（嚴格使用 PATCH 只更新 displayName 與 lastActiveAt，絕不覆蓋開發者單向標註的 originalName 或權限欄位）
+// 同步本機使用者資料至 Firebase system_config/users/{deviceId}（嚴格使用 PATCH 只更新 displayName 與 lastActiveAt，絕不覆蓋開發者設定的 canEditCommunity、originalName 或權限欄位）
 async function syncMyFleetUserRecordToCloud(options = {}) {
     if (!fleetDeviceId || !navigator.onLine) return null;
     const cleanDisplayName = (options.displayName !== undefined ? String(options.displayName) : fleetUserName).trim();
@@ -8664,32 +8665,36 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
                 displayName: cleanDisplayName,
                 lastActiveAt: now
             };
-            const existingApproved = (existing.isApproved !== undefined) ? existing.isApproved : existing.approved;
+            const existingApproved = (existing.approved !== undefined) ? existing.approved : existing.isApproved;
             if (options.requestApproval === true && existingApproved !== true) {
                 patchPayload.requestedAt = now;
             }
         } else {
-            // 新裝置首次建立紀錄：若全站門禁開啟且非開發者，預設 isApproved: false（待核准）；否則預設 isApproved: true
+            // 新裝置首次建立紀錄：若全站門禁開啟且非開發者，預設 approved: false（待核准）；否則預設 approved: true
             const defaultApproved = (localUserPermissionRole === 'developer') || !systemNavConfig.requireUserApproval;
             patchPayload = {
                 displayName: cleanDisplayName,
                 originalName: '',
-                isApproved: defaultApproved,
                 approved: defaultApproved,
-                isBlocked: false,
+                isApproved: defaultApproved,
                 blocked: false,
-                canManageBuildings: false,
+                isBlocked: false,
                 canEditCommunity: false,
+                canManageBuildings: false,
                 createdAt: now,
-                lastActiveAt: now
+                lastActiveAt: now,
+                updatedAt: now
             };
         }
 
-        await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+        const writeRes = await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(patchPayload)
         }, 4500);
+        if (!writeRes.ok) {
+            throw new Error(`HTTP ${writeRes.status}`);
+        }
 
         myCloudUserProfile = {
             ...(existing && typeof existing === 'object' ? existing : {}),
@@ -8717,7 +8722,7 @@ function saveFleetUserNameFromModal() {
     syncFleetUserNameUI();
     fleetUserNameModal.classList.add('hidden');
 
-    // 同步更新雲端 fleet_users 的 displayName（絕不影響開發者標註的 originalName）
+    // 同步更新雲端使用者的 displayName（絕不影響開發者標註的 originalName 或 canEditCommunity）
     syncMyFleetUserRecordToCloud({ displayName: fleetUserName, requestApproval: true }).then(() => {
         if (isDeviceRestrictedByGatekeeper()) {
             if (typeof evaluateAndRenderAccessGateOverlay === 'function') {
@@ -8789,13 +8794,14 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     };
 
     try {
+        // 重要：使用 PATCH 而非 PUT，避免覆蓋 live_fleet/{deviceId} 上的 canEditCommunity / originalName 等擴充屬性
         await fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
-            method: 'PUT',
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             keepalive: true
         }, 5000);
-        // 順便每 25 秒更新一次 fleet_users 的 lastActiveAt 與 displayName（供開發者後台顯示 🟢 上線中 / ⚪ 離線）
+        // 順便每 25 秒更新一次 system_config/users 的 lastActiveAt 與 displayName（僅局部更新，絕不覆蓋 canEditCommunity）
         if (!myCloudUserProfile || (now - Number(myCloudUserProfile.lastActiveAt || 0) >= 25000)) {
             fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
                 method: 'PATCH',
@@ -11207,14 +11213,15 @@ async function saveAdminUserGateSettingsToCloud() {
         saveBtn.textContent = '同步中...';
     }
     try {
-        await fetchWithTimeout(SYSTEM_CONFIG_URL, {
-            method: 'PUT',
+        const res = await fetchWithTimeout(SYSTEM_CONFIG_URL, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...systemNavConfig,
                 updatedAt: Date.now()
             })
         }, 5000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         if (saveBtn) {
             saveBtn.textContent = '✓ 已同步';
             setTimeout(() => {
@@ -11277,34 +11284,37 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
     const base = (existingUser && typeof existingUser === 'object') ? existingUser : {};
     const raw = (u && typeof u === 'object') ? u : {};
 
-    const isBlockedVal = raw.isBlocked !== undefined
-        ? Boolean(raw.isBlocked)
-        : raw.blocked !== undefined
-            ? Boolean(raw.blocked)
-            : Boolean(base.isBlocked || base.blocked);
+    // 統一優先讀取標準欄位 blocked / approved / canEditCommunity（並相容舊欄位 isBlocked / isApproved / canManageBuildings）
+    const isBlockedVal = raw.blocked !== undefined
+        ? Boolean(raw.blocked)
+        : raw.isBlocked !== undefined
+            ? Boolean(raw.isBlocked)
+            : Boolean(base.blocked || base.isBlocked);
 
     let isApprovedVal;
     if (isBlockedVal) {
         isApprovedVal = false;
-    } else if (raw.isApproved !== undefined) {
-        isApprovedVal = Boolean(raw.isApproved);
     } else if (raw.approved !== undefined) {
         isApprovedVal = Boolean(raw.approved);
-    } else if (base.isApproved !== undefined) {
-        isApprovedVal = Boolean(base.isApproved);
+    } else if (raw.isApproved !== undefined) {
+        isApprovedVal = Boolean(raw.isApproved);
     } else if (base.approved !== undefined) {
         isApprovedVal = Boolean(base.approved);
+    } else if (base.isApproved !== undefined) {
+        isApprovedVal = Boolean(base.isApproved);
     } else {
         isApprovedVal = true;
     }
 
     const canEditVal = isBlockedVal
         ? false
-        : (raw.canManageBuildings !== undefined
-            ? Boolean(raw.canManageBuildings)
-            : raw.canEditCommunity !== undefined
-                ? Boolean(raw.canEditCommunity)
-                : Boolean(base.canManageBuildings || base.canEditCommunity));
+        : (raw.canEditCommunity !== undefined
+            ? Boolean(raw.canEditCommunity)
+            : raw.canManageBuildings !== undefined
+                ? Boolean(raw.canManageBuildings)
+                : (base.canEditCommunity !== undefined
+                    ? Boolean(base.canEditCommunity)
+                    : Boolean(base.canManageBuildings)));
 
     const displayNameVal = String(raw.displayName || raw.name || base.displayName || '車隊隊員').trim() || '車隊隊員';
     const originalNameVal = String(
@@ -11312,19 +11322,21 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
     ).trim();
     const lastActiveVal = Number(raw.lastActiveAt || raw.updatedAt || base.lastActiveAt || raw.createdAt || base.createdAt || 0);
     const createdAtVal = Number(raw.createdAt || base.createdAt || lastActiveVal || 0);
+    const updatedAtVal = Number(raw.updatedAt || raw.updatedByAdminAt || base.updatedAt || lastActiveVal || 0);
 
     return {
         deviceId: devId,
         displayName: displayNameVal,
         originalName: originalNameVal,
-        isApproved: isApprovedVal,
         approved: isApprovedVal,
-        isBlocked: isBlockedVal,
+        isApproved: isApprovedVal,
         blocked: isBlockedVal,
-        canManageBuildings: canEditVal,
+        isBlocked: isBlockedVal,
         canEditCommunity: canEditVal,
+        canManageBuildings: canEditVal,
         lastActiveAt: lastActiveVal,
-        createdAt: createdAtVal
+        createdAt: createdAtVal,
+        updatedAt: updatedAtVal
     };
 }
 
@@ -11334,7 +11346,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     const pendingBadgeEl = document.getElementById('adminUsersPendingBadge');
     const now = Date.now();
 
-    // 確保所有在 Firebase users / fleet_users 節點下的使用者紀錄（不論 canEditCommunity、approved 或 blocked 為 true 或 false）皆完整顯示，絕不過濾隱藏
+    // 確保所有在 Firebase 使用者節點下的紀錄（不論 canEditCommunity、approved 或 blocked 為 true 或 false）皆完整顯示，絕不過濾隱藏
     const userList = Object.values(mergedMap || {}).filter(u => u && u.deviceId);
 
     const ONLINE_HEARTBEAT_MS = 45 * 1000;
@@ -11342,8 +11354,8 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     let pendingCount = 0;
 
     userList.forEach(u => {
-        const blocked = Boolean(u.isBlocked || u.blocked);
-        const approved = (u.isApproved !== undefined ? Boolean(u.isApproved) : Boolean(u.approved));
+        const blocked = Boolean(u.blocked !== undefined ? u.blocked : u.isBlocked);
+        const approved = (u.approved !== undefined ? Boolean(u.approved) : Boolean(u.isApproved));
         u.isOnline = !blocked && (now - Number(u.lastActiveAt || 0) <= ONLINE_HEARTBEAT_MS);
         if (u.isOnline) onlineCount++;
         if (!approved && !blocked) pendingCount++;
@@ -11351,10 +11363,12 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
     // 排序：1. 待核准優先 ➔ 2. 上線中優先 ➔ 3. 最後活躍時間由新到舊（同時間則以 deviceId 穩定排序避免跳動）
     userList.sort((a, b) => {
-        const aBlocked = Boolean(a.isBlocked || a.blocked);
-        const bBlocked = Boolean(b.isBlocked || b.blocked);
-        const aPending = (!a.isApproved && !aBlocked) ? 1 : 0;
-        const bPending = (!b.isApproved && !bBlocked) ? 1 : 0;
+        const aBlocked = Boolean(a.blocked !== undefined ? a.blocked : a.isBlocked);
+        const bBlocked = Boolean(b.blocked !== undefined ? b.blocked : b.isBlocked);
+        const aApproved = (a.approved !== undefined ? Boolean(a.approved) : Boolean(a.isApproved));
+        const bApproved = (b.approved !== undefined ? Boolean(b.approved) : Boolean(b.isApproved));
+        const aPending = (!aApproved && !aBlocked) ? 1 : 0;
+        const bPending = (!bApproved && !bBlocked) ? 1 : 0;
         if (aPending !== bPending) return bPending - aPending;
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
         const timeDiff = (b.lastActiveAt || 0) - (a.lastActiveAt || 0);
@@ -11389,10 +11403,13 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     userList.forEach(user => {
         const targetDeviceId = user.deviceId;
         const isSelf = (targetDeviceId === fleetDeviceId);
-        const isBlocked = Boolean(user.isBlocked || user.blocked);
-        const isApproved = !isBlocked && (user.isApproved !== undefined ? Boolean(user.isApproved) : Boolean(user.approved));
+        // 統一讀取與寫入完全相同的欄位（canEditCommunity / blocked / approved）
+        const isBlocked = Boolean(user.blocked !== undefined ? user.blocked : user.isBlocked);
+        const isApproved = !isBlocked && (user.approved !== undefined ? Boolean(user.approved) : Boolean(user.isApproved));
         const isPending = !isApproved && !isBlocked;
-        const canEditCommunity = !isBlocked && Boolean(user.canManageBuildings || user.canEditCommunity);
+        const canEditCommunity = !isBlocked && Boolean(
+            user.canEditCommunity !== undefined ? user.canEditCommunity : user.canManageBuildings
+        );
 
         const card = document.createElement('div');
         card.className = isBlocked
@@ -11486,13 +11503,15 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             approveBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 approveBtn.disabled = true;
-                await updateCloudFleetUserFields(targetDeviceId, {
-                    isApproved: true,
+                const ok = await updateCloudFleetUserFields(targetDeviceId, {
                     approved: true,
-                    isBlocked: false,
-                    blocked: false
+                    isApproved: true,
+                    blocked: false,
+                    isBlocked: false
                 });
-                showAdminUserActionToast(`✅ 已核准「${user.displayName}」授權使用`, 'success');
+                if (ok) {
+                    showAdminUserActionToast(`✅ 已核准「${user.displayName}」授權使用`, 'success');
+                }
             });
             accessActionsWrap.appendChild(approveBtn);
         }
@@ -11514,28 +11533,32 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
             if (isBlocked) {
                 // 再次點擊解除封鎖 -> 恢復正常授權使用
-                await updateCloudFleetUserFields(targetDeviceId, {
-                    isBlocked: false,
+                const ok = await updateCloudFleetUserFields(targetDeviceId, {
                     blocked: false,
-                    isApproved: true,
-                    approved: true
+                    isBlocked: false,
+                    approved: true,
+                    isApproved: true
                 });
-                showAdminUserActionToast('✅ 已解除封鎖，恢復正常授權使用', 'success');
+                if (ok) {
+                    showAdminUserActionToast('✅ 已解除封鎖，恢復正常授權使用', 'success');
+                }
             } else {
                 // 點擊「🚫 封鎖」-> 將 blocked 設為 true，並同步將 approved 設為 false、canEditCommunity 設為 false
-                await updateCloudFleetUserFields(targetDeviceId, {
-                    isBlocked: true,
+                const ok = await updateCloudFleetUserFields(targetDeviceId, {
                     blocked: true,
-                    isApproved: false,
+                    isBlocked: true,
                     approved: false,
-                    canManageBuildings: false,
-                    canEditCommunity: false
+                    isApproved: false,
+                    canEditCommunity: false,
+                    canManageBuildings: false
                 });
-                // 同步清除該裝置在 live_fleet 的即時雷達座標節點
-                fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
-                    method: 'DELETE'
-                }, 4000).catch(() => {});
-                showAdminUserActionToast('⛔ 已封鎖該使用者', 'danger');
+                if (ok) {
+                    // 同步清除該裝置在 live_fleet 的即時雷達座標節點
+                    fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
+                        method: 'DELETE'
+                    }, 4000).catch(() => {});
+                    showAdminUserActionToast('⛔ 已封鎖該使用者', 'danger');
+                }
             }
         });
 
@@ -11574,24 +11597,27 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
             const nextState = !canEditCommunity;
             const patchPayload = {
-                canManageBuildings: nextState,
-                canEditCommunity: nextState
+                canEditCommunity: Boolean(nextState),
+                canManageBuildings: Boolean(nextState),
+                updatedAt: Date.now()
             };
             // 若開啟社區標註授權時該帳號原本被封鎖，一併解除封鎖並設為已核准
             if (nextState && isBlocked) {
-                patchPayload.isBlocked = false;
                 patchPayload.blocked = false;
-                patchPayload.isApproved = true;
+                patchPayload.isBlocked = false;
                 patchPayload.approved = true;
+                patchPayload.isApproved = true;
             }
 
-            await updateCloudFleetUserFields(targetDeviceId, patchPayload);
-            showAdminUserActionToast(
-                nextState
-                    ? `✅ 已開啟「${user.displayName}」社區標註授權`
-                    : `🔒 已關閉「${user.displayName}」社區標註授權（一般唯讀）`,
-                nextState ? 'success' : 'info'
-            );
+            const ok = await updateCloudFleetUserFields(targetDeviceId, patchPayload);
+            if (ok) {
+                showAdminUserActionToast(
+                    nextState
+                        ? `✅ 已開啟「${user.displayName}」社區標註授權`
+                        : `🔒 已關閉「${user.displayName}」社區標註授權（一般唯讀）`,
+                    nextState ? 'success' : 'info'
+                );
+            }
         };
 
         toggleSwitchBtn.addEventListener('click', handleToggleCommunityAuth);
@@ -11625,10 +11651,12 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             e.stopPropagation();
             const cleanOrig = (origInputEl?.value || '').trim();
             origSaveBtn.disabled = true;
-            await updateCloudFleetUserFields(targetDeviceId, {
+            const ok = await updateCloudFleetUserFields(targetDeviceId, {
                 originalName: cleanOrig
             });
-            showAdminUserActionToast(cleanOrig ? `🏷️ 已標註原名：${cleanOrig}` : '🏷️ 已清除原名標註', 'success');
+            if (ok) {
+                showAdminUserActionToast(cleanOrig ? `🏷️ 已標註原名：${cleanOrig}` : '🏷️ 已清除原名標註', 'success');
+            }
         });
 
         origCancelBtn?.addEventListener('click', (e) => {
@@ -11686,7 +11714,6 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
                 await Promise.all([
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
-                    fetchWithTimeout(`${FIREBASE_BASE_URL}/users/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
                     fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
                 ]);
                 showAdminUserActionToast(`🗑️ 已刪除「${user.displayName}」的使用者紀錄`, 'info');
@@ -11711,37 +11738,27 @@ async function fetchAndRenderAdminFleetUsersList() {
     isFetchingAdminFleetUsers = true;
 
     try {
-        // 同時讀取 fleet_users、users（相容舊節點）與 live_fleet，確保所有使用者紀錄完整顯示不遺漏
-        const [usersRes, legacyUsersRes, liveRes] = await Promise.all([
+        // 同時讀取 system_config/users（正式持久使用者權限節點）與 live_fleet（車隊即時雷達節點），確保所有使用者紀錄與 canEditCommunity 狀態完整還原
+        const [usersRes, liveRes] = await Promise.all([
             fetchWithTimeout(FLEET_USERS_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null),
-            fetchWithTimeout(`${FIREBASE_BASE_URL}/users.json`, { cache: 'no-store' }, 5000).catch(() => null),
             fetchWithTimeout(LIVE_FLEET_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null)
         ]);
 
         const rawUsers = (usersRes && usersRes.ok) ? (await usersRes.json() || {}) : {};
-        const rawLegacyUsers = (legacyUsersRes && legacyUsersRes.ok) ? (await legacyUsersRes.json() || {}) : {};
         const rawLive = (liveRes && liveRes.ok) ? (await liveRes.json() || {}) : {};
         const now = Date.now();
 
         const mergedMap = {};
 
-        // 1. 先載入 users 節點（若有）
-        if (rawLegacyUsers && typeof rawLegacyUsers === 'object') {
-            Object.entries(rawLegacyUsers).forEach(([devId, u]) => {
-                if (!devId || !u || typeof u !== 'object') return;
-                mergedMap[devId] = normalizeFleetUserRecord(devId, u, allCloudFleetUsersMap[devId]);
-            });
-        }
-
-        // 2. 載入並合併 fleet_users 節點（不論 canEditCommunity/canManageBuildings、approved/isApproved 或 blocked/isBlocked 為 true 或 false 皆完整保留）
+        // 1. 先載入 Firebase system_config/users 節點中的所有使用者（嚴格以資料庫回傳的 canEditCommunity 為準，絕不被預設值 false 或舊快取覆蓋）
         if (rawUsers && typeof rawUsers === 'object') {
             Object.entries(rawUsers).forEach(([devId, u]) => {
                 if (!devId || !u || typeof u !== 'object') return;
-                mergedMap[devId] = normalizeFleetUserRecord(devId, u, mergedMap[devId] || allCloudFleetUsersMap[devId]);
+                mergedMap[devId] = normalizeFleetUserRecord(devId, u, null);
             });
         }
 
-        // 3. 若 live_fleet 中有線上裝置，自動合併最新活躍時間與名稱並回寫至 fleet_users
+        // 2. 合併 live_fleet 中的線上裝置：若已在 system_config/users 中則只更新活躍時間（保留資料庫中的 canEditCommunity / blocked / approved / originalName）
         if (rawLive && typeof rawLive === 'object') {
             Object.entries(rawLive).forEach(([devId, liveInfo]) => {
                 if (!devId || !liveInfo || typeof liveInfo !== 'object') return;
@@ -11754,20 +11771,31 @@ async function fetchAndRenderAdminFleetUsersList() {
                     if (liveName && (!mergedMap[devId].displayName || mergedMap[devId].displayName === '未命名隊員' || mergedMap[devId].displayName === '車隊隊員')) {
                         mergedMap[devId].displayName = liveName;
                     }
+                    // 若 live_fleet 節點上也有 canEditCommunity 且 system_config/users 尚未記錄，同步採納
+                    if (liveInfo.canEditCommunity !== undefined && rawUsers?.[devId]?.canEditCommunity === undefined) {
+                        const canEditFromLive = !mergedMap[devId].blocked && Boolean(liveInfo.canEditCommunity);
+                        mergedMap[devId].canEditCommunity = canEditFromLive;
+                        mergedMap[devId].canManageBuildings = canEditFromLive;
+                    }
                 } else {
+                    const liveCanEdit = Boolean(liveInfo.canEditCommunity !== undefined ? liveInfo.canEditCommunity : liveInfo.canManageBuildings);
+                    const liveBlocked = Boolean(liveInfo.blocked !== undefined ? liveInfo.blocked : liveInfo.isBlocked);
+                    const liveApproved = liveBlocked ? false : (liveInfo.approved !== undefined ? Boolean(liveInfo.approved) : (liveInfo.isApproved !== undefined ? Boolean(liveInfo.isApproved) : true));
                     mergedMap[devId] = normalizeFleetUserRecord(devId, {
                         displayName: liveName || '車隊隊員',
-                        originalName: '',
-                        isApproved: true,
-                        approved: true,
-                        isBlocked: false,
-                        blocked: false,
-                        canManageBuildings: false,
-                        canEditCommunity: false,
+                        originalName: String(liveInfo.originalName || '').trim(),
+                        approved: liveApproved,
+                        isApproved: liveApproved,
+                        blocked: liveBlocked,
+                        isBlocked: liveBlocked,
+                        canEditCommunity: liveBlocked ? false : liveCanEdit,
+                        canManageBuildings: liveBlocked ? false : liveCanEdit,
                         lastActiveAt: liveTs || now,
-                        createdAt: liveTs || now
-                    }, allCloudFleetUsersMap[devId]);
+                        createdAt: liveTs || now,
+                        updatedAt: liveTs || now
+                    }, null);
 
+                    // 自動將新發現的線上裝置寫入 system_config/users/{devId} 建檔持久化
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(devId)}.json`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
@@ -11802,38 +11830,43 @@ function escapeHtmlSafe(str) {
 }
 
 async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
-    if (!targetDeviceId || !patchFields || typeof patchFields !== 'object') return;
+    if (!targetDeviceId || !patchFields || typeof patchFields !== 'object') return false;
     const now = Date.now();
-    const existingRecord = allCloudFleetUsersMap[targetDeviceId] || {};
+    // 備份修改前的完整紀錄，若 Firebase 寫入失敗或遭拒時可精準還原開關狀態
+    const previousRecord = allCloudFleetUsersMap[targetDeviceId]
+        ? { ...allCloudFleetUsersMap[targetDeviceId] }
+        : null;
+    const existingRecord = previousRecord || {};
 
-    // 建立局部更新欄位，同時保留既有 displayName / originalName / lastActiveAt，絕不覆蓋或遺失任何原有欄位
+    // 建立局部更新欄位，同時保留既有 displayName / originalName / lastActiveAt，並寫入明確的 canEditCommunity 與 updatedAt
     const syncedPatch = {
         ...(existingRecord.displayName ? { displayName: existingRecord.displayName } : {}),
         ...(existingRecord.originalName !== undefined ? { originalName: existingRecord.originalName } : {}),
         ...(existingRecord.lastActiveAt ? { lastActiveAt: existingRecord.lastActiveAt } : {}),
         ...(existingRecord.createdAt ? { createdAt: existingRecord.createdAt } : {}),
         ...patchFields,
+        updatedAt: now,
         updatedByAdminAt: now
     };
 
-    // 同步雙命名欄位（canManageBuildings <-> canEditCommunity、isApproved <-> approved、isBlocked <-> blocked）
-    if (patchFields.canManageBuildings !== undefined || patchFields.canEditCommunity !== undefined) {
-        const val = Boolean(patchFields.canManageBuildings !== undefined ? patchFields.canManageBuildings : patchFields.canEditCommunity);
-        syncedPatch.canManageBuildings = val;
+    // 統一讀寫欄位名稱（canEditCommunity <-> canManageBuildings、approved <-> isApproved、blocked <-> isBlocked）
+    if (patchFields.canEditCommunity !== undefined || patchFields.canManageBuildings !== undefined) {
+        const val = Boolean(patchFields.canEditCommunity !== undefined ? patchFields.canEditCommunity : patchFields.canManageBuildings);
         syncedPatch.canEditCommunity = val;
+        syncedPatch.canManageBuildings = val;
     }
-    if (patchFields.isApproved !== undefined || patchFields.approved !== undefined) {
-        const val = Boolean(patchFields.isApproved !== undefined ? patchFields.isApproved : patchFields.approved);
-        syncedPatch.isApproved = val;
+    if (patchFields.approved !== undefined || patchFields.isApproved !== undefined) {
+        const val = Boolean(patchFields.approved !== undefined ? patchFields.approved : patchFields.isApproved);
         syncedPatch.approved = val;
+        syncedPatch.isApproved = val;
     }
-    if (patchFields.isBlocked !== undefined || patchFields.blocked !== undefined) {
-        const val = Boolean(patchFields.isBlocked !== undefined ? patchFields.isBlocked : patchFields.blocked);
-        syncedPatch.isBlocked = val;
+    if (patchFields.blocked !== undefined || patchFields.isBlocked !== undefined) {
+        const val = Boolean(patchFields.blocked !== undefined ? patchFields.blocked : patchFields.isBlocked);
         syncedPatch.blocked = val;
+        syncedPatch.isBlocked = val;
     }
 
-    // 1. 立即更新記憶體中的使用者狀態並重新渲染列表（Optimistic UI，確保卡片絕不消失且狀態秒級切換）
+    // 1. 先更新前端 UI 狀態讓滑動開關流暢切換
     allCloudFleetUsersMap[targetDeviceId] = normalizeFleetUserRecord(targetDeviceId, syncedPatch, existingRecord);
     if (targetDeviceId === fleetDeviceId) {
         myCloudUserProfile = allCloudFleetUsersMap[targetDeviceId];
@@ -11842,18 +11875,65 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
     }
     renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
 
-    // 2. 背景發送 Firebase PATCH (update) 局部更新欄位
+    // 2. 實際呼叫 Firebase PATCH (update) 寫入資料庫 system_config/users/{uid}
     try {
-        await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
+        const writeRes = await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(syncedPatch)
         }, 5000);
+
+        if (!writeRes.ok) {
+            let errDetail = `HTTP ${writeRes.status}`;
+            try {
+                const errJson = await writeRes.json();
+                if (errJson && errJson.error) errDetail += ` (${errJson.error})`;
+            } catch (_) {}
+            throw new Error(errDetail);
+        }
+
+        const savedData = await writeRes.json();
+        if (savedData && typeof savedData === 'object' && savedData.error) {
+            throw new Error(savedData.error);
+        }
+
+        // 若該使用者並非封鎖狀態，一併把最新權限欄位局部同步到 live_fleet/{uid}（若有在線節點時作為雙重備援）
+        if (!syncedPatch.blocked) {
+            fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    canEditCommunity: Boolean(allCloudFleetUsersMap[targetDeviceId].canEditCommunity),
+                    canManageBuildings: Boolean(allCloudFleetUsersMap[targetDeviceId].canEditCommunity),
+                    approved: Boolean(allCloudFleetUsersMap[targetDeviceId].approved),
+                    blocked: Boolean(allCloudFleetUsersMap[targetDeviceId].blocked),
+                    ...(allCloudFleetUsersMap[targetDeviceId].originalName !== undefined
+                        ? { originalName: allCloudFleetUsersMap[targetDeviceId].originalName }
+                        : {})
+                })
+            }, 4000).catch(() => {});
+        }
+
         if (targetDeviceId === fleetDeviceId) {
             await checkMyFleetUserAccessStatus();
         }
+        return true;
     } catch (e) {
-        showAdminUserActionToast('⚠️ 更新使用者權限失敗，請檢查網路狀態！', 'danger');
+        // 寫入失敗或權限遭拒時：立即將該使用者的開關狀態還原至修改前，並彈出明確錯誤提示
+        if (previousRecord) {
+            allCloudFleetUsersMap[targetDeviceId] = previousRecord;
+        }
+        if (targetDeviceId === fleetDeviceId && previousRecord) {
+            myCloudUserProfile = previousRecord;
+            syncAdminCurrentRoleBadgeUI();
+            evaluateAndRenderAccessGateOverlay();
+        }
+        renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+
+        const errMsg = e?.message || '網路異常或權限遭拒';
+        showAdminUserActionToast(`⚠️ Firebase 寫入失敗 (${errMsg})，已自動還原開關狀態！`, 'danger');
+        alert(`⚠️ 儲存使用者權限至 Firebase 失敗（${errMsg}）！\n系統已自動將開關還原為原本狀態，請確認網路連線後重試。`);
+        return false;
     }
 }
 
@@ -12140,7 +12220,7 @@ async function persistAdminAiSettingsImmediately() {
     } catch (e) {}
     try {
         await fetchWithTimeout(SYSTEM_CONFIG_URL, {
-            method: 'PUT',
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...systemNavConfig,
@@ -12523,11 +12603,12 @@ document.getElementById('btnSaveAdminSettings')?.addEventListener('click', async
             ...newConfig,
             updatedAt: Date.now()
         };
-        await fetchWithTimeout(SYSTEM_CONFIG_URL, {
-            method: 'PUT',
+        const saveRes = await fetchWithTimeout(SYSTEM_CONFIG_URL, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         }, 5000);
+        if (!saveRes.ok) throw new Error(`HTTP ${saveRes.status}`);
 
         // 本機立即套用所有新參數、AI 模型、API Key 清單與公告橫幅
         applySystemConfigToRuntime(newConfig);

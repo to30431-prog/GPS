@@ -17,7 +17,13 @@ const CACHE_ASSETS = [
     './src/main.js',
     './manifest.json',
     './icon-512.png',
-    './garbage-truck.png'
+    './garbage-truck.png',
+    './assets/cars/garbage_yellow.png',
+    './assets/cars/recycle_white.png',
+    './assets/cars/claw_truck.png',
+    './assets/cars/thousand_sunny.png',
+    './assets/cars/turtle.png',
+    './assets/cars/sports_car.png'
 ];
 
 // 判斷是否為 MapLibre GL 向量圖磚 (*.pbf, *.mvt) 或地圖圖磚請求

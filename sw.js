@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.27';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.27';
+const CACHE_VERSION = 'v3.28';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.28';
 const CACHE_ASSETS = [
     './',
     './index.html',
@@ -58,28 +58,33 @@ self.addEventListener('fetch', function(event) {
     const req = event.request;
     if (req.method !== 'GET') return;
 
-    const url = new URL(req.url);
-
-    // Firebase 即時資料庫永遠直接走網路，不進靜態快取
-    if (url.hostname.includes('firebasedatabase.app')) {
+    let url;
+    try {
+        url = new URL(req.url);
+    } catch (e) {
         return;
     }
 
-    // 🗺️ MapLibre GL 向量圖磚 (*.pbf / *.mvt) 與地圖圖磚：採用 Stale-While-Revalidate (SWR) 動態快取
-    // 確保車子開進山區或無網路死角時優先秒讀快取圖磚、地圖不變空白，有網路時背景靜默更新
+    // 外部 API（Firebase、OSRM、ArcGIS、Gemini、CDN 等）直接走原生瀏覽器網路，不經 Service Worker 攔截
+    if (url.origin !== self.location.origin && !isMapTileRequest(url)) {
+        return;
+    }
+
+    // 🗺️ MapLibre GL 圖磚：僅在已快取時提供離線備援，網路請求失敗且無快取時不傳回 undefined
     if (isMapTileRequest(url)) {
         event.respondWith(
             caches.open(TILE_CACHE_NAME).then(function(cache) {
                 return cache.match(req).then(function(cachedRes) {
                     const networkFetch = fetch(req)
                         .then(function(networkRes) {
-                            if (networkRes && (networkRes.status === 200 || networkRes.type === 'opaque')) {
+                            if (networkRes && networkRes.status === 200) {
                                 cache.put(req, networkRes.clone()).catch(function() {});
                             }
                             return networkRes;
                         })
                         .catch(function() {
-                            return cachedRes;
+                            if (cachedRes) return cachedRes;
+                            return new Response('', { status: 204, statusText: 'No Tile Content' });
                         });
                     return cachedRes || networkFetch;
                 });
@@ -88,7 +93,7 @@ self.addEventListener('fetch', function(event) {
         return;
     }
 
-    // 應用程式核心資源採用 Network-First 策略：有網路時優先取最新檔案並更新快取，斷網時自動降級使用離線快取
+    // 本機核心靜態資源採用 Network-First 策略：有網路時取最新檔案並更新快取，斷網時降級使用離線快取
     event.respondWith(
         fetch(req)
             .then(function(networkRes) {
@@ -101,7 +106,10 @@ self.addEventListener('fetch', function(event) {
                 return networkRes;
             })
             .catch(function() {
-                return caches.match(req);
+                return caches.match(req).then(function(cached) {
+                    return cached || new Response('', { status: 503, statusText: 'Offline' });
+                });
             })
     );
 });
+

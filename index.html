@@ -123,7 +123,7 @@
                 <div class="bg-white/95 backdrop-blur px-3.5 sm:px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2">
                     <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500 flex-shrink-0"></span>
                     <span id="appStatusTitle" class="cursor-pointer select-none whitespace-nowrap">鶯歌清運路線助手 Pro Max</span>
-                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.27</span>
+                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.28</span>
                 </div>
                 <!-- 🚛 家具模式專屬：左上角「家具模式」徽章旁一鍵「返回一般清運」按鈕 -->
                 <button id="btnExitFurnitureMode" type="button" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-3 py-2.5 rounded-2xl shadow-lg border-2 border-white/90 active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 relative z-[70]" title="結束家具模式並返回一般清運模式">
@@ -157,13 +157,13 @@
             </div>
         </div>
 
-        <div class="flex flex-col gap-2.5 pointer-events-auto">
+        <div id="rightMapToolbar" class="flex flex-col gap-2 pointer-events-auto">
             <button id="headingModeBtn" class="bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95">
                 <i id="headingIcon" class="fa-solid fa-compass text-base"></i>
                 <span id="headingLabel" class="text-[9px] font-bold leading-none mt-0.5">車頭上</span>
             </button>
             <button id="locateBtn" class="bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500">
-                <i class="fa-solid fa-location-crosshairs text-base"></i>
+                <i id="locateIcon" class="fa-solid fa-location-crosshairs text-base"></i>
                 <span id="followLabel" class="text-[9px] font-bold leading-none mt-0.5">跟隨中</span>
             </button>
             <!-- 🚀 語音播報開關按鈕 -->
@@ -182,9 +182,20 @@
                         <span class="text-xs font-black text-gray-800 flex items-center gap-1">🗺️ 切換地圖圖層</span>
                         <span id="currentMapLayerBadge" class="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Google 地圖</span>
                     </div>
-                    <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[65vh] overflow-y-auto"></div>
+                    <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[55vh] overflow-y-auto"></div>
+                    <div class="pt-1 border-t border-gray-100">
+                        <button id="menuRefreshMapBtn" type="button" class="w-full px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 font-black text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all">
+                            <i class="fa-solid fa-arrows-rotate text-sky-600"></i>
+                            <span>輕量重整地圖（保留目前狀態）</span>
+                        </button>
+                    </div>
                 </div>
             </div>
+            <!-- 🔄 輕量重整地圖按鈕（僅重算尺寸與重繪圖層，不重載頁面、不遺失未存路線狀態） -->
+            <button id="refreshMapBtn" type="button" class="bg-white text-sky-700 w-11 h-11 rounded-2xl shadow-lg border-2 border-sky-400 flex flex-col items-center justify-center active:scale-95" title="輕量重整地圖尺寸與圖層（不重載網頁、保留未存狀態）">
+                <i id="refreshMapIcon" class="fa-solid fa-arrows-rotate text-sm transition-transform duration-500"></i>
+                <span class="text-[9px] font-bold leading-none mt-0.5">重整地圖</span>
+            </button>
             <button id="blackScreenBtn" class="bg-black text-amber-400 w-11 h-11 rounded-2xl shadow-lg border border-gray-700 flex flex-col items-center justify-center active:scale-95" title="進入純黑極致省電模式">
                 <i class="fa-solid fa-moon text-sm"></i>
                 <span class="text-[9px] font-bold leading-none mt-0.5 text-gray-200">極致省電</span>
@@ -804,8 +815,8 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 flex-shrink-0">
-                    <button id="adminToggleBtn" type="button" class="px-2.5 h-9 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="管理員模式">
-                        🔑 管理員
+                    <button id="adminToggleBtn" type="button" class="px-2.5 h-9 rounded-xl bg-gray-100 text-gray-600 border border-gray-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="依裝置授權自動辨識路線管理員權限（免密碼）">
+                        🔒 一般唯讀
                     </button>
                     <button id="refreshCloudBtn" type="button" class="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 transition-transform" title="重新整理">
                         <i id="refreshCloudIcon" class="fa-solid fa-rotate-right text-sm"></i>
@@ -1036,28 +1047,29 @@
         </div>
     </div>
 
-    <!-- 🛠️ 開發者／管理者模式隱藏設定面板（三層權限密碼驗證入口） -->
+    <!-- 🛠️ 開發者模式隱藏設定面板（僅保留開發者密碼驗證入口，路線管理員與社區標註員皆由 Device ID 自動辨識免密碼） -->
     <div id="adminPasswordModal" class="hidden fixed inset-0 bg-black/70 z-[100004] flex items-center justify-center p-4 pointer-events-auto">
         <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-3.5 border border-gray-100">
             <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl mx-auto shadow-sm">
                 🛠️
             </div>
-            <h3 class="text-lg font-black text-gray-900 text-center">權限驗證（管理者／開發者）</h3>
+            <h3 class="text-lg font-black text-gray-900 text-center">開發者模式驗證</h3>
             <p class="text-xs text-gray-500 text-center font-bold -mt-1 leading-relaxed">
-                輸入<span class="text-orange-600">管理者密碼</span>（可新增／修改／刪除社區大樓）<br>或<span class="text-amber-700">開發者最高權限密碼</span>（系統參數與管理使用者）
+                請輸入<span class="text-amber-700">開發者最高權限密碼</span>進入「⚙️ 系統與 AI 參數」與「👥 管理使用者」<br>
+                <span class="text-[11px] text-gray-400">（🛡️ 路線管理員與 🏢 社區標註員由雲端自動辨識解鎖，無需輸入密碼）</span>
             </p>
             <div class="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-center justify-between">
                 <span class="text-[11px] font-extrabold text-gray-500">目前本機權限：</span>
-                <span id="adminCurrentRoleBadge" class="text-[11px] font-black px-2 py-0.5 rounded-lg bg-gray-200 text-gray-700">一般模式（唯讀）</span>
+                <span id="adminCurrentRoleBadge" class="text-[11px] font-black px-2 py-0.5 rounded-lg bg-gray-200 text-gray-700">一般使用者（唯讀）</span>
             </div>
             <input type="password" id="adminPasswordInput" inputmode="numeric" maxlength="12" class="bg-gray-50 border-2 border-gray-200 focus:border-amber-500 text-gray-900 text-2xl font-black rounded-2xl p-3 w-full outline-none transition-colors text-center tracking-[0.35em]" placeholder="● ● ● ● ● ●">
-            <div id="adminPasswordError" class="hidden text-red-500 text-xs font-bold text-center">❌ 密碼錯誤，請重新輸入</div>
+            <div id="adminPasswordError" class="hidden text-red-500 text-xs font-bold text-center">❌ 開發者密碼錯誤，請重新輸入</div>
             <button type="button" id="btnVerifyAdminPassword" class="bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3.5 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-2 text-base">
-                <i class="fa-solid fa-unlock"></i> 驗證解鎖權限
+                <i class="fa-solid fa-unlock"></i> 驗證進入開發者模式
             </button>
             <div class="flex items-center justify-between gap-2">
                 <button type="button" id="btnLogoutAdminRole" class="hidden flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-extrabold py-2 rounded-xl active:scale-95 text-xs">
-                    切回一般模式
+                    退出開發者模式
                 </button>
                 <button type="button" id="btnCancelAdminPassword" class="flex-1 text-gray-400 hover:text-gray-600 font-extrabold py-2 active:scale-95 text-xs">
                     取消
@@ -1116,7 +1128,7 @@
                     <h3 class="text-base sm:text-lg font-black text-amber-700 flex items-center gap-2">
                         <span>🛠️</span> 開發者模式控制中心
                     </h3>
-                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.27)</p>
+                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.28)</p>
                 </div>
                 <button type="button" id="btnCloseAdminSettings" class="w-8 h-8 rounded-full bg-white text-gray-500 hover:bg-gray-100 flex items-center justify-center active:scale-90 shadow-sm border border-amber-200 flex-shrink-0">
                     <i class="fa-solid fa-xmark"></i>
@@ -1414,11 +1426,11 @@
             <!-- ==================== 書籤頁 2：👥 管理使用者 ==================== -->
             <div id="adminTabPanelUsers" class="hidden flex-1 flex flex-col min-h-0 overflow-hidden">
                 <div class="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1">
-                    <!-- 1. 全站門禁總開關 & 三層權限分級設定 -->
+                    <!-- 1. 全站門禁總開關 & Device ID 免密碼角色授權說明 -->
                     <div class="bg-amber-50/80 border-2 border-amber-300 rounded-2xl p-3.5 space-y-2.5">
                         <div class="flex items-center justify-between">
                             <span class="text-xs font-black text-amber-900 flex items-center gap-1.5">
-                                <i class="fa-solid fa-shield-halved text-amber-600"></i> 全站門禁總開關與三層權限
+                                <i class="fa-solid fa-shield-halved text-amber-600"></i> 全站門禁總開關與免密碼角色授權
                             </span>
                             <span id="adminGateStatusBadge" class="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">自由進入</span>
                         </div>
@@ -1426,31 +1438,17 @@
                         <!-- 全站門禁總開關：需核准授權才可使用 -->
                         <label class="flex items-center justify-between bg-white px-3 py-2.5 rounded-xl border border-amber-200 cursor-pointer shadow-sm">
                             <div class="pr-2">
-                                <div class="text-xs font-black text-gray-900">🚪 需核准授權才可使用</div>
-                                <div class="text-[10px] font-bold text-gray-500 mt-0.5">開啟時，未核准裝置輸入名稱送出申請後進入待核准狀態，由開發者按核准才放行</div>
+                                <div class="text-xs font-black text-gray-900">🔒 需核准授權才可使用</div>
+                                <div class="text-[10px] font-bold text-gray-500 mt-0.5">開啟時，未核准裝置輸入名稱送出申請後進入待核准狀態；若將裝置設為「封鎖（關閉准許使用）」，即時鎖定畫面並停止雷達廣播</div>
                             </div>
                             <input type="checkbox" id="adminRequireUserApprovalInput" class="w-5 h-5 accent-amber-600 rounded cursor-pointer flex-shrink-0">
                         </label>
 
-                        <!-- 管理者模式獨立密碼設定 -->
-                        <div class="bg-white px-3 py-2.5 rounded-xl border border-amber-200 space-y-1.5 shadow-sm">
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <div class="text-xs font-black text-gray-900">🏢 管理者模式獨立密碼（社區大樓管理）</div>
-                                    <div class="text-[10px] font-bold text-gray-500">輸入此密碼或開啟下方「社區標註授權」即可新增／修改／刪除社區大樓</div>
-                                </div>
-                            </div>
-                            <div class="flex items-center gap-2 pt-0.5">
-                                <input type="text" id="adminBuildingManagerPwdInput" maxlength="12" placeholder="預設 666666"
-                                    class="flex-1 bg-amber-50/50 border border-amber-300 focus:border-amber-500 text-gray-900 text-xs font-mono font-black rounded-xl px-2.5 py-2 outline-none">
-                                <button type="button" id="btnSaveUserGateSettings"
-                                    class="bg-amber-600 hover:bg-amber-700 text-white font-black text-xs px-3 py-2 rounded-xl shadow active:scale-95 transition whitespace-nowrap">
-                                    儲存門禁設定
-                                </button>
-                            </div>
-                            <div class="text-[10px] font-bold text-gray-500 leading-relaxed pt-0.5">
-                                📌 <span class="text-gray-800 font-black">三層權限</span>：一般模式（唯讀瀏覽／搜尋／導航）➔ 管理者模式（管理社區大樓）➔ 開發者模式（凱哥最高權限）。
-                            </div>
+                        <div class="bg-white px-3 py-2.5 rounded-xl border border-amber-200 space-y-1 shadow-sm text-[10px] font-bold text-gray-600 leading-relaxed">
+                            <div class="text-[11px] font-black text-gray-900">📌 裝置角色自動辨識（免輸入管理員密碼）：</div>
+                            <div>• <span class="text-indigo-700 font-black">🛡️ 路線管理（含社區）</span>：自動解鎖路線審核／核准／編輯／刪除 ＋ 社區大樓新增／修改／刪除。</div>
+                            <div>• <span class="text-emerald-700 font-black">🏢 僅社區標註</span>：僅解鎖社區大樓新增／修改／刪除（路線審核與編輯刪除維持隱藏鎖定）。</div>
+                            <div>• <span class="text-gray-700 font-black">一般使用者</span>：兩項皆關閉時為唯讀瀏覽、搜尋、路線播放與循跡導航。</div>
                         </div>
                     </div>
 

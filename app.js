@@ -1,11 +1,10 @@
 // ==========================================
-// 🔑 雲端路線庫管理員密碼與全域版本常數設定
+// 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.27';
+const APP_VERSION = 'v3.28';
 window.APP_VERSION = APP_VERSION;
-const ADMIN_PASSWORD = '5201314';
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.27
+// 確保畫面上所有版本號膠囊同步顯示為 v3.28
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -815,6 +814,20 @@ const map = new maplibregl.Map({
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
 
+// 攔截 MapLibre GL 背景圖磚／字型請求瞬斷或取消時的預設 console.error，避免離線或切換視窗時拋出未處理的 Failed to fetch
+map.on('error', (e) => {
+    const errMsg = String(e?.error?.message || e?.message || '');
+    if (
+        errMsg.includes('Failed to fetch') ||
+        errMsg.includes('AbortError') ||
+        errMsg.includes('Load failed') ||
+        errMsg.includes('NetworkError')
+    ) {
+        return;
+    }
+    console.warn('[MapLibre Warning]', errMsg || e);
+});
+
 function updateMapMarkersZoomScale() {
     if (!map) return;
     const currentZoom = map.getZoom();
@@ -1288,7 +1301,7 @@ function fixSymbolTextAlignment() {
     }
 }
 
-// 確保所有 DOM Marker（黃色垃圾車、橘黃色警示膠囊、起終點、隊友雷達）在底圖切換後完整保留且座標不偏移
+// 確保所有 DOM Marker（黃色垃圾車、橘黃色警示膠囊、起終點、隊友雷達、共享地標、編輯節點、家具插針）在底圖切換或前景回切後完整保留且座標不偏移
 function ensureDomMarkersIntactAfterStyleSwitch() {
     try {
         if (vehicleMarker) {
@@ -1298,8 +1311,25 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
             }
             vehicleMarker.setLngLat(vehicleVisualLngLat || lastKnownLngLat).setRotation(vehicleVisualHeading || currentHeading);
         }
-        if (typeof domMarkers !== 'undefined' && Array.isArray(domMarkers)) {
-            domMarkers.forEach(m => {
+        const reconnectMarkerList = (list) => {
+            if (!Array.isArray(list)) return;
+            list.forEach(m => {
+                if (m && typeof m.getElement === 'function') {
+                    const el = m.getElement();
+                    if (el && !el.isConnected) m.addTo(map);
+                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+                }
+            });
+        };
+        if (typeof domMarkers !== 'undefined') reconnectMarkerList(domMarkers);
+        if (typeof pathEditMarkers !== 'undefined') reconnectMarkerList(pathEditMarkers);
+        if (typeof editNodeMarkers !== 'undefined') reconnectMarkerList(editNodeMarkers);
+        if (typeof manualDrawMarkers !== 'undefined') reconnectMarkerList(manualDrawMarkers);
+        if (typeof furnitureDomMarkers !== 'undefined') reconnectMarkerList(furnitureDomMarkers);
+
+        if (typeof fleetLayerGroup === 'object' && fleetLayerGroup) {
+            Object.values(fleetLayerGroup).forEach(entry => {
+                const m = entry?.marker;
                 if (m && typeof m.getElement === 'function') {
                     const el = m.getElement();
                     if (el && !el.isConnected) m.addTo(map);
@@ -1307,8 +1337,9 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
                 }
             });
         }
-        if (typeof editNodeMarkers !== 'undefined' && Array.isArray(editNodeMarkers)) {
-            editNodeMarkers.forEach(m => {
+        if (typeof pinsLayerGroup === 'object' && pinsLayerGroup) {
+            Object.values(pinsLayerGroup).forEach(entry => {
+                const m = entry?.marker;
                 if (m && typeof m.getElement === 'function') {
                     const el = m.getElement();
                     if (el && !el.isConnected) m.addTo(map);
@@ -1316,32 +1347,23 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
                 }
             });
         }
-        if (typeof manualDrawMarkers !== 'undefined' && Array.isArray(manualDrawMarkers)) {
-            manualDrawMarkers.forEach(m => {
-                if (m && typeof m.getElement === 'function') {
-                    const el = m.getElement();
-                    if (el && !el.isConnected) m.addTo(map);
-                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
-                }
-            });
-        }
-        if (typeof furnitureDomMarkers !== 'undefined' && Array.isArray(furnitureDomMarkers)) {
-            furnitureDomMarkers.forEach(m => {
-                if (m && typeof m.getElement === 'function') {
-                    const el = m.getElement();
-                    if (el && !el.isConnected) m.addTo(map);
-                    else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
-                }
-            });
-        }
-        if (typeof furnitureSearchPreviewMarker !== 'undefined' && furnitureSearchPreviewMarker) {
-            const el = furnitureSearchPreviewMarker.getElement?.();
-            if (el && !el.isConnected) furnitureSearchPreviewMarker.addTo(map);
-        }
-        if (typeof activeFurniturePopupMarker !== 'undefined' && activeFurniturePopupMarker) {
-            const el = activeFurniturePopupMarker.getElement?.();
-            if (el && !el.isConnected) activeFurniturePopupMarker.addTo(map);
-        }
+
+        const singleMarkers = [
+            typeof furnitureSearchPreviewMarker !== 'undefined' ? furnitureSearchPreviewMarker : null,
+            typeof activeFurniturePopupMarker !== 'undefined' ? activeFurniturePopupMarker : null,
+            typeof activeAlertPopupMarker !== 'undefined' ? activeAlertPopupMarker : null,
+            typeof activeNodeTrimBubbleMarker !== 'undefined' ? activeNodeTrimBubbleMarker : null,
+            typeof pendingCalloutAnchorMarker !== 'undefined' ? pendingCalloutAnchorMarker : null,
+            typeof tempMarkerA !== 'undefined' ? tempMarkerA : null,
+            typeof pinDistanceLineMarker !== 'undefined' ? pinDistanceLineMarker : null
+        ];
+        singleMarkers.forEach(m => {
+            if (m && typeof m.getElement === 'function') {
+                const el = m.getElement();
+                if (el && !el.isConnected) m.addTo(map);
+                else if (typeof m.getLngLat === 'function') m.setLngLat(m.getLngLat());
+            }
+        });
     } catch (e) {}
 }
 
@@ -1368,6 +1390,165 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
         isRestoringCustomStyleLayers = false;
     }
 }
+
+// ==========================================
+// 🛡️ WebGL Context Lost 偵測、前景恢復重繪與輕量「重整地圖」引擎
+// ==========================================
+let isMapWebglContextLost = false;
+let mapRefreshToastTimer = null;
+let mapWakeupResizeTimer = null;
+let mapWakeupSecondaryTimer = null;
+let mapViewportResizeTimer = null;
+
+function showMapRefreshToast(message, durationMs = 2300) {
+    let banner = document.getElementById('mapRefreshToastBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'mapRefreshToastBanner';
+        banner.className = 'fixed top-20 left-1/2 -translate-x-1/2 bg-slate-900/92 backdrop-blur-md text-white text-xs font-extrabold px-4 py-2 rounded-full shadow-2xl border border-sky-400/40 pointer-events-none whitespace-nowrap z-[99999] transition-opacity duration-200';
+        document.body.appendChild(banner);
+    }
+    if (mapRefreshToastTimer) {
+        clearTimeout(mapRefreshToastTimer);
+        mapRefreshToastTimer = null;
+    }
+    banner.textContent = message;
+    banner.classList.remove('hidden');
+    mapRefreshToastTimer = setTimeout(() => {
+        banner.classList.add('hidden');
+        mapRefreshToastTimer = null;
+    }, durationMs);
+}
+
+function isMapWebglContextBroken() {
+    if (isMapWebglContextLost) return true;
+    try {
+        const gl = map?.painter?.context?.gl;
+        if (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()) {
+            return true;
+        }
+    } catch (e) {}
+    return false;
+}
+
+function rebuildMapStyleAndRestoreAllState(reason = 'webgl-recovery') {
+    if (!map || !currentMapLayerPreset) return;
+    try {
+        window.scrollTo(0, 0);
+        map.once('style.load', () => {
+            isMapWebglContextLost = false;
+            restoreCustomLayersAndAlignmentAfterStyleLoad();
+            updateMapMarkersZoomScale();
+            map.resize();
+            map.triggerRepaint();
+        });
+        map.setStyle(currentMapLayerPreset.getStyle(), { diff: false });
+        setTimeout(() => {
+            isMapWebglContextLost = false;
+            restoreCustomLayersAndAlignmentAfterStyleLoad();
+            updateMapMarkersZoomScale();
+            map.resize();
+            map.triggerRepaint();
+        }, 320);
+    } catch (e) {
+        console.warn(`[MapRecovery:${reason}] 重建底圖樣式時發生例外:`, e);
+    }
+}
+
+function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = false, reason = 'manual' } = {}) {
+    if (!map) return;
+    try {
+        window.scrollTo(0, 0);
+        const refreshIcon = document.getElementById('refreshMapIcon');
+        if (showToast && refreshIcon) {
+            refreshIcon.style.transform = 'rotate(360deg)';
+            setTimeout(() => {
+                refreshIcon.style.transform = 'rotate(0deg)';
+            }, 520);
+        }
+
+        map.resize();
+
+        if (forceRebuildStyle || isMapWebglContextBroken()) {
+            rebuildMapStyleAndRestoreAllState(reason);
+        } else {
+            restoreCustomLayersAndAlignmentAfterStyleLoad();
+            updateMapMarkersZoomScale();
+            map.triggerRepaint();
+        }
+
+        // 二次穩定重算（吸收 iOS / Android 系統列或螢幕旋轉動畫完成後的高度差）
+        setTimeout(() => {
+            try {
+                window.scrollTo(0, 0);
+                map.resize();
+                ensureDomMarkersIntactAfterStyleSwitch();
+                updateMapMarkersZoomScale();
+                map.triggerRepaint();
+            } catch (err) {}
+        }, 260);
+
+        if (showToast) {
+            showMapRefreshToast('🔄 地圖尺寸與圖層已重整（已保留目前路線狀態）');
+        }
+    } catch (e) {
+        console.warn('輕量重整地圖時發生例外:', e);
+    }
+}
+
+function attachMapWebglAndViewportGuards() {
+    if (!map) return;
+    const canvas = map.getCanvas?.();
+    if (canvas && !canvas.__webglGuardAttached) {
+        canvas.__webglGuardAttached = true;
+        canvas.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            isMapWebglContextLost = true;
+            console.warn('[WebGL] 偵測到 webglcontextlost，待返回前景時自動重建底圖渲染');
+        }, false);
+
+        canvas.addEventListener('webglcontextrestored', () => {
+            isMapWebglContextLost = false;
+            setTimeout(() => {
+                rebuildMapStyleAndRestoreAllState('webglcontextrestored');
+            }, 150);
+        }, false);
+    }
+
+    map.on('webglcontextlost', () => {
+        isMapWebglContextLost = true;
+    });
+    map.on('webglcontextrestored', () => {
+        isMapWebglContextLost = false;
+        setTimeout(() => {
+            rebuildMapStyleAndRestoreAllState('map-webglcontextrestored');
+        }, 150);
+    });
+
+    const scheduleViewportMapResize = (source = 'resize') => {
+        if (mapViewportResizeTimer) {
+            clearTimeout(mapViewportResizeTimer);
+        }
+        mapViewportResizeTimer = setTimeout(() => {
+            mapViewportResizeTimer = null;
+            if (document.visibilityState === 'visible') {
+                refreshMapCanvasAndLayers({ forceRebuildStyle: false, showToast: false, reason: source });
+            }
+        }, 150);
+    };
+
+    window.addEventListener('orientationchange', () => {
+        scheduleViewportMapResize('orientationchange');
+        setTimeout(() => scheduleViewportMapResize('orientationchange-late'), 380);
+    });
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            scheduleViewportMapResize('visualViewport-resize');
+        });
+    }
+}
+attachMapWebglAndViewportGuards();
 
 // ==========================================
 // 🗺️ 右上角「圖層」切換面板渲染與切換邏輯（含 localStorage 記憶偏好）
@@ -1436,6 +1617,8 @@ function switchMapBaseLayer(layerId) {
     const switchBtn = document.getElementById('mapLayerSwitchBtn');
     const menuPanel = document.getElementById('mapLayerMenuPanel');
     const wrapper = document.getElementById('mapLayerSwitcherWrapper');
+    const refreshMapBtn = document.getElementById('refreshMapBtn');
+    const menuRefreshMapBtn = document.getElementById('menuRefreshMapBtn');
 
     renderMapLayerMenuOptions();
 
@@ -1444,6 +1627,22 @@ function switchMapBaseLayer(layerId) {
             e.stopPropagation();
             renderMapLayerMenuOptions();
             menuPanel.classList.toggle('hidden');
+        });
+    }
+
+    if (refreshMapBtn) {
+        refreshMapBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menuPanel?.classList.add('hidden');
+            refreshMapCanvasAndLayers({ forceRebuildStyle: isMapWebglContextBroken(), showToast: true, reason: 'toolbar-button' });
+        });
+    }
+
+    if (menuRefreshMapBtn) {
+        menuRefreshMapBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menuPanel?.classList.add('hidden');
+            refreshMapCanvasAndLayers({ forceRebuildStyle: true, showToast: true, reason: 'menu-button' });
         });
     }
 
@@ -2910,7 +3109,9 @@ function renderHistoryList() {
             </div>
             <div class="flex flex-col justify-between items-end py-0.5 gap-1.5 flex-shrink-0">
                 <div class="flex items-center gap-1">
-                    <button class="edit-name-btn text-gray-300 hover:text-amber-500 w-7 h-7 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱"><i class="fa-solid fa-pen text-xs"></i></button>
+                    ${(typeof canCurrentUserManageRoutes === 'function' && canCurrentUserManageRoutes())
+                        ? `<button class="edit-name-btn text-gray-300 hover:text-amber-500 w-7 h-7 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱"><i class="fa-solid fa-pen text-xs"></i></button>`
+                        : ''}
                 </div>
                 <div class="flex flex-col items-end gap-1">
                     ${updateInfo.hasUpdate ? `
@@ -2925,15 +3126,19 @@ function renderHistoryList() {
         `;
 
         card.querySelector('.route-card-info').onclick = () => window.openRouteDetail(originalIdx);
-        card.querySelector('.edit-name-btn').onclick = (e) => {
-            e.stopPropagation();
-            const newName = prompt('請輸入新的路線名稱：', r.name);
-            if (newName && newName.trim() !== '') {
-                savedRoutes[originalIdx].name = newName.trim();
-                savedRoutes[originalIdx].updatedAt = Date.now();
-                localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
-            }
-        };
+        const editNameBtn = card.querySelector('.edit-name-btn');
+        if (editNameBtn) {
+            editNameBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (typeof canCurrentUserManageRoutes === 'function' && !canCurrentUserManageRoutes()) return;
+                const newName = prompt('請輸入新的路線名稱：', r.name);
+                if (newName && newName.trim() !== '') {
+                    savedRoutes[originalIdx].name = newName.trim();
+                    savedRoutes[originalIdx].updatedAt = Date.now();
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
+                }
+            };
+        }
         const updateCloudBtn = card.querySelector('.update-from-cloud-btn');
         if (updateCloudBtn && updateInfo.hasUpdate && updateInfo.cloudRoute) {
             updateCloudBtn.onclick = (e) => {
@@ -3023,6 +3228,11 @@ function openRouteDetail(idx, skipFitBounds = false) {
     document.getElementById('topBackBtn').classList.remove('hidden');
     document.getElementById('appStatusTitle').innerText = '路線預覽';
 
+    // 依本機 Device ID 路線管理員／開發者授權狀態動態顯示或隱藏「編輯」與「刪除」按鈕
+    const hasRouteManageAuth = typeof canCurrentUserManageRoutes === 'function' ? canCurrentUserManageRoutes() : false;
+    document.getElementById('editRouteBtn')?.classList.toggle('hidden', !hasRouteManageAuth);
+    document.getElementById('deleteRouteBtn')?.classList.toggle('hidden', !hasRouteManageAuth);
+
     const curVer = getRouteVersion(route);
     document.getElementById('detailTitle').innerText = `${route.name} (v${curVer})`;
     document.getElementById('detailDate').innerText = `更新於 ${route.date} · 創作者：${route.author || '隊員'}`;
@@ -3042,23 +3252,34 @@ function openRouteDetail(idx, skipFitBounds = false) {
 }
 window.openRouteDetail = openRouteDetail;
 
-document.getElementById('deleteRouteBtn').ontouchend = (e) => {
-    e.preventDefault(); e.stopPropagation();
-    setTimeout(() => {
-        if (confirm('確定要刪除這條清運路線嗎？')) {
-            savedRoutes.splice(selectedRouteIdx, 1);
-            persistSavedRoutesToStorage();
-            
-            document.getElementById('routeDetailUI').classList.add('hidden');
-            document.getElementById('topBackBtn').classList.add('hidden');
-            clearDomMarkers(); updateRouteLayers([]);
-            map.getSource('bg-route')?.setData(emptyGeoJSON());
-            
-            renderHistoryList();
-            document.getElementById('historyModal').classList.remove('hidden');
+const deleteRouteBtnEl = document.getElementById('deleteRouteBtn');
+if (deleteRouteBtnEl) {
+    const handleDeleteLocalRoute = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof canCurrentUserManageRoutes === 'function' && !canCurrentUserManageRoutes()) {
+            alert('🔒 目前為唯讀權限，僅限「🛡️ 路線管理員」或「🛠️ 開發者」可刪除路線！');
+            return;
         }
-    }, 100);
-};
+        setTimeout(() => {
+            if (confirm('確定要刪除這條清運路線嗎？')) {
+                savedRoutes.splice(selectedRouteIdx, 1);
+                persistSavedRoutesToStorage();
+
+                document.getElementById('routeDetailUI').classList.add('hidden');
+                document.getElementById('topBackBtn').classList.add('hidden');
+                clearDomMarkers();
+                updateRouteLayers([]);
+                map.getSource('bg-route')?.setData(emptyGeoJSON());
+
+                renderHistoryList();
+                document.getElementById('historyModal').classList.remove('hidden');
+            }
+        }, 100);
+    };
+    deleteRouteBtnEl.onclick = handleDeleteLocalRoute;
+    deleteRouteBtnEl.ontouchend = handleDeleteLocalRoute;
+}
 
 // ==========================================
 // 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 引線備忘框 ＋ 10步Undo）
@@ -4812,6 +5033,10 @@ if (btnUndoFreehand) {
 })();
 
 document.getElementById('editRouteBtn').onclick = () => {
+    if (typeof canCurrentUserManageRoutes === 'function' && !canCurrentUserManageRoutes()) {
+        alert('🔒 目前為唯讀權限，僅限「🛡️ 路線管理員」或「🛠️ 開發者」可編輯路線！');
+        return;
+    }
     const route = savedRoutes[selectedRouteIdx];
     if (!route) return;
 
@@ -7778,15 +8003,26 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
 }
 
 function setAdminModeUI(unlocked) {
-    isAdminUnlocked = unlocked;
+    isAdminUnlocked = Boolean(unlocked);
+    if (!adminToggleBtn) return;
+
+    const isDev = (typeof localUserPermissionRole !== 'undefined' && localUserPermissionRole === 'developer');
+    const isCommunityOnly = !isAdminUnlocked && (typeof canCurrentUserManageBuildings === 'function' && canCurrentUserManageBuildings());
+
     if (isAdminUnlocked) {
-        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-amber-500 text-white border border-amber-600 text-xs font-extrabold flex items-center gap-1 shadow-sm active:scale-95 transition-all whitespace-nowrap";
-        adminToggleBtn.innerHTML = '🔓 管理員';
-        cloudAdminTabBar.classList.remove('hidden');
+        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-indigo-600 text-white border border-indigo-700 text-xs font-extrabold flex items-center gap-1 shadow-sm active:scale-95 transition-all whitespace-nowrap";
+        adminToggleBtn.innerHTML = isDev ? '🛠️ 開發者管理' : '🛡️ 路線管理員';
+        cloudAdminTabBar?.classList.remove('hidden');
+    } else if (isCommunityOnly) {
+        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap";
+        adminToggleBtn.innerHTML = '🏢 社區標註員';
+        cloudAdminTabBar?.classList.add('hidden');
+        currentCloudTab = 'shared';
+        updateCloudTabButtons();
     } else {
-        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap";
-        adminToggleBtn.innerHTML = '🔑 管理員';
-        cloudAdminTabBar.classList.add('hidden');
+        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-gray-100 text-gray-600 border border-gray-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap";
+        adminToggleBtn.innerHTML = '🔒 一般唯讀';
+        cloudAdminTabBar?.classList.add('hidden');
         currentCloudTab = 'shared';
         updateCloudTabButtons();
     }
@@ -7803,21 +8039,14 @@ function updateCloudTabButtons() {
 }
 
 adminToggleBtn.onclick = () => {
-    if (!isAdminUnlocked) {
-        const pwd = prompt('🔑 請輸入管理員密碼：');
-        if (pwd === null) return;
-        if (pwd.trim() === ADMIN_PASSWORD) {
-            setAdminModeUI(true);
-            fetchCloudRoutes();
-            alert('✅ 管理員模式已解鎖！\n您現在可切換檢視「待審核投稿區」進行「🔍 審核預覽／微調」、一鍵核准發布或駁回刪除。');
-        } else {
-            alert('❌ 管理員密碼錯誤！');
-        }
+    const hasRouteAuth = typeof canCurrentUserManageRoutes === 'function' && canCurrentUserManageRoutes();
+    const hasBldgAuth = typeof canCurrentUserManageBuildings === 'function' && canCurrentUserManageBuildings();
+    if (hasRouteAuth) {
+        alert('🛡️ 本裝置已獲「路線管理員」授權（由雲端自動辨識，無需輸入密碼）！\n\n• 可切換「⏳ 待審核區」進行審核微調、核准發布或駁回刪除\n• 可編輯與刪除路線\n• 可新增、修改與刪除社區大樓');
+    } else if (hasBldgAuth) {
+        alert('🏢 本裝置目前為「僅社區標註員」授權。\n\n• 可在地圖上新增、修改與刪除社區大樓標記\n• 路線審核、編輯與刪除功能維持鎖定（需由開發者開啟「🛡️ 路線管理」授權）');
     } else {
-        if (confirm('確定要退出管理員模式嗎？')) {
-            setAdminModeUI(false);
-            renderCloudRoutesList();
-        }
+        alert('🔒 本裝置目前為「一般使用者（唯讀）」權限。\n\n系統已改為由雲端自動辨識裝置授權（無需輸入管理員密碼）；如需路線管理或社區標註權限，請由開發者於「👥 管理使用者」開啟您的授權開關。');
     }
 };
 
@@ -8546,9 +8775,13 @@ if (!fleetDeviceId) {
     localStorage.setItem('fleet_device_id', fleetDeviceId);
 }
 
-// 🔐 三層權限分級狀態：'normal'（一般模式：唯讀瀏覽／搜尋／導航）| 'manager'（管理者模式：可新增／修改／刪除社區大樓）| 'developer'（開發者模式：最高權限）
+// 🔐 Device ID 自動辨識權限架構（移除管理員密碼，僅保留開發者模式密碼）：
+// 1. 一般使用者（canManageRoute !== true 且 canEditCommunity !== true）：唯讀瀏覽地圖、搜尋、播放與導航
+// 2. 社區標註員（canEditCommunity === true 且 canManageRoute !== true）：僅解鎖社區大樓新增、修改、刪除權限
+// 3. 路線管理員（canManageRoute === true）：解鎖路線審核、修改、刪除權限，並同時具備社區大樓新增、修改、刪除權限
+// 4. 開發者模式（輸入開發者密碼 localUserPermissionRole === 'developer'）：全站最高權限
 let localUserPermissionRole = localStorage.getItem('yingge_user_permission_role') || 'normal';
-if (!['normal', 'manager', 'developer'].includes(localUserPermissionRole)) {
+if (localUserPermissionRole !== 'developer') {
     localUserPermissionRole = 'normal';
 }
 let myCloudUserProfile = null;
@@ -8556,12 +8789,18 @@ let allCloudFleetUsersMap = {};
 
 function isCurrentDeviceBlocked() {
     if (localUserPermissionRole === 'developer') return false;
-    return Boolean(myCloudUserProfile && (myCloudUserProfile.blocked === true || myCloudUserProfile.isBlocked === true));
+    if (!myCloudUserProfile) return false;
+    // 當開發者將「准許使用／封鎖」開關切為關閉時，blocked 會設為 true（同時 approved 設為 false），立即鎖定畫面
+    if (myCloudUserProfile.blocked === true || myCloudUserProfile.isBlocked === true) {
+        return true;
+    }
+    return false;
 }
 
 function isCurrentDevicePendingApproval() {
     if (localUserPermissionRole === 'developer') return false;
-    if (!systemNavConfig.requireUserApproval) return false;
+    const gateRequired = Boolean(systemNavConfig.requireApproval || systemNavConfig.requireUserApproval);
+    if (!gateRequired) return false;
     if (!myCloudUserProfile) return true;
     const approvedVal = (myCloudUserProfile.approved !== undefined) ? myCloudUserProfile.approved : myCloudUserProfile.isApproved;
     return approvedVal !== true;
@@ -8571,18 +8810,85 @@ function isDeviceRestrictedByGatekeeper() {
     return isCurrentDeviceBlocked() || isCurrentDevicePendingApproval();
 }
 
-function canCurrentUserManageBuildings() {
-    if (localUserPermissionRole === 'developer' || localUserPermissionRole === 'manager') {
+// 🛡️ 路線管理權限判斷：開發者模式 或 雲端 canManageRoute === true（免密碼自動解鎖路線審核、修改、刪除）
+function canCurrentUserManageRoutes() {
+    if (localUserPermissionRole === 'developer') {
         return true;
+    }
+    if (isDeviceRestrictedByGatekeeper()) {
+        return false;
+    }
+    return Boolean(myCloudUserProfile && myCloudUserProfile.canManageRoute === true);
+}
+
+// 🏢 社區大樓標註權限判斷：開發者模式 或 路線管理員(canManageRoute === true) 或 社區標註員(canEditCommunity === true)
+function canCurrentUserManageBuildings() {
+    if (localUserPermissionRole === 'developer') {
+        return true;
+    }
+    if (isDeviceRestrictedByGatekeeper()) {
+        return false;
     }
     if (
         myCloudUserProfile &&
-        (myCloudUserProfile.canEditCommunity === true || myCloudUserProfile.canManageBuildings === true) &&
-        !(myCloudUserProfile.blocked === true || myCloudUserProfile.isBlocked === true)
+        (myCloudUserProfile.canManageRoute === true ||
+         myCloudUserProfile.canEditCommunity === true ||
+         myCloudUserProfile.canManageBuildings === true)
     ) {
         return true;
     }
     return false;
+}
+
+// 即時同步路線管理與社區標註相關 UI 按鈕顯示／隱藏狀態（當雲端權限開啟或收回時立即生效）
+function syncRoutePermissionControlsUI() {
+    const hasRouteAuth = canCurrentUserManageRoutes();
+    isAdminUnlocked = hasRouteAuth;
+
+    const editBtnEl = document.getElementById('editRouteBtn');
+    const delBtnEl = document.getElementById('deleteRouteBtn');
+    if (editBtnEl) {
+        editBtnEl.classList.toggle('hidden', !hasRouteAuth);
+    }
+    if (delBtnEl) {
+        delBtnEl.classList.toggle('hidden', !hasRouteAuth);
+    }
+
+    // 若原本正在路線編輯模式或正在審核待審路線，但路線管理權限被即時收回，立即退出編輯／審核
+    if (!hasRouteAuth) {
+        if (typeof isEditingRoute !== 'undefined' && isEditingRoute && typeof exitEditRouteMode === 'function') {
+            exitEditRouteMode();
+        }
+        if (typeof currentReviewingPendingRoute !== 'undefined' && currentReviewingPendingRoute && typeof closePendingReviewMode === 'function') {
+            closePendingReviewMode();
+        }
+    }
+
+    if (typeof setAdminModeUI === 'function') {
+        setAdminModeUI(hasRouteAuth);
+    }
+
+    const historyModalEl = document.getElementById('historyModal');
+    if (historyModalEl && !historyModalEl.classList.contains('hidden') && typeof renderHistoryList === 'function') {
+        renderHistoryList(document.getElementById('searchInput')?.value || '');
+    }
+
+    const cloudModalEl = document.getElementById('cloudRoutesModal');
+    if (cloudModalEl && !cloudModalEl.classList.contains('hidden')) {
+        if (!hasRouteAuth && currentCloudModalTab === 'pending') {
+            currentCloudModalTab = 'shared';
+        }
+        if (typeof renderCloudRoutesList === 'function') {
+            renderCloudRoutesList();
+        }
+    }
+
+    if (typeof activeViewingMapPin !== 'undefined' && activeViewingMapPin && typeof openViewMapPinModal === 'function') {
+        const viewModalEl = document.getElementById('viewMapPinModal');
+        if (viewModalEl && !viewModalEl.classList.contains('hidden')) {
+            openViewMapPinModal(activeViewingMapPin);
+        }
+    }
 }
 
 let fleetUserName = (localStorage.getItem('fleet_user_name') || '').trim();
@@ -8647,7 +8953,7 @@ function openFleetUserNameModal(isInitial) {
     setTimeout(() => fleetUserNameInput.focus(), 100);
 }
 
-// 同步本機使用者資料至 Firebase system_config/users/{deviceId}（嚴格使用 PATCH 只更新 displayName 與 lastActiveAt，絕不覆蓋開發者設定的 canEditCommunity、originalName 或權限欄位）
+// 同步本機使用者資料至 Firebase system_config/users/{deviceId}（嚴格使用 PATCH 只更新 displayName 與 lastSeen/lastActiveAt，絕不覆蓋開發者設定的 canManageRoute、canEditCommunity、realName/originalName 或權限欄位）
 async function syncMyFleetUserRecordToCloud(options = {}) {
     if (!fleetDeviceId || !navigator.onLine) return null;
     const cleanDisplayName = (options.displayName !== undefined ? String(options.displayName) : fleetUserName).trim();
@@ -8663,6 +8969,7 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
         if (existing && typeof existing === 'object') {
             patchPayload = {
                 displayName: cleanDisplayName,
+                lastSeen: now,
                 lastActiveAt: now
             };
             const existingApproved = (existing.approved !== undefined) ? existing.approved : existing.isApproved;
@@ -8671,17 +8978,21 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
             }
         } else {
             // 新裝置首次建立紀錄：若全站門禁開啟且非開發者，預設 approved: false（待核准）；否則預設 approved: true
-            const defaultApproved = (localUserPermissionRole === 'developer') || !systemNavConfig.requireUserApproval;
+            const gateRequired = Boolean(systemNavConfig.requireApproval || systemNavConfig.requireUserApproval);
+            const defaultApproved = (localUserPermissionRole === 'developer') || !gateRequired;
             patchPayload = {
                 displayName: cleanDisplayName,
+                realName: '',
                 originalName: '',
                 approved: defaultApproved,
                 isApproved: defaultApproved,
                 blocked: false,
                 isBlocked: false,
+                canManageRoute: false,
                 canEditCommunity: false,
                 canManageBuildings: false,
                 createdAt: now,
+                lastSeen: now,
                 lastActiveAt: now,
                 updatedAt: now
             };
@@ -8700,6 +9011,8 @@ async function syncMyFleetUserRecordToCloud(options = {}) {
             ...(existing && typeof existing === 'object' ? existing : {}),
             ...patchPayload
         };
+        syncAdminCurrentRoleBadgeUI();
+        syncRoutePermissionControlsUI();
         if (typeof evaluateAndRenderAccessGateOverlay === 'function') {
             evaluateAndRenderAccessGateOverlay();
         }
@@ -8722,7 +9035,7 @@ function saveFleetUserNameFromModal() {
     syncFleetUserNameUI();
     fleetUserNameModal.classList.add('hidden');
 
-    // 同步更新雲端使用者的 displayName（絕不影響開發者標註的 originalName 或 canEditCommunity）
+    // 同步更新雲端使用者的 displayName（絕不影響開發者標註的 realName/originalName、canManageRoute 或 canEditCommunity）
     syncMyFleetUserRecordToCloud({ displayName: fleetUserName, requestApproval: true }).then(() => {
         if (isDeviceRestrictedByGatekeeper()) {
             if (typeof evaluateAndRenderAccessGateOverlay === 'function') {
@@ -8774,7 +9087,7 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     if (!forceUpload && lastUploadedFleetLat !== null && lastUploadedFleetLng !== null) {
         if (now - lastFleetUploadTime < minUploadIntervalMs) return; // 依雲端設定秒數頻率上傳
         const distMeters = getDistanceKm(lastUploadedFleetLng, lastUploadedFleetLat, lng, lat) * 1000;
-        // 若原地等待紅燈或定點清運超過 15 秒且手機處於前景接收 GPS，允許更新一次 updatedAt 保持 30 秒內鮮明在線狀態
+        // 若原地等待紅燈或定點清運超過 15 秒且手機處於前景接收 GPS，允許更新一次 updatedAt 保持在線狀態
         if (distMeters <= 5 && (now - lastFleetUploadTime < 15000)) return;
     }
 
@@ -8794,25 +9107,29 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     };
 
     try {
-        // 重要：使用 PATCH 而非 PUT，避免覆蓋 live_fleet/{deviceId} 上的 canEditCommunity / originalName 等擴充屬性
+        // 重要：使用 PATCH 而非 PUT，避免覆蓋 live_fleet/{deviceId} 上的 canManageRoute / canEditCommunity / realName 等擴充屬性
         await fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
             keepalive: true
         }, 5000);
-        // 順便每 25 秒更新一次 system_config/users 的 lastActiveAt 與 displayName（僅局部更新，絕不覆蓋 canEditCommunity）
-        if (!myCloudUserProfile || (now - Number(myCloudUserProfile.lastActiveAt || 0) >= 25000)) {
+        // 順便每 25 秒更新一次 system_config/users 的 lastSeen/lastActiveAt 與 displayName（僅局部更新，絕不覆蓋權限欄位）
+        if (!myCloudUserProfile || (now - Number(myCloudUserProfile.lastSeen || myCloudUserProfile.lastActiveAt || 0) >= 25000)) {
             fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     displayName: fleetUserName,
+                    lastSeen: now,
                     lastActiveAt: now
                 }),
                 keepalive: true
             }, 4000).catch(() => {});
-            if (myCloudUserProfile) myCloudUserProfile.lastActiveAt = now;
+            if (myCloudUserProfile) {
+                myCloudUserProfile.lastSeen = now;
+                myCloudUserProfile.lastActiveAt = now;
+            }
         }
     } catch (err) {
         // 巷弄斷網或超時靜默略過，還原座標基準以便下一週期自動恢復補傳
@@ -9436,6 +9753,43 @@ async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
         ensureBackgroundSilentKeepAlive();
     }
     ensurePureBlackSystemBars();
+
+    // 切回前台後延遲 150ms 執行 map.resize() 與 map.triggerRepaint()；若偵測到 webglcontextlost 則自動重建底圖渲染避免白屏
+    if (mapWakeupResizeTimer) {
+        clearTimeout(mapWakeupResizeTimer);
+        mapWakeupResizeTimer = null;
+    }
+    if (mapWakeupSecondaryTimer) {
+        clearTimeout(mapWakeupSecondaryTimer);
+        mapWakeupSecondaryTimer = null;
+    }
+    mapWakeupResizeTimer = setTimeout(() => {
+        mapWakeupResizeTimer = null;
+        if (document.visibilityState === 'hidden') return;
+        if (map) {
+            window.scrollTo(0, 0);
+            map.resize();
+            if (isMapWebglContextBroken()) {
+                rebuildMapStyleAndRestoreAllState(`wakeup-${sourceEvent}`);
+            } else {
+                restoreCustomLayersAndAlignmentAfterStyleLoad();
+                updateMapMarkersZoomScale();
+                map.triggerRepaint();
+            }
+        }
+    }, 150);
+
+    // 二次穩定檢查（420ms）：吸收 iOS Safari / Android Chrome 切換 App 時頂部/底部系統列動畫收合延遲
+    mapWakeupSecondaryTimer = setTimeout(() => {
+        mapWakeupSecondaryTimer = null;
+        if (document.visibilityState === 'hidden' || !map) return;
+        window.scrollTo(0, 0);
+        map.resize();
+        ensureDomMarkersIntactAfterStyleSwitch();
+        updateMapMarkersZoomScale();
+        map.triggerRepaint();
+    }, 420);
+
     if (isBlackScreenActive || isRecording || followWatchId !== null || typeof activeFollowGpsHandler === 'function') {
         await requestScreenWakeLock();
     }
@@ -9454,9 +9808,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('focus', () => {
-    if (document.visibilityState === 'visible') {
-        handlePageForegroundWakeup('focus');
-    }
+    handlePageForegroundWakeup('focus');
 });
 
 window.addEventListener('pageshow', () => {
@@ -9887,8 +10239,7 @@ if (btnChooseBuildingPin) {
     btnChooseBuildingPin.onclick = () => {
         if (!canCurrentUserManageBuildings()) {
             closeLongPressPinTypeModal(false);
-            alert('🔒 目前為「一般模式（唯讀）」。\n若要新增／修改／刪除「🏢 社區大樓」，請輸入管理者密碼解鎖，或請開發者開啟您的「社區標註授權開關」！');
-            openAdminPasswordModal();
+            alert('🔒 目前此裝置為「一般使用者（唯讀）」。\n若要新增／修改／刪除「🏢 社區大樓」，請聯繫開發者於「👥 管理使用者」開啟您的「🏢 僅社區標註」或「🛡️ 路線管理（含社區）」授權開關！');
             return;
         }
         const lat = pendingMapPinLat;
@@ -9900,8 +10251,7 @@ if (btnChooseBuildingPin) {
 
 function openCreateBuildingPinModal(lat, lng, existingPin = null) {
     if (!canCurrentUserManageBuildings()) {
-        alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可新增或修改社區大樓！');
-        openAdminPasswordModal();
+        alert('🔒 需具備「🏢 社區標註員」或「🛡️ 路線管理員」裝置授權才可新增或修改社區大樓！');
         return;
     }
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
@@ -9959,8 +10309,7 @@ if (buildingPinNameInput) {
 
 async function saveBuildingMapPin() {
     if (!canCurrentUserManageBuildings()) {
-        alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可儲存社區大樓！');
-        openAdminPasswordModal();
+        alert('🔒 需具備「🏢 社區標註員」或「🛡️ 路線管理員」裝置授權才可儲存社區大樓！');
         return;
     }
     if (pendingMapPinLat === null || pendingMapPinLng === null) return;
@@ -10155,7 +10504,7 @@ function openViewMapPinModal(pin) {
                 viewMapPinBuildingNoteInput.readOnly = !hasBuildingAuth;
                 viewMapPinBuildingNoteInput.placeholder = hasBuildingAuth
                     ? '可輸入社區收運注意事項（例如：警衛室旁、子母車位置）...'
-                    : '（唯讀模式：需管理者權限或社區標註授權才可編輯備註）';
+                    : '（唯讀模式：需社區標註員或路線管理員授權才可編輯備註）';
             }
             if (btnSaveMapPinBuildingNote) {
                 btnSaveMapPinBuildingNote.classList.toggle('hidden', !hasBuildingAuth);
@@ -10169,9 +10518,9 @@ function openViewMapPinModal(pin) {
     }
 
     if (btnEditMapPinTitle) {
-        if (isBuilding) {
+        if (isBuilding && hasBuildingAuth) {
             btnEditMapPinTitle.classList.remove('hidden');
-            btnEditMapPinTitle.innerHTML = hasBuildingAuth ? '✏️ 編輯名稱' : '🔑 解鎖管理';
+            btnEditMapPinTitle.innerHTML = '✏️ 編輯名稱';
         } else {
             btnEditMapPinTitle.classList.add('hidden');
         }
@@ -10216,8 +10565,7 @@ if (btnSaveMapPinBuildingNote) {
     btnSaveMapPinBuildingNote.onclick = async (e) => {
         e.stopPropagation();
         if (!canCurrentUserManageBuildings()) {
-            alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可修改社區備註！');
-            openAdminPasswordModal();
+            alert('🔒 需具備「🏢 社區標註員」或「🛡️ 路線管理員」裝置授權才可修改社區備註！');
             return;
         }
         if (!activeViewingMapPin || !activeViewingMapPin.id) return;
@@ -10272,7 +10620,7 @@ if (btnEditMapPinTitle) {
     btnEditMapPinTitle.onclick = () => {
         if (!activeViewingMapPin) return;
         if (!canCurrentUserManageBuildings()) {
-            openAdminPasswordModal();
+            alert('🔒 需具備「🏢 社區標註員」或「🛡️ 路線管理員」裝置授權才可修改社區大樓名稱！');
             return;
         }
         const targetPin = { ...activeViewingMapPin };
@@ -10287,8 +10635,7 @@ if (btnDeleteMapPin) {
         const pinId = activeViewingMapPin.id;
         const isBuilding = activeViewingMapPin.pinType === 'building';
         if (isBuilding && !canCurrentUserManageBuildings()) {
-            alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可刪除社區大樓！');
-            openAdminPasswordModal();
+            alert('🔒 需具備「🏢 社區標註員」或「🛡️ 路線管理員」裝置授權才可刪除社區大樓！');
             return;
         }
         const pinTitle = activeViewingMapPin.title || (isBuilding ? '此社區大樓' : '此地標');
@@ -10719,7 +11066,7 @@ function stopAndClearMyFleetRadarImmediately() {
     renderOnlineFleetListUI();
 }
 
-// --- 10.1.6 檢查本機在 fleet_users/{deviceId} 的核准／封鎖／社區標註授權狀態 ---
+// --- 10.1.6 檢查本機在 fleet_users/{deviceId} 的核准／封鎖／路線管理／社區標註授權狀態 ---
 let isCheckingMyUserAccess = false;
 async function checkMyFleetUserAccessStatus() {
     if (!fleetDeviceId || !navigator.onLine || isCheckingMyUserAccess) return;
@@ -10737,6 +11084,8 @@ async function checkMyFleetUserAccessStatus() {
                 myCloudUserProfile = null;
             }
         }
+        syncAdminCurrentRoleBadgeUI();
+        syncRoutePermissionControlsUI();
         evaluateAndRenderAccessGateOverlay();
     } catch (e) {
     } finally {
@@ -10787,7 +11136,7 @@ function evaluateAndRenderAccessGateOverlay() {
                 : '⏳ 待開發者核准授權';
         }
         if (titleEl) titleEl.textContent = '需核准授權才可使用';
-        if (descEl) descEl.textContent = '目前系統已開啟全站門禁管制。請輸入您的稱呼並送出申請，待開發者（凱哥）按核准後即可自動放行。';
+        if (descEl) descEl.textContent = '目前系統已開啟全站門禁管制。請輸入您的稱呼並送出申請，待開發者（凱哥）開啟准許使用後即可自動放行。';
         formWrap?.classList.remove('hidden');
         if (nameInput && !nameInput.value.trim()) {
             nameInput.value = fleetUserName || (myCloudUserProfile?.displayName || '');
@@ -10976,7 +11325,7 @@ function restartFleetRadarWithNewInterval(intervalSec) {
         }
         checkMyFleetUserAccessStatus();
     });
-    // 每 6 秒自動同步全隊系統參數、全站門禁與封鎖狀態（確保被封鎖或核准時秒級生效）
+    // 每 6 秒自動同步全隊系統參數、全站門禁與角色權限狀態（確保權限切換或封鎖時秒級生效）
     setInterval(() => {
         checkAndApplyRadarInterval();
     }, 6000);
@@ -10993,7 +11342,7 @@ fetchAndRenderFleetRadar = async function() {
     checkAndApplyRadarInterval();
 };
 
-// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發權限驗證 ---
+// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發開發者模式驗證 ---
 (function setupAdminTitleTrigger() {
     const versionBadgeEl = document.getElementById('appVersionBadge');
     if (versionBadgeEl) {
@@ -11023,38 +11372,40 @@ fetchAndRenderFleetRadar = async function() {
     });
 })();
 
-// --- 10.8 三層權限密碼驗證彈窗（一般模式 / 管理者模式 / 開發者模式） ---
+// --- 10.8 開發者模式密碼驗證彈窗與裝置角色徽章同步 ---
 function syncAdminCurrentRoleBadgeUI() {
     const badgeEl = document.getElementById('adminCurrentRoleBadge');
     const logoutBtn = document.getElementById('btnLogoutAdminRole');
-    const hasCloudBldgAuth = Boolean(myCloudUserProfile && myCloudUserProfile.canManageBuildings === true);
+    const hasRouteAuth = Boolean(!isDeviceRestrictedByGatekeeper() && myCloudUserProfile && myCloudUserProfile.canManageRoute === true);
+    const hasBldgAuth = Boolean(!isDeviceRestrictedByGatekeeper() && myCloudUserProfile && (myCloudUserProfile.canEditCommunity === true || myCloudUserProfile.canManageBuildings === true));
 
     if (badgeEl) {
         if (localUserPermissionRole === 'developer') {
             badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-amber-500 text-white shadow-sm';
             badgeEl.textContent = '🛠️ 開發者模式（最高權限）';
-        } else if (localUserPermissionRole === 'manager') {
-            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-orange-500 text-white shadow-sm';
-            badgeEl.textContent = '🏢 管理者模式（可管社區大樓）';
-        } else if (hasCloudBldgAuth) {
+        } else if (hasRouteAuth) {
+            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white shadow-sm';
+            badgeEl.textContent = '🛡️ 路線管理員（路線＋社區授權）';
+        } else if (hasBldgAuth) {
             badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300';
-            badgeEl.textContent = '🏢 已獲社區標註授權';
+            badgeEl.textContent = '🏢 社區標註員（僅社區大樓授權）';
         } else {
             badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-gray-200 text-gray-700';
-            badgeEl.textContent = '一般模式（唯讀）';
+            badgeEl.textContent = '一般使用者（唯讀）';
         }
     }
     if (logoutBtn) {
-        logoutBtn.classList.toggle('hidden', localUserPermissionRole === 'normal');
+        logoutBtn.classList.toggle('hidden', localUserPermissionRole !== 'developer');
     }
 }
 
 function setLocalUserPermissionRole(newRole) {
-    localUserPermissionRole = ['normal', 'manager', 'developer'].includes(newRole) ? newRole : 'normal';
+    localUserPermissionRole = (newRole === 'developer') ? 'developer' : 'normal';
     try {
         localStorage.setItem('yingge_user_permission_role', localUserPermissionRole);
     } catch (e) {}
     syncAdminCurrentRoleBadgeUI();
+    syncRoutePermissionControlsUI();
     evaluateAndRenderAccessGateOverlay();
 }
 
@@ -11074,36 +11425,32 @@ document.getElementById('btnVerifyAdminPassword')?.addEventListener('click', () 
     const input = document.getElementById('adminPasswordInput');
     const errorEl = document.getElementById('adminPasswordError');
     const pwd = (input?.value || '').trim();
-    const managerPwd = (systemNavConfig.buildingManagerPassword || '666666').trim();
 
     if (pwd === ADMIN_SETTINGS_PASSWORD) {
-        // 1. 開發者最高權限密碼（凱哥）
+        // 開發者最高權限密碼（凱哥）
         setLocalUserPermissionRole('developer');
         document.getElementById('adminPasswordModal')?.classList.add('hidden');
         // 若自己這台裝置尚未核准或誤被封鎖，開發者登入時自動將本機設為核准且解除封鎖
         if (fleetDeviceId && navigator.onLine) {
+            const now = Date.now();
             fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     displayName: fleetUserName || '凱哥(開發者)',
+                    approved: true,
                     isApproved: true,
+                    blocked: false,
                     isBlocked: false,
+                    canManageRoute: true,
+                    canEditCommunity: true,
                     canManageBuildings: true,
-                    lastActiveAt: Date.now()
+                    lastSeen: now,
+                    lastActiveAt: now
                 })
             }, 4000).catch(() => {});
         }
         openAdminSettingsPanel();
-    } else if (pwd && pwd === managerPwd) {
-        // 2. 管理者模式獨立密碼（可新增／修改／刪除社區大樓）
-        setLocalUserPermissionRole('manager');
-        document.getElementById('adminPasswordModal')?.classList.add('hidden');
-        vibrate([35, 30, 35]);
-        alert('✅ 已解鎖「🏢 管理者模式」！\n您現在可以在地圖上長按新增、修改或刪除「社區大樓（橘色水滴）」標記。');
-        if (activeViewingMapPin) {
-            openViewMapPinModal(activeViewingMapPin);
-        }
     } else {
         errorEl?.classList.remove('hidden');
         if (input) { input.value = ''; input.focus(); }
@@ -11114,7 +11461,7 @@ document.getElementById('btnVerifyAdminPassword')?.addEventListener('click', () 
 document.getElementById('btnLogoutAdminRole')?.addEventListener('click', () => {
     setLocalUserPermissionRole('normal');
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
-    alert('ℹ️ 已切回「一般模式（唯讀瀏覽／搜尋／導航）」。');
+    alert('ℹ️ 已退出開發者模式，切回依裝置授權自動辨識模式。');
     if (activeViewingMapPin) {
         openViewMapPinModal(activeViewingMapPin);
     }
@@ -11192,59 +11539,38 @@ function syncAdminGateStatusBadgeUI(requireApproval) {
 
 async function saveAdminUserGateSettingsToCloud() {
     const reqApprovalEl = document.getElementById('adminRequireUserApprovalInput');
-    const mgrPwdEl = document.getElementById('adminBuildingManagerPwdInput');
-    const saveBtn = document.getElementById('btnSaveUserGateSettings');
-
     const nextRequireApproval = Boolean(reqApprovalEl?.checked);
-    const nextManagerPwd = (mgrPwdEl?.value || '').trim() || '666666';
-    if (mgrPwdEl) mgrPwdEl.value = nextManagerPwd;
 
+    systemNavConfig.requireApproval = nextRequireApproval;
     systemNavConfig.requireUserApproval = nextRequireApproval;
-    systemNavConfig.buildingManagerPassword = nextManagerPwd;
     syncAdminGateStatusBadgeUI(nextRequireApproval);
 
     try {
         localStorage.setItem('yingge_system_nav_config_v31', JSON.stringify(systemNavConfig));
     } catch (e) {}
 
-    const origText = saveBtn ? saveBtn.textContent : '儲存門禁設定';
-    if (saveBtn) {
-        saveBtn.disabled = true;
-        saveBtn.textContent = '同步中...';
-    }
     try {
         const res = await fetchWithTimeout(SYSTEM_CONFIG_URL, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                ...systemNavConfig,
+                requireApproval: nextRequireApproval,
+                requireUserApproval: nextRequireApproval,
                 updatedAt: Date.now()
             })
         }, 5000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        if (saveBtn) {
-            saveBtn.textContent = '✓ 已同步';
-            setTimeout(() => {
-                saveBtn.disabled = false;
-                saveBtn.textContent = origText;
-            }, 1000);
-        }
+        showAdminUserActionToast(
+            nextRequireApproval ? '🔒 已開啟全站門禁（需核准授權才可使用）' : '🔓 已關閉全站門禁（自由進入）',
+            nextRequireApproval ? 'info' : 'success'
+        );
         fetchAndRenderAdminFleetUsersList();
     } catch (e) {
-        if (saveBtn) {
-            saveBtn.disabled = false;
-            saveBtn.textContent = origText;
-        }
         alert('⚠️ 儲存門禁設定失敗，請檢查網路連線！');
     }
 }
 
 document.getElementById('adminRequireUserApprovalInput')?.addEventListener('change', () => {
-    saveAdminUserGateSettingsToCloud();
-});
-
-document.getElementById('btnSaveUserGateSettings')?.addEventListener('click', (e) => {
-    e.stopPropagation();
     saveAdminUserGateSettingsToCloud();
 });
 
@@ -11284,7 +11610,7 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
     const base = (existingUser && typeof existingUser === 'object') ? existingUser : {};
     const raw = (u && typeof u === 'object') ? u : {};
 
-    // 統一優先讀取標準欄位 blocked / approved / canEditCommunity（並相容舊欄位 isBlocked / isApproved / canManageBuildings）
+    // 統一優先讀取標準欄位 blocked / approved / canManageRoute / canEditCommunity / realName / lastSeen
     const isBlockedVal = raw.blocked !== undefined
         ? Boolean(raw.blocked)
         : raw.isBlocked !== undefined
@@ -11306,6 +11632,12 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
         isApprovedVal = true;
     }
 
+    const canManageRouteVal = isBlockedVal
+        ? false
+        : (raw.canManageRoute !== undefined
+            ? Boolean(raw.canManageRoute)
+            : Boolean(base.canManageRoute));
+
     const canEditVal = isBlockedVal
         ? false
         : (raw.canEditCommunity !== undefined
@@ -11317,24 +11649,34 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
                     : Boolean(base.canManageBuildings)));
 
     const displayNameVal = String(raw.displayName || raw.name || base.displayName || '車隊隊員').trim() || '車隊隊員';
-    const originalNameVal = String(
-        raw.originalName !== undefined ? raw.originalName : (base.originalName || '')
+    const realNameVal = String(
+        raw.realName !== undefined
+            ? raw.realName
+            : (raw.originalName !== undefined
+                ? raw.originalName
+                : (base.realName !== undefined ? base.realName : (base.originalName || '')))
     ).trim();
-    const lastActiveVal = Number(raw.lastActiveAt || raw.updatedAt || base.lastActiveAt || raw.createdAt || base.createdAt || 0);
-    const createdAtVal = Number(raw.createdAt || base.createdAt || lastActiveVal || 0);
-    const updatedAtVal = Number(raw.updatedAt || raw.updatedByAdminAt || base.updatedAt || lastActiveVal || 0);
+
+    const lastSeenVal = Number(
+        raw.lastSeen || raw.lastActiveAt || raw.updatedAt || base.lastSeen || base.lastActiveAt || raw.createdAt || base.createdAt || 0
+    );
+    const createdAtVal = Number(raw.createdAt || base.createdAt || lastSeenVal || 0);
+    const updatedAtVal = Number(raw.updatedAt || raw.updatedByAdminAt || base.updatedAt || lastSeenVal || 0);
 
     return {
         deviceId: devId,
         displayName: displayNameVal,
-        originalName: originalNameVal,
+        realName: realNameVal,
+        originalName: realNameVal,
         approved: isApprovedVal,
         isApproved: isApprovedVal,
         blocked: isBlockedVal,
         isBlocked: isBlockedVal,
+        canManageRoute: canManageRouteVal,
         canEditCommunity: canEditVal,
         canManageBuildings: canEditVal,
-        lastActiveAt: lastActiveVal,
+        lastSeen: lastSeenVal,
+        lastActiveAt: lastSeenVal,
         createdAt: createdAtVal,
         updatedAt: updatedAtVal
     };
@@ -11346,17 +11688,19 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     const pendingBadgeEl = document.getElementById('adminUsersPendingBadge');
     const now = Date.now();
 
-    // 確保所有在 Firebase 使用者節點下的紀錄（不論 canEditCommunity、approved 或 blocked 為 true 或 false）皆完整顯示，絕不過濾隱藏
+    // 確保所有在 Firebase 使用者節點下的紀錄（不論權限開關為 true 或 false）皆完整顯示，絕不過濾隱藏
     const userList = Object.values(mergedMap || {}).filter(u => u && u.deviceId);
 
-    const ONLINE_HEARTBEAT_MS = 45 * 1000;
+    // 60 秒內有心跳顯示 🟢 上線中，超過顯示 ⚪ 離線
+    const ONLINE_HEARTBEAT_MS = 60 * 1000;
     let onlineCount = 0;
     let pendingCount = 0;
 
     userList.forEach(u => {
         const blocked = Boolean(u.blocked !== undefined ? u.blocked : u.isBlocked);
         const approved = (u.approved !== undefined ? Boolean(u.approved) : Boolean(u.isApproved));
-        u.isOnline = !blocked && (now - Number(u.lastActiveAt || 0) <= ONLINE_HEARTBEAT_MS);
+        const lastTs = Number(u.lastSeen || u.lastActiveAt || 0);
+        u.isOnline = !blocked && lastTs > 0 && (now - lastTs <= ONLINE_HEARTBEAT_MS);
         if (u.isOnline) onlineCount++;
         if (!approved && !blocked) pendingCount++;
     });
@@ -11371,7 +11715,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         const bPending = (!bApproved && !bBlocked) ? 1 : 0;
         if (aPending !== bPending) return bPending - aPending;
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
-        const timeDiff = (b.lastActiveAt || 0) - (a.lastActiveAt || 0);
+        const timeDiff = Number(b.lastSeen || b.lastActiveAt || 0) - Number(a.lastSeen || a.lastActiveAt || 0);
         if (timeDiff !== 0) return timeDiff;
         return String(a.deviceId).localeCompare(String(b.deviceId));
     });
@@ -11403,13 +11747,15 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     userList.forEach(user => {
         const targetDeviceId = user.deviceId;
         const isSelf = (targetDeviceId === fleetDeviceId);
-        // 統一讀取與寫入完全相同的欄位（canEditCommunity / blocked / approved）
+        // 統一讀取與寫入完全相同的欄位（approved / blocked / canManageRoute / canEditCommunity / realName）
         const isBlocked = Boolean(user.blocked !== undefined ? user.blocked : user.isBlocked);
         const isApproved = !isBlocked && (user.approved !== undefined ? Boolean(user.approved) : Boolean(user.isApproved));
         const isPending = !isApproved && !isBlocked;
+        const canManageRoute = !isBlocked && Boolean(user.canManageRoute);
         const canEditCommunity = !isBlocked && Boolean(
             user.canEditCommunity !== undefined ? user.canEditCommunity : user.canManageBuildings
         );
+        const annotatedRealName = String(user.realName || user.originalName || '').trim();
 
         const card = document.createElement('div');
         card.className = isBlocked
@@ -11419,11 +11765,12 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 : 'bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all';
 
         // 計算最後活躍時間文字（絕不顯示任何裝置 ID 亂碼！）
-        const elapsedSec = Math.max(0, Math.floor((now - Number(user.lastActiveAt || 0)) / 1000));
+        const lastTs = Number(user.lastSeen || user.lastActiveAt || 0);
+        const elapsedSec = Math.max(0, Math.floor((now - lastTs) / 1000));
         let activeTimeLabel = '剛剛活躍';
-        if (!user.lastActiveAt) {
+        if (!lastTs) {
             activeTimeLabel = '尚無心跳';
-        } else if (elapsedSec < 45) {
+        } else if (elapsedSec <= 60) {
             activeTimeLabel = '即時在線';
         } else if (elapsedSec < 3600) {
             activeTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))} 分鐘前`;
@@ -11433,7 +11780,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             activeTimeLabel = `${Math.floor(elapsedSec / 86400)} 天前`;
         }
 
-        // 頂部資訊列：使用者自取顯示名稱 + 上線燈號 + 開發者單向原名標註（已整合移除右上角重複狀態標籤）
+        // 頂部資訊列：若已標註原名，主標題顯示原名、下方小字顯示目前暱稱；否則主標題顯示目前暱稱（絕不顯示裝置 ID 亂碼）
         const topRow = document.createElement('div');
         topRow.className = 'flex items-start justify-between gap-2';
 
@@ -11448,61 +11795,82 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 text-indigo-800">本機</span>`
             : '';
 
-        const origNameBadgeHtml = user.originalName
-            ? `<div class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100/90 border border-amber-300 text-amber-950 text-[11px] font-black">
-                   <i class="fa-solid fa-tag text-amber-600 text-[10px]"></i>
-                   <span>原名：${escapeHtmlSafe(user.originalName)}</span>
-               </div>`
-            : `<div class="mt-1 text-[10px] font-bold text-slate-400">尚未標註原名（點下方「✏️ 標註／改原名」單向備註）</div>`;
+        const roleSummaryBadgeHtml = canManageRoute
+            ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">🛡️ 路線管理員（含社區）</span>`
+            : canEditCommunity
+                ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🏢 社區標註員</span>`
+                : `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">🔒 一般唯讀</span>`;
 
-        nameWrap.innerHTML = `
-            <div class="flex items-center gap-1.5 flex-wrap">
-                <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
-                ${selfBadgeHtml}
-                ${statusDotHtml}
-            </div>
-            ${origNameBadgeHtml}
-        `;
+        if (annotatedRealName) {
+            nameWrap.innerHTML = `
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-sm font-black text-slate-900 truncate">🏷️ ${escapeHtmlSafe(annotatedRealName)}</span>
+                    ${selfBadgeHtml}
+                    ${statusDotHtml}
+                    ${roleSummaryBadgeHtml}
+                </div>
+                <div class="mt-0.5 text-[11px] font-bold text-slate-500">
+                    目前暱稱：<span class="text-slate-700 font-black">${escapeHtmlSafe(user.displayName || '隊員')}</span>
+                </div>
+            `;
+        } else {
+            nameWrap.innerHTML = `
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
+                    ${selfBadgeHtml}
+                    ${statusDotHtml}
+                    ${roleSummaryBadgeHtml}
+                </div>
+                <div class="mt-0.5 text-[10px] font-bold text-slate-400">尚未標註原名（點下方「✏️ 標註／改原名」單向備註）</div>
+            `;
+        }
 
         topRow.appendChild(nameWrap);
         card.appendChild(topRow);
 
-        // 中間控制列：1. 帳號存取狀態與「🚫 封鎖 / ✅ 解除封鎖」按鈕  2. 「🏢 社區標註授權」滑動開關 (Toggle Switch)
+        // 中間 3 個獨立權限滑動開關列：
+        // 1. 「准許使用／封鎖」開關 (控制 approved)
+        // 2. 「🛡️ 路線管理（含社區）」開關 (控制 canManageRoute)
+        // 3. 「🏢 僅社區標註」開關 (控制 canEditCommunity)
         const togglesGrid = document.createElement('div');
-        togglesGrid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1.5 border-t border-slate-100';
+        togglesGrid.className = 'grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1.5 border-t border-slate-100';
 
-        // 控制項 A：整合單一明確狀態標籤 + 封鎖／解除封鎖／核准按鈕
+        // 開關 1：「准許使用／封鎖」開關 (控制 approved，同步 blocked: !approved)
         const accessToggleBox = document.createElement('div');
         accessToggleBox.className = isBlocked
-            ? 'bg-rose-100/80 border border-rose-300 rounded-xl p-2.5 flex items-center justify-between gap-2'
+            ? 'bg-rose-100/80 border border-rose-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
             : isPending
-                ? 'bg-amber-100/70 border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2'
-                : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2';
+                ? 'bg-amber-100/70 border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
+                : 'bg-emerald-50/60 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
 
         const unifiedStatusHtml = isBlocked
-            ? `<div class="text-[11px] font-black text-rose-600">⛔ 已封鎖停用</div>`
+            ? `<div class="text-[11px] font-black text-rose-600 mt-0.5">⛔ 已封鎖停用</div>`
             : isPending
-                ? `<div class="text-[11px] font-black text-amber-600 animate-pulse">⏳ 待核准放行</div>`
-                : `<div class="text-[11px] font-black text-emerald-600">正常授權使用</div>`;
+                ? `<div class="text-[11px] font-black text-amber-600 mt-0.5 animate-pulse">⏳ 待核准放行</div>`
+                : `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 准許正常使用</div>`;
 
-        accessToggleBox.innerHTML = `
-            <div class="min-w-0">
-                <div class="text-[11px] font-black text-slate-800">帳號使用狀態</div>
-                ${unifiedStatusHtml}
-            </div>
+        const accessTextCol = document.createElement('div');
+        accessTextCol.className = 'min-w-0 flex-1';
+        accessTextCol.innerHTML = `
+            <div class="text-[11px] font-black text-slate-800">准許使用／封鎖</div>
+            ${unifiedStatusHtml}
         `;
 
-        const accessActionsWrap = document.createElement('div');
-        accessActionsWrap.className = 'flex items-center gap-1 flex-shrink-0';
+        const accessSwitchBtn = document.createElement('button');
+        accessSwitchBtn.type = 'button';
+        accessSwitchBtn.setAttribute('role', 'switch');
+        accessSwitchBtn.setAttribute('aria-checked', isApproved ? 'true' : 'false');
+        accessSwitchBtn.className = `admin-user-toggle-switch ${isApproved ? 'is-on' : 'is-off'}`;
+        accessSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
-        if (isPending) {
-            const approveBtn = document.createElement('button');
-            approveBtn.type = 'button';
-            approveBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap cursor-pointer';
-            approveBtn.textContent = '✓ 核准';
-            approveBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                approveBtn.disabled = true;
+        const handleToggleApprovedAccess = async (e) => {
+            e.stopPropagation();
+            if (accessSwitchBtn.disabled) return;
+            accessSwitchBtn.disabled = true;
+            try { navigator.vibrate?.(30); } catch (err) {}
+
+            const nextApproved = !isApproved;
+            if (nextApproved) {
                 const ok = await updateCloudFleetUserFields(targetDeviceId, {
                     approved: true,
                     isApproved: true,
@@ -11510,75 +11878,108 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                     isBlocked: false
                 });
                 if (ok) {
-                    showAdminUserActionToast(`✅ 已核准「${user.displayName}」授權使用`, 'success');
-                }
-            });
-            accessActionsWrap.appendChild(approveBtn);
-        }
-
-        const blockToggleBtn = document.createElement('button');
-        blockToggleBtn.type = 'button';
-        if (isBlocked) {
-            blockToggleBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap cursor-pointer';
-            blockToggleBtn.textContent = '✅ 解除封鎖';
-        } else {
-            blockToggleBtn.className = 'bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow-sm active:scale-95 whitespace-nowrap cursor-pointer';
-            blockToggleBtn.textContent = '🚫 封鎖';
-        }
-
-        blockToggleBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            blockToggleBtn.disabled = true;
-            try { navigator.vibrate?.(35); } catch (err) {}
-
-            if (isBlocked) {
-                // 再次點擊解除封鎖 -> 恢復正常授權使用
-                const ok = await updateCloudFleetUserFields(targetDeviceId, {
-                    blocked: false,
-                    isBlocked: false,
-                    approved: true,
-                    isApproved: true
-                });
-                if (ok) {
-                    showAdminUserActionToast('✅ 已解除封鎖，恢復正常授權使用', 'success');
+                    showAdminUserActionToast(`✅ 已開啟「${annotatedRealName || user.displayName}」准許使用`, 'success');
                 }
             } else {
-                // 點擊「🚫 封鎖」-> 將 blocked 設為 true，並同步將 approved 設為 false、canEditCommunity 設為 false
+                // 關閉准許使用 -> 封鎖停用，並同步關閉路線管理與社區標註權限
                 const ok = await updateCloudFleetUserFields(targetDeviceId, {
-                    blocked: true,
-                    isBlocked: true,
                     approved: false,
                     isApproved: false,
+                    blocked: true,
+                    isBlocked: true,
+                    canManageRoute: false,
                     canEditCommunity: false,
                     canManageBuildings: false
                 });
                 if (ok) {
-                    // 同步清除該裝置在 live_fleet 的即時雷達座標節點
                     fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
                         method: 'DELETE'
                     }, 4000).catch(() => {});
-                    showAdminUserActionToast('⛔ 已封鎖該使用者', 'danger');
+                    showAdminUserActionToast(`⛔ 已封鎖「${annotatedRealName || user.displayName}」並暫停使用權限`, 'danger');
                 }
             }
-        });
+        };
 
-        accessActionsWrap.appendChild(blockToggleBtn);
-        accessToggleBox.appendChild(accessActionsWrap);
+        accessSwitchBtn.addEventListener('click', handleToggleApprovedAccess);
+        accessToggleBox.addEventListener('click', handleToggleApprovedAccess);
+        accessToggleBox.appendChild(accessTextCol);
+        accessToggleBox.appendChild(accessSwitchBtn);
 
-        // 控制項 B：社區標註授權 — 明顯滑動開關（Toggle Switch）＋ 即時切換明確狀態文字
+        // 開關 2：「🛡️ 路線管理（含社區）」開關 (控制 canManageRoute)
+        const routeToggleBox = document.createElement('div');
+        routeToggleBox.className = canManageRoute
+            ? 'bg-indigo-50/80 border border-indigo-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
+            : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
+
+        const routeStatusTextHtml = canManageRoute
+            ? `<div class="text-[11px] font-black text-indigo-700 mt-0.5">✅ 可審核/改刪路線+社區</div>`
+            : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 無路線管理權限</div>`;
+
+        const routeTextCol = document.createElement('div');
+        routeTextCol.className = 'min-w-0 flex-1';
+        routeTextCol.innerHTML = `
+            <div class="text-[11px] font-black text-slate-800">🛡️ 路線管理（含社區）</div>
+            ${routeStatusTextHtml}
+        `;
+
+        const routeSwitchBtn = document.createElement('button');
+        routeSwitchBtn.type = 'button';
+        routeSwitchBtn.setAttribute('role', 'switch');
+        routeSwitchBtn.setAttribute('aria-checked', canManageRoute ? 'true' : 'false');
+        routeSwitchBtn.className = `admin-user-toggle-switch ${canManageRoute ? 'is-on' : 'is-off'}`;
+        routeSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
+
+        const handleToggleRouteManagerAuth = async (e) => {
+            e.stopPropagation();
+            if (routeSwitchBtn.disabled) return;
+            routeSwitchBtn.disabled = true;
+            try { navigator.vibrate?.(25); } catch (err) {}
+
+            const nextRouteState = !canManageRoute;
+            const patchPayload = {
+                canManageRoute: Boolean(nextRouteState),
+                updatedAt: Date.now()
+            };
+            // 若開啟路線管理員權限時該帳號原本被封鎖或未核准，一併設為准許使用
+            if (nextRouteState && (!isApproved || isBlocked)) {
+                patchPayload.approved = true;
+                patchPayload.isApproved = true;
+                patchPayload.blocked = false;
+                patchPayload.isBlocked = false;
+            }
+
+            const ok = await updateCloudFleetUserFields(targetDeviceId, patchPayload);
+            if (ok) {
+                showAdminUserActionToast(
+                    nextRouteState
+                        ? `🛡️ 已授權「${annotatedRealName || user.displayName}」路線管理員（含社區）`
+                        : `🔒 已收回「${annotatedRealName || user.displayName}」路線管理員權限`,
+                    nextRouteState ? 'success' : 'info'
+                );
+            }
+        };
+
+        routeSwitchBtn.addEventListener('click', handleToggleRouteManagerAuth);
+        routeToggleBox.addEventListener('click', handleToggleRouteManagerAuth);
+        routeToggleBox.appendChild(routeTextCol);
+        routeToggleBox.appendChild(routeSwitchBtn);
+
+        // 開關 3：「🏢 僅社區標註」開關 (控制 canEditCommunity)
         const bldgToggleBox = document.createElement('div');
         bldgToggleBox.className = canEditCommunity
             ? 'bg-emerald-50/70 border border-emerald-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
             : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
 
         const bldgStatusTextHtml = canEditCommunity
-            ? `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 已授權可標註</div>`
-            : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 禁止標註（一般唯讀）</div>`;
+            ? `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 已授權可標註社區</div>`
+            : (canManageRoute
+                ? `<div class="text-[11px] font-bold text-indigo-600 mt-0.5">🛡️ 已由路線管理員涵蓋</div>`
+                : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 禁止標註（一般唯讀）</div>`);
 
         const bldgTextCol = document.createElement('div');
         bldgTextCol.className = 'min-w-0 flex-1';
         bldgTextCol.innerHTML = `
-            <div class="text-[11px] font-black text-slate-800">🏢 社區標註授權</div>
+            <div class="text-[11px] font-black text-slate-800">🏢 僅社區標註</div>
             ${bldgStatusTextHtml}
         `;
 
@@ -11601,8 +12002,8 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 canManageBuildings: Boolean(nextState),
                 updatedAt: Date.now()
             };
-            // 若開啟社區標註授權時該帳號原本被封鎖，一併解除封鎖並設為已核准
-            if (nextState && isBlocked) {
+            // 若開啟社區標註授權時該帳號原本被封鎖或未核准，一併解除封鎖並設為已核准
+            if (nextState && (!isApproved || isBlocked)) {
                 patchPayload.blocked = false;
                 patchPayload.isBlocked = false;
                 patchPayload.approved = true;
@@ -11613,8 +12014,8 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             if (ok) {
                 showAdminUserActionToast(
                     nextState
-                        ? `✅ 已開啟「${user.displayName}」社區標註授權`
-                        : `🔒 已關閉「${user.displayName}」社區標註授權（一般唯讀）`,
+                        ? `✅ 已開啟「${annotatedRealName || user.displayName}」僅社區標註授權`
+                        : `🔒 已關閉「${annotatedRealName || user.displayName}」僅社區標註開關`,
                     nextState ? 'success' : 'info'
                 );
             }
@@ -11627,16 +12028,17 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         bldgToggleBox.appendChild(toggleSwitchBtn);
 
         togglesGrid.appendChild(accessToggleBox);
+        togglesGrid.appendChild(routeToggleBox);
         togglesGrid.appendChild(bldgToggleBox);
         card.appendChild(togglesGrid);
 
-        // 內嵌單向原名編輯列（預設隱藏，點擊「✏️ 標註／改原名」展開，解決部分瀏覽器/WebView 阻擋 prompt 彈窗問題）
+        // 內嵌單向原名編輯列（預設隱藏，點擊「✏️ 標註／改原名」展開，修改 realName / originalName）
         const inlineOrigEditRow = document.createElement('div');
         inlineOrigEditRow.className = 'hidden bg-amber-50/90 border border-amber-300 rounded-xl p-2 space-y-1.5';
         inlineOrigEditRow.innerHTML = `
-            <div class="text-[10px] font-black text-amber-900">✏️ 單向標註「${escapeHtmlSafe(user.displayName)}」的真實原名（僅開發者可見，不影響對方自取名稱）：</div>
+            <div class="text-[10px] font-black text-amber-900">✏️ 單向標註「${escapeHtmlSafe(user.displayName)}」的真實原名（僅開發者可見，不覆蓋對方自取名稱）：</div>
             <div class="flex items-center gap-1.5">
-                <input type="text" class="admin-inline-orig-input flex-1 min-w-0 bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="輸入原名備註（如：阿翔）" value="${escapeHtmlSafe(user.originalName || user.displayName || '')}">
+                <input type="text" class="admin-inline-orig-input flex-1 min-w-0 bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="輸入原名備註（如：阿翔）" value="${escapeHtmlSafe(annotatedRealName || user.displayName || '')}">
                 <button type="button" class="admin-inline-orig-save bg-amber-600 hover:bg-amber-700 text-white font-black text-[11px] px-3 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap">儲存</button>
                 <button type="button" class="admin-inline-orig-cancel bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 font-bold text-[11px] px-2.5 py-1.5 rounded-lg active:scale-95 whitespace-nowrap">取消</button>
             </div>
@@ -11652,6 +12054,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             const cleanOrig = (origInputEl?.value || '').trim();
             origSaveBtn.disabled = true;
             const ok = await updateCloudFleetUserFields(targetDeviceId, {
+                realName: cleanOrig,
                 originalName: cleanOrig
             });
             if (ok) {
@@ -11716,7 +12119,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
                     fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
                 ]);
-                showAdminUserActionToast(`🗑️ 已刪除「${user.displayName}」的使用者紀錄`, 'info');
+                showAdminUserActionToast(`🗑️ 已刪除「${annotatedRealName || user.displayName}」的使用者紀錄`, 'info');
             } finally {
                 await fetchAndRenderAdminFleetUsersList();
             }
@@ -11738,7 +12141,7 @@ async function fetchAndRenderAdminFleetUsersList() {
     isFetchingAdminFleetUsers = true;
 
     try {
-        // 同時讀取 system_config/users（正式持久使用者權限節點）與 live_fleet（車隊即時雷達節點），確保所有使用者紀錄與 canEditCommunity 狀態完整還原
+        // 同時讀取 system_config/users（正式持久使用者權限節點）與 live_fleet（車隊即時雷達節點），確保所有使用者紀錄與權限狀態完整還原
         const [usersRes, liveRes] = await Promise.all([
             fetchWithTimeout(FLEET_USERS_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null),
             fetchWithTimeout(LIVE_FLEET_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null)
@@ -11750,7 +12153,7 @@ async function fetchAndRenderAdminFleetUsersList() {
 
         const mergedMap = {};
 
-        // 1. 先載入 Firebase system_config/users 節點中的所有使用者（嚴格以資料庫回傳的 canEditCommunity 為準，絕不被預設值 false 或舊快取覆蓋）
+        // 1. 先載入 Firebase system_config/users 節點中的所有使用者（嚴格以資料庫回傳的 canManageRoute / canEditCommunity / approved / realName 為準）
         if (rawUsers && typeof rawUsers === 'object') {
             Object.entries(rawUsers).forEach(([devId, u]) => {
                 if (!devId || !u || typeof u !== 'object') return;
@@ -11758,38 +12161,46 @@ async function fetchAndRenderAdminFleetUsersList() {
             });
         }
 
-        // 2. 合併 live_fleet 中的線上裝置：若已在 system_config/users 中則只更新活躍時間（保留資料庫中的 canEditCommunity / blocked / approved / originalName）
+        // 2. 合併 live_fleet 中的線上裝置：若已在 system_config/users 中則只更新活躍時間（保留資料庫中的權限與原名）
         if (rawLive && typeof rawLive === 'object') {
             Object.entries(rawLive).forEach(([devId, liveInfo]) => {
                 if (!devId || !liveInfo || typeof liveInfo !== 'object') return;
                 const liveTs = Number(liveInfo.updatedAt || 0);
                 const liveName = String(liveInfo.name || '車隊隊員').trim();
                 if (mergedMap[devId]) {
-                    if (liveTs > mergedMap[devId].lastActiveAt) {
+                    if (liveTs > mergedMap[devId].lastSeen) {
+                        mergedMap[devId].lastSeen = liveTs;
                         mergedMap[devId].lastActiveAt = liveTs;
                     }
                     if (liveName && (!mergedMap[devId].displayName || mergedMap[devId].displayName === '未命名隊員' || mergedMap[devId].displayName === '車隊隊員')) {
                         mergedMap[devId].displayName = liveName;
                     }
-                    // 若 live_fleet 節點上也有 canEditCommunity 且 system_config/users 尚未記錄，同步採納
+                    if (liveInfo.canManageRoute !== undefined && rawUsers?.[devId]?.canManageRoute === undefined) {
+                        mergedMap[devId].canManageRoute = !mergedMap[devId].blocked && Boolean(liveInfo.canManageRoute);
+                    }
                     if (liveInfo.canEditCommunity !== undefined && rawUsers?.[devId]?.canEditCommunity === undefined) {
                         const canEditFromLive = !mergedMap[devId].blocked && Boolean(liveInfo.canEditCommunity);
                         mergedMap[devId].canEditCommunity = canEditFromLive;
                         mergedMap[devId].canManageBuildings = canEditFromLive;
                     }
                 } else {
+                    const liveCanRoute = Boolean(liveInfo.canManageRoute);
                     const liveCanEdit = Boolean(liveInfo.canEditCommunity !== undefined ? liveInfo.canEditCommunity : liveInfo.canManageBuildings);
                     const liveBlocked = Boolean(liveInfo.blocked !== undefined ? liveInfo.blocked : liveInfo.isBlocked);
                     const liveApproved = liveBlocked ? false : (liveInfo.approved !== undefined ? Boolean(liveInfo.approved) : (liveInfo.isApproved !== undefined ? Boolean(liveInfo.isApproved) : true));
+                    const liveRealName = String(liveInfo.realName || liveInfo.originalName || '').trim();
                     mergedMap[devId] = normalizeFleetUserRecord(devId, {
                         displayName: liveName || '車隊隊員',
-                        originalName: String(liveInfo.originalName || '').trim(),
+                        realName: liveRealName,
+                        originalName: liveRealName,
                         approved: liveApproved,
                         isApproved: liveApproved,
                         blocked: liveBlocked,
                         isBlocked: liveBlocked,
+                        canManageRoute: liveBlocked ? false : liveCanRoute,
                         canEditCommunity: liveBlocked ? false : liveCanEdit,
                         canManageBuildings: liveBlocked ? false : liveCanEdit,
+                        lastSeen: liveTs || now,
                         lastActiveAt: liveTs || now,
                         createdAt: liveTs || now,
                         updatedAt: liveTs || now
@@ -11808,6 +12219,8 @@ async function fetchAndRenderAdminFleetUsersList() {
         allCloudFleetUsersMap = mergedMap;
         if (fleetDeviceId && mergedMap[fleetDeviceId]) {
             myCloudUserProfile = mergedMap[fleetDeviceId];
+            syncAdminCurrentRoleBadgeUI();
+            syncRoutePermissionControlsUI();
         }
 
         renderAdminFleetUsersCardsFromMap(mergedMap);
@@ -11838,18 +12251,26 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         : null;
     const existingRecord = previousRecord || {};
 
-    // 建立局部更新欄位，同時保留既有 displayName / originalName / lastActiveAt，並寫入明確的 canEditCommunity 與 updatedAt
+    // 建立局部更新欄位，同時保留既有 displayName / realName / lastSeen，並寫入明確的權限欄位與 updatedAt
     const syncedPatch = {
         ...(existingRecord.displayName ? { displayName: existingRecord.displayName } : {}),
-        ...(existingRecord.originalName !== undefined ? { originalName: existingRecord.originalName } : {}),
-        ...(existingRecord.lastActiveAt ? { lastActiveAt: existingRecord.lastActiveAt } : {}),
+        ...(existingRecord.realName !== undefined ? { realName: existingRecord.realName, originalName: existingRecord.realName } : {}),
+        ...(existingRecord.lastSeen ? { lastSeen: existingRecord.lastSeen, lastActiveAt: existingRecord.lastSeen } : {}),
         ...(existingRecord.createdAt ? { createdAt: existingRecord.createdAt } : {}),
         ...patchFields,
         updatedAt: now,
         updatedByAdminAt: now
     };
 
-    // 統一讀寫欄位名稱（canEditCommunity <-> canManageBuildings、approved <-> isApproved、blocked <-> isBlocked）
+    // 統一讀寫欄位名稱（realName <-> originalName、canManageRoute、canEditCommunity <-> canManageBuildings、approved <-> isApproved、blocked <-> isBlocked）
+    if (patchFields.realName !== undefined || patchFields.originalName !== undefined) {
+        const nameVal = String(patchFields.realName !== undefined ? patchFields.realName : patchFields.originalName).trim();
+        syncedPatch.realName = nameVal;
+        syncedPatch.originalName = nameVal;
+    }
+    if (patchFields.canManageRoute !== undefined) {
+        syncedPatch.canManageRoute = Boolean(patchFields.canManageRoute);
+    }
     if (patchFields.canEditCommunity !== undefined || patchFields.canManageBuildings !== undefined) {
         const val = Boolean(patchFields.canEditCommunity !== undefined ? patchFields.canEditCommunity : patchFields.canManageBuildings);
         syncedPatch.canEditCommunity = val;
@@ -11871,6 +12292,7 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
     if (targetDeviceId === fleetDeviceId) {
         myCloudUserProfile = allCloudFleetUsersMap[targetDeviceId];
         syncAdminCurrentRoleBadgeUI();
+        syncRoutePermissionControlsUI();
         evaluateAndRenderAccessGateOverlay();
     }
     renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
@@ -11903,12 +12325,13 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    canManageRoute: Boolean(allCloudFleetUsersMap[targetDeviceId].canManageRoute),
                     canEditCommunity: Boolean(allCloudFleetUsersMap[targetDeviceId].canEditCommunity),
                     canManageBuildings: Boolean(allCloudFleetUsersMap[targetDeviceId].canEditCommunity),
                     approved: Boolean(allCloudFleetUsersMap[targetDeviceId].approved),
                     blocked: Boolean(allCloudFleetUsersMap[targetDeviceId].blocked),
-                    ...(allCloudFleetUsersMap[targetDeviceId].originalName !== undefined
-                        ? { originalName: allCloudFleetUsersMap[targetDeviceId].originalName }
+                    ...(allCloudFleetUsersMap[targetDeviceId].realName !== undefined
+                        ? { realName: allCloudFleetUsersMap[targetDeviceId].realName, originalName: allCloudFleetUsersMap[targetDeviceId].realName }
                         : {})
                 })
             }, 4000).catch(() => {});
@@ -11926,6 +12349,7 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         if (targetDeviceId === fleetDeviceId && previousRecord) {
             myCloudUserProfile = previousRecord;
             syncAdminCurrentRoleBadgeUI();
+            syncRoutePermissionControlsUI();
             evaluateAndRenderAccessGateOverlay();
         }
         renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
@@ -12263,7 +12687,7 @@ async function persistAdminAiSettingsImmediately() {
     const cancelKeyBtn = document.getElementById('btnCancelNewAiKey');
 
     // 確保輸入框點擊或觸控時明確 stopPropagation 並 focus，絕不被外層攔截
-    [noteInput, keyInput, document.getElementById('adminAnnouncementInput'), document.getElementById('adminBuildingManagerPwdInput')].forEach(inp => {
+    [noteInput, keyInput, document.getElementById('adminAnnouncementInput')].forEach(inp => {
         if (!inp) return;
         ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(evt => {
             inp.addEventListener(evt, (e) => {
@@ -12436,9 +12860,8 @@ function populateAdminSettingsForm(cfg) {
     setVal('adminMaxSpeedInput', c.maxSpeedKmh);
     setVal('adminMinLockSpeedInput', c.minLockSpeedKmh);
 
-    // 同步「👥 管理使用者」書籤頁中的全站門禁開關與管理者密碼
+    // 同步「👥 管理使用者」書籤頁中的全站門禁開關
     setChecked('adminRequireUserApprovalInput', c.requireUserApproval);
-    setVal('adminBuildingManagerPwdInput', c.buildingManagerPassword || '666666');
     syncAdminGateStatusBadgeUI(c.requireUserApproval);
 }
 
@@ -12471,6 +12894,7 @@ function readAdminSettingsForm() {
         document.getElementById('adminAddAiKeyFormWrap')?.classList.add('hidden');
     }
 
+    const reqApprovalVal = getChecked('adminRequireUserApprovalInput');
     return normalizeSystemConfig({
         radarIntervalSec: selectedAdminInterval,
         announcementText: getVal('adminAnnouncementInput') || '',
@@ -12490,8 +12914,8 @@ function readAdminSettingsForm() {
         aiDispatchModel: selectedAdminAiModel,
         aiApiKeys: editingAdminAiKeys,
         activeAiKeyId: editingActiveAiKeyId,
-        requireUserApproval: getChecked('adminRequireUserApprovalInput'),
-        buildingManagerPassword: (getVal('adminBuildingManagerPwdInput') || '666666').trim()
+        requireApproval: reqApprovalVal,
+        requireUserApproval: reqApprovalVal
     });
 }
 

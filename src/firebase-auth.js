@@ -669,15 +669,8 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         if (!approved && !blocked) pendingCount++;
     });
 
-    // 排序：1. 待核准優先 ➔ 2. 上線中優先 ➔ 3. 最後活躍時間由新到舊（同時間則以 deviceId 穩定排序避免跳動）
+    // 排序：1. 在線人員一律最上方 ➔ 2. 離線人員依最後上線時間由新到舊（同時間以 deviceId 穩定排序避免跳動）
     userList.sort((a, b) => {
-        const aBlocked = Boolean(a.blocked !== undefined ? a.blocked : a.isBlocked);
-        const bBlocked = Boolean(b.blocked !== undefined ? b.blocked : b.isBlocked);
-        const aApproved = (a.approved !== undefined ? Boolean(a.approved) : Boolean(a.isApproved));
-        const bApproved = (b.approved !== undefined ? Boolean(b.approved) : Boolean(b.isApproved));
-        const aPending = (!aApproved && !aBlocked) ? 1 : 0;
-        const bPending = (!bApproved && !bBlocked) ? 1 : 0;
-        if (aPending !== bPending) return bPending - aPending;
         if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
         const timeDiff = Number(b.lastSeen || b.lastActiveAt || 0) - Number(a.lastSeen || a.lastActiveAt || 0);
         if (timeDiff !== 0) return timeDiff;
@@ -708,6 +701,19 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         return;
     }
 
+    // 頂部極簡表頭：左側「成員」，右側對齊「准許」、「路線」、「社區」
+    const headerRow = document.createElement('div');
+    headerRow.className = 'flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] font-black text-slate-500 border-b border-slate-200 select-none';
+    headerRow.innerHTML = `
+        <div class="min-w-0 flex-1">成員</div>
+        <div class="flex items-center gap-1.5 flex-shrink-0">
+            <span class="w-[42px] text-center">准許</span>
+            <span class="w-[42px] text-center">路線</span>
+            <span class="w-[42px] text-center">社區</span>
+        </div>
+    `;
+    listContainer.appendChild(headerRow);
+
     userList.forEach(user => {
         const targetDeviceId = user.deviceId;
         const isSelf = (targetDeviceId === fleetDeviceId);
@@ -720,111 +726,109 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             user.canEditCommunity !== undefined ? user.canEditCommunity : user.canManageBuildings
         );
         const annotatedRealName = String(user.realName || user.originalName || '').trim();
+        const displayNickname = String(user.displayName || '隊員').trim();
 
         const card = document.createElement('div');
         card.className = isBlocked
-            ? 'bg-rose-50/90 border-2 border-rose-300 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all'
+            ? 'bg-rose-50/90 border border-rose-300 rounded-xl px-2.5 py-1.5 shadow-sm transition-all'
             : isPending
-                ? 'bg-amber-50/90 border-2 border-amber-400 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all'
-                : 'bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5 shadow-sm transition-all';
+                ? 'bg-amber-50/90 border border-amber-300 rounded-xl px-2.5 py-1.5 shadow-sm transition-all'
+                : 'bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 shadow-sm transition-all';
 
-        // 計算最後活躍時間文字（絕不顯示任何裝置 ID 亂碼！）
+        // 精簡最後上線時間文字（如：在線、1分前、2小時前、3天前）
         const lastTs = Number(user.lastSeen || user.lastActiveAt || 0);
         const elapsedSec = Math.max(0, Math.floor((now - lastTs) / 1000));
-        let activeTimeLabel = '剛剛活躍';
-        if (!lastTs) {
-            activeTimeLabel = '尚無心跳';
-        } else if (elapsedSec <= 60) {
-            activeTimeLabel = '即時在線';
+        let compactTimeLabel = '在線';
+        if (user.isOnline) {
+            compactTimeLabel = '在線';
+        } else if (!lastTs) {
+            compactTimeLabel = '無紀錄';
+        } else if (elapsedSec < 60) {
+            compactTimeLabel = '剛剛';
         } else if (elapsedSec < 3600) {
-            activeTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))} 分鐘前`;
+            compactTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))}分前`;
         } else if (elapsedSec < 86400) {
-            activeTimeLabel = `${Math.floor(elapsedSec / 3600)} 小時前`;
+            compactTimeLabel = `${Math.floor(elapsedSec / 3600)}小時前`;
         } else {
-            activeTimeLabel = `${Math.floor(elapsedSec / 86400)} 天前`;
+            compactTimeLabel = `${Math.floor(elapsedSec / 86400)}天前`;
         }
 
-        // 頂部資訊列：若已標註原名，主標題顯示原名、下方小字顯示目前暱稱；否則主標題顯示目前暱稱（絕不顯示裝置 ID 亂碼）
-        const topRow = document.createElement('div');
-        topRow.className = 'flex items-start justify-between gap-2';
+        // 主緊湊橫列（左雙行小字 ＋ 右三開關，高度約 52px）
+        const mainRow = document.createElement('div');
+        mainRow.className = 'flex items-center justify-between gap-2 min-h-[40px]';
 
-        const nameWrap = document.createElement('div');
-        nameWrap.className = 'min-w-0 flex-1';
+        // 左側：雙行緊湊小字
+        const leftCol = document.createElement('div');
+        leftCol.className = 'min-w-0 flex-1 flex flex-col justify-center gap-0.5';
 
-        const statusDotHtml = user.isOnline
-            ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🟢 上線中</span>`
-            : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">⚪ 離線 (${activeTimeLabel})</span>`;
-
+        const statusDot = user.isOnline ? '🟢' : '⚪';
+        const primaryName = annotatedRealName || displayNickname;
+        const nicknameSuffixHtml = (annotatedRealName && displayNickname && displayNickname !== annotatedRealName)
+            ? `<span class="text-[10px] font-bold text-slate-400 truncate">(${escapeHtmlSafe(displayNickname)})</span>`
+            : '';
         const selfBadgeHtml = isSelf
-            ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 text-indigo-800">本機</span>`
+            ? `<span class="px-1 py-0 rounded text-[9px] font-black bg-indigo-100 text-indigo-700 leading-tight flex-shrink-0">本機</span>`
             : '';
 
-        const roleSummaryBadgeHtml = canManageRoute
-            ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 border border-indigo-300">🛡️ 路線管理員（含社區）</span>`
-            : canEditCommunity
-                ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🏢 社區標註員</span>`
-                : `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">🔒 一般唯讀</span>`;
-
-        if (annotatedRealName) {
-            nameWrap.innerHTML = `
-                <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="text-sm font-black text-slate-900 truncate">🏷️ ${escapeHtmlSafe(annotatedRealName)}</span>
-                    ${selfBadgeHtml}
-                    ${statusDotHtml}
-                    ${roleSummaryBadgeHtml}
-                </div>
-                <div class="mt-0.5 text-[11px] font-bold text-slate-500">
-                    目前暱稱：<span class="text-slate-700 font-black">${escapeHtmlSafe(user.displayName || '隊員')}</span>
-                </div>
-            `;
-        } else {
-            nameWrap.innerHTML = `
-                <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
-                    ${selfBadgeHtml}
-                    ${statusDotHtml}
-                    ${roleSummaryBadgeHtml}
-                </div>
-                <div class="mt-0.5 text-[10px] font-bold text-slate-400">尚未標註原名（點下方「✏️ 標註／改原名」單向備註）</div>
-            `;
-        }
-
-        topRow.appendChild(nameWrap);
-        card.appendChild(topRow);
-
-        // 中間 3 個獨立權限滑動開關列：
-        // 1. 「准許使用／封鎖」開關 (控制 approved)
-        // 2. 「🛡️ 路線管理（含社區）」開關 (控制 canManageRoute)
-        // 3. 「🏢 僅社區標註」開關 (控制 canEditCommunity)
-        const togglesGrid = document.createElement('div');
-        togglesGrid.className = 'grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1.5 border-t border-slate-100';
-
-        // 開關 1：「准許使用／封鎖」開關 (控制 approved，同步 blocked: !approved)
-        const accessToggleBox = document.createElement('div');
-        accessToggleBox.className = isBlocked
-            ? 'bg-rose-100/80 border border-rose-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
-            : isPending
-                ? 'bg-amber-100/70 border border-amber-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
-                : 'bg-emerald-50/60 border border-emerald-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
-
-        const unifiedStatusHtml = isBlocked
-            ? `<div class="text-[11px] font-black text-rose-600 mt-0.5">⛔ 已封鎖停用</div>`
-            : isPending
-                ? `<div class="text-[11px] font-black text-amber-600 mt-0.5 animate-pulse">⏳ 待核准放行</div>`
-                : `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 准許正常使用</div>`;
-
-        const accessTextCol = document.createElement('div');
-        accessTextCol.className = 'min-w-0 flex-1';
-        accessTextCol.innerHTML = `
-            <div class="text-[11px] font-black text-slate-800">准許使用／封鎖</div>
-            ${unifiedStatusHtml}
+        const line1 = document.createElement('div');
+        line1.className = 'flex items-center gap-1 min-w-0 leading-tight';
+        line1.innerHTML = `
+            <span class="text-[10px] leading-none flex-shrink-0">${statusDot}</span>
+            <span class="text-xs font-black text-slate-900 truncate">${escapeHtmlSafe(primaryName)}</span>
+            ${nicknameSuffixHtml}
+            ${selfBadgeHtml}
         `;
 
+        const line2 = document.createElement('div');
+        line2.className = 'flex items-center gap-1.5 text-[10px] font-bold text-slate-400 leading-tight flex-wrap';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = user.isOnline
+            ? 'text-emerald-600 font-black'
+            : (isBlocked ? 'text-rose-500 font-black' : 'text-slate-400');
+        timeSpan.textContent = isBlocked ? `${compactTimeLabel}·已封鎖` : compactTimeLabel;
+
+        const dotSep1 = document.createElement('span');
+        dotSep1.className = 'text-slate-300';
+        dotSep1.textContent = '·';
+
+        const editOrigNameBtn = document.createElement('button');
+        editOrigNameBtn.type = 'button';
+        editOrigNameBtn.className = 'text-amber-700 hover:text-amber-900 font-black active:scale-95 transition cursor-pointer';
+        editOrigNameBtn.textContent = '✏️ 改原名';
+
+        const dotSep2 = document.createElement('span');
+        dotSep2.className = 'text-slate-300';
+        dotSep2.textContent = '·';
+
+        const deleteRecordBtn = document.createElement('button');
+        deleteRecordBtn.type = 'button';
+        deleteRecordBtn.className = 'text-rose-500 hover:text-rose-700 font-black active:scale-95 transition cursor-pointer';
+        deleteRecordBtn.textContent = '🗑️ 刪除';
+
+        line2.appendChild(timeSpan);
+        line2.appendChild(dotSep1);
+        line2.appendChild(editOrigNameBtn);
+        line2.appendChild(dotSep2);
+        line2.appendChild(deleteRecordBtn);
+
+        leftCol.appendChild(line1);
+        leftCol.appendChild(line2);
+
+        // 右側：3 顆迷你切換開關橫向並排（對應表頭「准許」、「路線」、「社區」）
+        const rightToggles = document.createElement('div');
+        rightToggles.className = 'flex items-center gap-1.5 flex-shrink-0';
+
+        // 開關 1：「准許（准許使用／封鎖）」(控制 approved，同步 blocked: !approved)
+        const accessCell = document.createElement('div');
+        accessCell.className = 'w-[42px] flex items-center justify-center';
         const accessSwitchBtn = document.createElement('button');
         accessSwitchBtn.type = 'button';
+        accessSwitchBtn.title = '准許使用／封鎖';
         accessSwitchBtn.setAttribute('role', 'switch');
         accessSwitchBtn.setAttribute('aria-checked', isApproved ? 'true' : 'false');
         accessSwitchBtn.className = `admin-user-toggle-switch ${isApproved ? 'is-on' : 'is-off'}`;
+        accessSwitchBtn.style.transform = 'scale(0.76)';
         accessSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleApprovedAccess = async (e) => {
@@ -863,34 +867,19 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 }
             }
         };
-
         accessSwitchBtn.addEventListener('click', handleToggleApprovedAccess);
-        accessToggleBox.addEventListener('click', handleToggleApprovedAccess);
-        accessToggleBox.appendChild(accessTextCol);
-        accessToggleBox.appendChild(accessSwitchBtn);
+        accessCell.appendChild(accessSwitchBtn);
 
-        // 開關 2：「🛡️ 路線管理（含社區）」開關 (控制 canManageRoute)
-        const routeToggleBox = document.createElement('div');
-        routeToggleBox.className = canManageRoute
-            ? 'bg-indigo-50/80 border border-indigo-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
-            : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
-
-        const routeStatusTextHtml = canManageRoute
-            ? `<div class="text-[11px] font-black text-indigo-700 mt-0.5">✅ 可審核/改刪路線+社區</div>`
-            : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 無路線管理權限</div>`;
-
-        const routeTextCol = document.createElement('div');
-        routeTextCol.className = 'min-w-0 flex-1';
-        routeTextCol.innerHTML = `
-            <div class="text-[11px] font-black text-slate-800">🛡️ 路線管理（含社區）</div>
-            ${routeStatusTextHtml}
-        `;
-
+        // 開關 2：「路線（路線管理含社區）」(控制 canManageRoute)
+        const routeCell = document.createElement('div');
+        routeCell.className = 'w-[42px] flex items-center justify-center';
         const routeSwitchBtn = document.createElement('button');
         routeSwitchBtn.type = 'button';
+        routeSwitchBtn.title = '路線管理（含社區）';
         routeSwitchBtn.setAttribute('role', 'switch');
         routeSwitchBtn.setAttribute('aria-checked', canManageRoute ? 'true' : 'false');
         routeSwitchBtn.className = `admin-user-toggle-switch ${canManageRoute ? 'is-on' : 'is-off'}`;
+        routeSwitchBtn.style.transform = 'scale(0.76)';
         routeSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleRouteManagerAuth = async (e) => {
@@ -922,36 +911,19 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 );
             }
         };
-
         routeSwitchBtn.addEventListener('click', handleToggleRouteManagerAuth);
-        routeToggleBox.addEventListener('click', handleToggleRouteManagerAuth);
-        routeToggleBox.appendChild(routeTextCol);
-        routeToggleBox.appendChild(routeSwitchBtn);
+        routeCell.appendChild(routeSwitchBtn);
 
-        // 開關 3：「🏢 僅社區標註」開關 (控制 canEditCommunity)
-        const bldgToggleBox = document.createElement('div');
-        bldgToggleBox.className = canEditCommunity
-            ? 'bg-emerald-50/70 border border-emerald-300 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none'
-            : 'bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between gap-2 cursor-pointer select-none';
-
-        const bldgStatusTextHtml = canEditCommunity
-            ? `<div class="text-[11px] font-black text-emerald-600 mt-0.5">✅ 已授權可標註社區</div>`
-            : (canManageRoute
-                ? `<div class="text-[11px] font-bold text-indigo-600 mt-0.5">🛡️ 已由路線管理員涵蓋</div>`
-                : `<div class="text-[11px] font-bold text-slate-400 mt-0.5">🔒 禁止標註（一般唯讀）</div>`);
-
-        const bldgTextCol = document.createElement('div');
-        bldgTextCol.className = 'min-w-0 flex-1';
-        bldgTextCol.innerHTML = `
-            <div class="text-[11px] font-black text-slate-800">🏢 僅社區標註</div>
-            ${bldgStatusTextHtml}
-        `;
-
+        // 開關 3：「社區（僅社區標註）」(控制 canEditCommunity)
+        const bldgCell = document.createElement('div');
+        bldgCell.className = 'w-[42px] flex items-center justify-center';
         const toggleSwitchBtn = document.createElement('button');
         toggleSwitchBtn.type = 'button';
+        toggleSwitchBtn.title = '僅社區標註';
         toggleSwitchBtn.setAttribute('role', 'switch');
         toggleSwitchBtn.setAttribute('aria-checked', canEditCommunity ? 'true' : 'false');
         toggleSwitchBtn.className = `admin-user-toggle-switch ${canEditCommunity ? 'is-on' : 'is-off'}`;
+        toggleSwitchBtn.style.transform = 'scale(0.76)';
         toggleSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleCommunityAuth = async (e) => {
@@ -984,27 +956,26 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                 );
             }
         };
-
         toggleSwitchBtn.addEventListener('click', handleToggleCommunityAuth);
-        bldgToggleBox.addEventListener('click', handleToggleCommunityAuth);
+        bldgCell.appendChild(toggleSwitchBtn);
 
-        bldgToggleBox.appendChild(bldgTextCol);
-        bldgToggleBox.appendChild(toggleSwitchBtn);
+        rightToggles.appendChild(accessCell);
+        rightToggles.appendChild(routeCell);
+        rightToggles.appendChild(bldgCell);
 
-        togglesGrid.appendChild(accessToggleBox);
-        togglesGrid.appendChild(routeToggleBox);
-        togglesGrid.appendChild(bldgToggleBox);
-        card.appendChild(togglesGrid);
+        mainRow.appendChild(leftCol);
+        mainRow.appendChild(rightToggles);
+        card.appendChild(mainRow);
 
-        // 內嵌單向原名編輯列（預設隱藏，點擊「✏️ 標註／改原名」展開，修改 realName / originalName）
+        // 內嵌單向原名編輯列（預設隱藏，點擊「✏️ 改原名」展開，修改 realName / originalName）
         const inlineOrigEditRow = document.createElement('div');
-        inlineOrigEditRow.className = 'hidden bg-amber-50/90 border border-amber-300 rounded-xl p-2 space-y-1.5';
+        inlineOrigEditRow.className = 'hidden mt-1.5 bg-amber-50/90 border border-amber-300 rounded-lg p-1.5 space-y-1';
         inlineOrigEditRow.innerHTML = `
-            <div class="text-[10px] font-black text-amber-900">✏️ 單向標註「${escapeHtmlSafe(user.displayName)}」的真實原名（僅開發者可見，不覆蓋對方自取名稱）：</div>
+            <div class="text-[10px] font-black text-amber-900">✏️ 標註「${escapeHtmlSafe(displayNickname)}」原名（僅開發者可見）：</div>
             <div class="flex items-center gap-1.5">
-                <input type="text" class="admin-inline-orig-input flex-1 min-w-0 bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="輸入原名備註（如：阿翔）" value="${escapeHtmlSafe(annotatedRealName || user.displayName || '')}">
-                <button type="button" class="admin-inline-orig-save bg-amber-600 hover:bg-amber-700 text-white font-black text-[11px] px-3 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap">儲存</button>
-                <button type="button" class="admin-inline-orig-cancel bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 font-bold text-[11px] px-2.5 py-1.5 rounded-lg active:scale-95 whitespace-nowrap">取消</button>
+                <input type="text" class="admin-inline-orig-input flex-1 min-w-0 bg-white border border-amber-300 rounded-lg px-2 py-1 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500" placeholder="輸入原名備註（如：阿翔）" value="${escapeHtmlSafe(annotatedRealName || displayNickname || '')}">
+                <button type="button" class="admin-inline-orig-save bg-amber-600 hover:bg-amber-700 text-white font-black text-[11px] px-2.5 py-1 rounded-lg shadow active:scale-95 whitespace-nowrap">儲存</button>
+                <button type="button" class="admin-inline-orig-cancel bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 font-bold text-[11px] px-2 py-1 rounded-lg active:scale-95 whitespace-nowrap">取消</button>
             </div>
         `;
         card.appendChild(inlineOrigEditRow);
@@ -1031,14 +1002,6 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             inlineOrigEditRow.classList.add('hidden');
         });
 
-        // 底部動作按鈕列：✏️ 標註／改原名（單向，僅開發者可見與可改） ＋ 🗑️ 刪除紀錄
-        const bottomActions = document.createElement('div');
-        bottomActions.className = 'flex items-center justify-between gap-2 pt-1';
-
-        const editOrigNameBtn = document.createElement('button');
-        editOrigNameBtn.type = 'button';
-        editOrigNameBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
-        editOrigNameBtn.innerHTML = '<span>✏️ 標註／改原名</span>';
         editOrigNameBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             const isHidden = inlineOrigEditRow.classList.contains('hidden');
@@ -1053,29 +1016,20 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             }
         });
 
-        const deleteRecordBtn = document.createElement('button');
-        deleteRecordBtn.type = 'button';
-        deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
-        deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
-        let deleteConfirmPending = false;
-        let deleteResetTimer = null;
+        // 刪除紀錄前必須輸入開發者密碼驗證，防止誤刪
         deleteRecordBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (!deleteConfirmPending) {
-                deleteConfirmPending = true;
-                deleteRecordBtn.className = 'bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer shadow';
-                deleteRecordBtn.innerHTML = '<span>⚠️ 再點一次確認刪除</span>';
-                if (deleteResetTimer) clearTimeout(deleteResetTimer);
-                deleteResetTimer = setTimeout(() => {
-                    deleteConfirmPending = false;
-                    deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1 cursor-pointer';
-                    deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
-                }, 3500);
+            const targetLabel = annotatedRealName || displayNickname;
+            const enteredPwd = window.prompt(`⚠️ 確定要刪除「${targetLabel}」的使用者紀錄嗎？\n請輸入開發者密碼驗證以防誤刪：`);
+            if (enteredPwd === null) return;
+            if (String(enteredPwd).trim() !== ADMIN_SETTINGS_PASSWORD) {
+                alert('❌ 開發者密碼錯誤，已中止刪除操作！');
+                showAdminUserActionToast('❌ 密碼錯誤，未刪除紀錄', 'danger');
                 return;
             }
-            if (deleteResetTimer) clearTimeout(deleteResetTimer);
+
             deleteRecordBtn.disabled = true;
-            deleteRecordBtn.innerHTML = '<span>刪除中...</span>';
+            deleteRecordBtn.textContent = '刪除中...';
             try {
                 delete allCloudFleetUsersMap[targetDeviceId];
                 renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
@@ -1083,15 +1037,11 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
                     fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
                 ]);
-                showAdminUserActionToast(`🗑️ 已刪除「${annotatedRealName || user.displayName}」的使用者紀錄`, 'info');
+                showAdminUserActionToast(`🗑️ 已刪除「${targetLabel}」的使用者紀錄`, 'info');
             } finally {
                 await fetchAndRenderAdminFleetUsersList();
             }
         });
-
-        bottomActions.appendChild(editOrigNameBtn);
-        bottomActions.appendChild(deleteRecordBtn);
-        card.appendChild(bottomActions);
 
         listContainer.appendChild(card);
     });

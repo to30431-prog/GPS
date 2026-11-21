@@ -64,10 +64,26 @@
       id: 'turtle',
       name: '爬行綠蠵龜',
       svg: `<svg class="vehicle-anim" viewBox="0 0 60 120" width="48" height="96" xmlns="http://www.w3.org/2000/svg">
-        <ellipse class="turtle-leg-fl" cx="13" cy="42" rx="6" ry="11" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
-        <ellipse class="turtle-leg-br" cx="47" cy="84" rx="5" ry="9" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
-        <ellipse class="turtle-leg-fr" cx="47" cy="42" rx="6" ry="11" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
-        <ellipse class="turtle-leg-bl" cx="13" cy="84" rx="5" ry="9" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
+        <g>
+          <ellipse cx="13" cy="43" rx="5.5" ry="10" transform="rotate(-18 13 43)" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
+          <animateTransform class="turtle-anim-el" attributeName="transform" type="rotate"
+            values="-22 16 46; 22 16 46; -22 16 46" dur="0.55s" repeatCount="indefinite"/>
+        </g>
+        <g>
+          <ellipse cx="47" cy="43" rx="5.5" ry="10" transform="rotate(18 47 43)" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
+          <animateTransform class="turtle-anim-el" attributeName="transform" type="rotate"
+            values="22 44 46; -22 44 46; 22 44 46" dur="0.55s" repeatCount="indefinite"/>
+        </g>
+        <g>
+          <ellipse cx="14" cy="83" rx="4.8" ry="8.5" transform="rotate(15 14 83)" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
+          <animateTransform class="turtle-anim-el" attributeName="transform" type="rotate"
+            values="18 17 80; -18 17 80; 18 17 80" dur="0.55s" repeatCount="indefinite"/>
+        </g>
+        <g>
+          <ellipse cx="46" cy="83" rx="4.8" ry="8.5" transform="rotate(-15 46 83)" fill="#4ADE80" stroke="#14532D" stroke-width="2"/>
+          <animateTransform class="turtle-anim-el" attributeName="transform" type="rotate"
+            values="-18 43 80; 18 43 80; -18 43 80" dur="0.55s" repeatCount="indefinite"/>
+        </g>
         <ellipse cx="30" cy="18" rx="7" ry="10" fill="#22C55E" stroke="#14532D" stroke-width="2"/>
         <circle cx="27" cy="14" r="1.5" fill="#0F172A"/>
         <circle cx="33" cy="14" r="1.5" fill="#0F172A"/>
@@ -95,16 +111,6 @@
     const style = document.createElement('style');
     style.id = 'car-models-anim-style';
     style.textContent = `
-      .turtle-leg-fl, .turtle-leg-br {
-        transform-box: fill-box;
-        transform-origin: center top;
-        animation: turtleSwingA 0.5s ease-in-out infinite alternate;
-      }
-      .turtle-leg-fr, .turtle-leg-bl {
-        transform-box: fill-box;
-        transform-origin: center top;
-        animation: turtleSwingB 0.5s ease-in-out infinite alternate;
-      }
       .sunny-wake-1 {
         transform-box: fill-box;
         transform-origin: center top;
@@ -115,10 +121,6 @@
         transform-origin: center top;
         animation: sunnyWakePulse 0.9s ease-out 0.45s infinite;
       }
-      .vehicle-anim:not(.is-moving) .turtle-leg-fl,
-      .vehicle-anim:not(.is-moving) .turtle-leg-br,
-      .vehicle-anim:not(.is-moving) .turtle-leg-fr,
-      .vehicle-anim:not(.is-moving) .turtle-leg-bl,
       .vehicle-anim:not(.is-moving) .sunny-wake-1,
       .vehicle-anim:not(.is-moving) .sunny-wake-2,
       body.power-saving .vehicle-anim * {
@@ -128,20 +130,31 @@
       .vehicle-anim:not(.is-moving) .sunny-wake-2 {
         opacity: 0;
       }
-      @keyframes turtleSwingA {
-        0%   { transform: rotate(-28deg) translateY(-2px); }
-        100% { transform: rotate(28deg) translateY(2px); }
-      }
-      @keyframes turtleSwingB {
-        0%   { transform: rotate(28deg) translateY(2px); }
-        100% { transform: rotate(-28deg) translateY(-2px); }
-      }
       @keyframes sunnyWakePulse {
         0%   { opacity: 0.9; transform: scale(0.7, 0.6) translateY(0); }
         100% { opacity: 0;   transform: scale(1.45, 1.8) translateY(10px); }
       }
     `;
     document.head.appendChild(style);
+  }
+
+  function syncCarMovingState(isMoving) {
+    const pausedByPowerSave = document.body.classList.contains('power-saving');
+    const active = Boolean(isMoving) && !pausedByPowerSave;
+
+    document.querySelectorAll('.vehicle-anim').forEach((svg) => {
+      svg.classList.toggle('is-moving', active);
+    });
+
+    document.querySelectorAll('.turtle-anim-el').forEach((anim) => {
+      try {
+        if (active) {
+          anim.beginElement();
+        } else {
+          anim.endElement();
+        }
+      } catch (_) {}
+    });
   }
 
   function getMyCarType() {
@@ -174,4 +187,5 @@
   window.getMyCarType = getMyCarType;
   window.setMyCarType = setMyCarType;
   window.getCarSvg = getCarSvg;
+  window.syncCarMovingState = syncCarMovingState;
 })();

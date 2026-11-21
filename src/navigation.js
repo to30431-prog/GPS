@@ -301,6 +301,7 @@ async function enterBlackPowerSaveMode(fromUserGesture = true) {
     isBlackScreenActive = true;
     isScreenAutoWoken = false;
     document.body?.classList.add('power-saving');
+    window.syncCarMovingState?.(false);
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.style.backgroundColor = '#000000';
@@ -334,6 +335,7 @@ function exitBlackPowerSaveMode(fromUserGesture = true) {
     isBlackScreenActive = false;
     isScreenAutoWoken = false;
     document.body?.classList.remove('power-saving');
+    window.syncCarMovingState?.(Boolean(isPlaying || (typeof lastRecordedSpeedKmh === 'number' && lastRecordedSpeedKmh > 1.8)));
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.classList.add('hidden');

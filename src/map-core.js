@@ -214,6 +214,7 @@ function renderMyVehicleCarSvg() {
         svgEl.style.height = '100%';
         svgEl.style.display = 'block';
     }
+    window.syncCarMovingState?.(isMyVehicleMovingAnim);
 }
 
 function setMyVehicleMovingState(isMoving) {
@@ -223,6 +224,7 @@ function setMyVehicleMovingState(isMoving) {
     if (animSvg) {
         animSvg.classList.toggle('is-moving', nextState);
     }
+    window.syncCarMovingState?.(nextState);
 }
 
 renderMyVehicleCarSvg();

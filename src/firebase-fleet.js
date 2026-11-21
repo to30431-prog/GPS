@@ -1682,7 +1682,7 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
         const effectiveCarType = (peerCarType && window.CAR_MODELS && window.CAR_MODELS[peerCarType])
             ? peerCarType
             : (el.dataset.carType || 'garbage_yellow');
-        const effectiveMoving = !isStale && Boolean(peerIsMoving);
+        const effectiveMoving = !isStale && Boolean(peerIsMoving) && !document.body.classList.contains('power-saving');
         if (el.dataset.carType !== effectiveCarType || !carWrap.firstElementChild) {
             el.dataset.carType = effectiveCarType;
             carWrap.innerHTML = getCarSvg(effectiveCarType, effectiveMoving);
@@ -1698,6 +1698,12 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
                 animSvg.classList.toggle('is-moving', effectiveMoving);
             }
         }
+        carWrap.querySelectorAll('.turtle-anim-el').forEach((anim) => {
+            try {
+                if (effectiveMoving) anim.beginElement();
+                else anim.endElement();
+            } catch (_) {}
+        });
     }
 }
 

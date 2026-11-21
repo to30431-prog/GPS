@@ -197,7 +197,8 @@ if (typeof injectCarAnimations === 'function') {
 }
 
 const puckEl = document.createElement('div');
-puckEl.className = 'nav-puck';
+puckEl.id = 'my-puck';
+puckEl.className = 'nav-puck my-car-marker';
 puckEl.style.cursor = 'pointer';
 puckEl.style.pointerEvents = 'auto';
 puckEl.title = '點擊切換車款';
@@ -215,6 +216,13 @@ function renderMyVehicleCarSvg() {
         svgEl.style.display = 'block';
     }
     window.syncCarMovingState?.(isMyVehicleMovingAnim);
+    const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
+        ? vehicleVisualHeading
+        : currentHeading;
+    const currentBearing = (typeof map !== 'undefined' && map && typeof map.getBearing === 'function')
+        ? map.getBearing()
+        : 0;
+    window.syncCarHeading?.(activeHeading, currentBearing);
 }
 
 function setMyVehicleMovingState(isMoving) {
@@ -359,7 +367,8 @@ function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) 
     if (durationMs <= 0 || isNaN(startLng) || isNaN(startLat) || jumpMeters > 250) {
         vehicleVisualLngLat = [endLng, endLat];
         vehicleVisualHeading = endHeading;
-        vehicleMarker.setLngLat(vehicleVisualLngLat).setRotation(vehicleVisualHeading);
+        vehicleMarker.setLngLat(vehicleVisualLngLat);
+        window.syncCarHeading?.(vehicleVisualHeading, map ? map.getBearing() : 0);
         return;
     }
 
@@ -380,8 +389,9 @@ function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) 
         vehicleVisualLngLat = [curLng, curLat];
         vehicleVisualHeading = curHead;
         if (vehicleMarker) {
-            vehicleMarker.setLngLat(vehicleVisualLngLat).setRotation(vehicleVisualHeading);
+            vehicleMarker.setLngLat(vehicleVisualLngLat);
         }
+        window.syncCarHeading?.(vehicleVisualHeading, map ? map.getBearing() : 0);
 
         if (t < 1) {
             vehicleAnimFrameId = requestAnimationFrame(stepFrame);
@@ -756,7 +766,11 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
             if (el && !el.isConnected) {
                 vehicleMarker.addTo(map);
             }
-            vehicleMarker.setLngLat(vehicleVisualLngLat || lastKnownLngLat).setRotation(vehicleVisualHeading || currentHeading);
+            vehicleMarker.setLngLat(vehicleVisualLngLat || lastKnownLngLat);
+            window.syncCarHeading?.(
+                typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading) ? vehicleVisualHeading : currentHeading,
+                map ? map.getBearing() : 0
+            );
         }
         const reconnectMarkerList = (list) => {
             if (!Array.isArray(list)) return;
@@ -1158,10 +1172,19 @@ function switchMapBaseLayer(layerId) {
 })();
 
 map.on('load', () => {
-    // 僅有黃色清運車輛 Marker (vehicleMarker) 保留 rotationAlignment: 'map' 隨車頭方位角旋轉
-    vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat(lastKnownLngLat).addTo(map);
+    // 外層 Marker 固定不旋轉 (rotation: 0, viewport)，統一交由內層 .vehicle-heading-rotator (window.syncCarHeading) 根據 heading 與 map.getBearing() 控制角度，避免重複旋轉疊加
+    vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'viewport', pitchAlignment: 'viewport' })
+        .setLngLat(lastKnownLngLat)
+        .setRotation(0)
+        .addTo(map);
+    vehicleMarker.setRotation = function (headingDeg) {
+        const h = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : currentHeading;
+        window.syncCarHeading?.(h, map ? map.getBearing() : 0);
+        return this;
+    };
     vehicleVisualLngLat = [...lastKnownLngLat];
     vehicleVisualHeading = currentHeading;
+    window.syncCarHeading?.(currentHeading, map.getBearing());
 
     restoreCustomLayersAndAlignmentAfterStyleLoad();
 
@@ -1169,8 +1192,16 @@ map.on('load', () => {
     navigator.geolocation?.getCurrentPosition(pos => {
         if (!isReplaying) {
             map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+            window.syncCarHeading?.(currentHeading, map.getBearing());
         }
     });
+});
+
+map.on('rotate', () => {
+    const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
+        ? vehicleVisualHeading
+        : currentHeading;
+    window.syncCarHeading?.(activeHeading, map.getBearing());
 });
 
 map.on('style.load', () => {
@@ -1202,28 +1233,29 @@ document.getElementById('locateBtn').onclick = () => {
     const resumeZoom = (followWatchId !== null || isRecording)
         ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
         : Math.max(map.getZoom(), 17);
+    const targetBearing = isHeadingUpMode ? currentHeading : 0;
     map.easeTo({
         center: lastKnownLngLat, zoom: resumeZoom,
-        bearing: isHeadingUpMode ? currentHeading : 0, offset: [0, 100], duration: 400
+        bearing: targetBearing, offset: [0, 100], duration: 400
     });
+    window.syncCarHeading?.(currentHeading, targetBearing);
 };
 
 document.getElementById('headingModeBtn').onclick = () => {
     isHeadingUpMode = !isHeadingUpMode;
     const btn = document.getElementById('headingModeBtn');
     const label = document.getElementById('headingLabel');
-    if (vehicleMarker) {
-        vehicleMarker.setRotation(currentHeading);
-    }
+    const targetBearing = isHeadingUpMode ? currentHeading : 0;
     if (isHeadingUpMode) {
         btn.className = "bg-blue-600 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
         label.innerText = "車頭上";
-        if (isFollowingCamera) map.easeTo({ bearing: currentHeading, duration: 300 });
+        if (isFollowingCamera) map.easeTo({ bearing: targetBearing, duration: 300 });
     } else {
         btn.className = "bg-white text-gray-700 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95";
         label.innerText = "正北上";
-        if (isFollowingCamera) map.easeTo({ bearing: 0, duration: 300 });
+        if (isFollowingCamera) map.easeTo({ bearing: targetBearing, duration: 300 });
     }
+    window.syncCarHeading?.(currentHeading, isFollowingCamera ? targetBearing : map.getBearing());
 };
 
 // --- 3. 幾何數學計算 ---
@@ -1371,6 +1403,13 @@ function unlockSpeechSynthesis() {
 window.unlockSpeechSynthesis = unlockSpeechSynthesis;
 
 function speakText(text) {
+    if ('speechSynthesis' in window) {
+        try {
+            if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
+        } catch (e) {}
+    }
     VoiceQueue.enqueue(text);
 }
 
@@ -1914,8 +1953,8 @@ function evaluateVoiceMarkersWithProgress({
 
     const lookAheadDist = Number(systemNavConfig.lookAheadDistMeters) || DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters;
     const rawConfirmDist = Number(systemNavConfig.confirmDistMeters) || DEFAULT_SYSTEM_CONFIG.confirmDistMeters;
-    // 遵循導航模式確保至少 40 公尺容錯半徑，吸收現場 GPS 15~30 公尺飄移
-    const confirmDist = isFollowMode ? Math.max(rawConfirmDist, 40) : rawConfirmDist;
+    // 遵循導航模式確保至少 42 公尺（35~45m 區間）容錯半徑，吸收現場 GPS 飄移
+    const confirmDist = isFollowMode ? Math.max(rawConfirmDist, 42) : rawConfirmDist;
     const bearingTol = Number(systemNavConfig.bearingToleranceDeg) || DEFAULT_SYSTEM_CONFIG.bearingToleranceDeg;
     const lookAheadLabel = Math.round(lookAheadDist);
 
@@ -1932,11 +1971,18 @@ function evaluateVoiceMarkersWithProgress({
         // --- 第二層：近距離確認提醒（含語音開啟、關閉、注意點） ---
         let shouldTriggerConfirm = false;
         if (isFollowMode) {
-            // 雙重防呆觸發條件（擇一滿足即觸發，確保沿線經過絕不漏接）：
-            // A. 車輛實際座標進入容錯半徑（>= 40m），且位於該路段合理前後區間內（避免誤觸遠端重疊回程）
-            const enteredRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 25) && aheadRouteMeters >= -60);
+            // 雙重防呆觸發條件（任一條件成立即觸發，確保沿線經過絕不漏接）：
+            // A. 實際座標進入容錯半徑（35~45m 以上），且位於該路段合理前後區間內（避免誤觸遠端重疊回程）
+            const enteredRadius = (
+                directDistMeters <= confirmDist &&
+                ((aheadRouteMeters <= (confirmDist + 35) && aheadRouteMeters >= -75) || Math.abs(evIdx - trackIdx) <= 35)
+            );
             // B. 路線進度索引已順序推進越過該提醒點所在軌跡位置（且該點尚未觸發過）
-            const passedByProgress = (prevIdx <= evIdx && trackIdx >= evIdx && (trackIdx - prevIdx) <= 60);
+            const passedByProgress = (
+                trackIdx >= evIdx &&
+                (prevIdx <= evIdx || (trackIdx - evIdx) <= 20) &&
+                aheadRouteMeters >= -90
+            );
             shouldTriggerConfirm = (enteredRadius || passedByProgress);
         } else {
             // 重播模式維持原有嚴格三條件

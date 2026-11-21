@@ -815,9 +815,7 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 flex-shrink-0">
-                    <button id="adminToggleBtn" type="button" class="px-2.5 h-9 rounded-xl bg-gray-100 text-gray-600 border border-gray-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="依裝置授權自動辨識路線管理員權限（免密碼）">
-                        🔒 一般唯讀
-                    </button>
+                    <button id="adminToggleBtn" type="button" class="hidden" title="裝置授權狀態"></button>
                     <button id="refreshCloudBtn" type="button" class="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 transition-transform" title="重新整理">
                         <i id="refreshCloudIcon" class="fa-solid fa-rotate-right text-sm"></i>
                     </button>
@@ -1078,9 +1076,13 @@
         </div>
     </div>
 
-    <!-- 🚪 全站門禁與封鎖即時鎖定遮罩 (待核准授權 / 已封鎖停止同步與雷達廣播) -->
+    <!-- 🚪 全站門禁與封鎖即時鎖定遮罩 (待核准授權 / 已封鎖全螢幕不透明屏蔽地圖) -->
     <div id="deviceAccessGateOverlay" class="hidden fixed inset-0 bg-slate-950/92 backdrop-blur-md z-[100003] flex items-center justify-center p-5 pointer-events-auto">
-        <div class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl border-2 border-amber-400 text-center relative">
+        <!-- 🚧 被封鎖裝置專用：全螢幕不透明遮罩，完全屏蔽地圖與下方畫面，中央僅顯示「施工中...請稍後」 -->
+        <div id="gateBlockedMaintenanceView" class="hidden text-center select-none px-6">
+            <p class="text-xl font-black text-white tracking-wider">施工中...請稍後</p>
+        </div>
+        <div id="gatePendingCardWrap" class="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl border-2 border-amber-400 text-center relative">
             <div id="gateOverlayIconWrap" class="w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-inner">
                 <i id="gateOverlayIcon" class="fa-solid fa-user-clock"></i>
             </div>

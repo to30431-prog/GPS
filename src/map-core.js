@@ -766,25 +766,75 @@ function isMapWebglContextBroken() {
     return false;
 }
 
+function isMapBaseStyleAbnormal() {
+    if (!map) return false;
+    if (isMapWebglContextBroken()) return true;
+    try {
+        const canvas = map.getCanvas?.();
+        if (!canvas || canvas.width === 0 || canvas.height === 0) return true;
+        if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return true;
+        const style = map.getStyle?.();
+        if (!style || !Array.isArray(style.layers) || style.layers.length === 0) return true;
+        const hasBaseSource = style.sources && Object.keys(style.sources).length > 0;
+        if (!hasBaseSource) return true;
+    } catch (e) {
+        return true;
+    }
+    return false;
+}
+
+let lastMapStyleRebuildAt = 0;
 function rebuildMapStyleAndRestoreAllState(reason = 'webgl-recovery') {
     if (!map || !currentMapLayerPreset) return;
+    const now = Date.now();
+    const isManualTrigger = (reason === 'toolbar-button' || reason === 'menu-button' || reason === 'manual');
+    if (!isManualTrigger && (now - lastMapStyleRebuildAt) < 1200) return;
+    lastMapStyleRebuildAt = now;
+
     try {
         window.scrollTo(0, 0);
-        map.once('style.load', () => {
+        const savedCenter = map.getCenter?.();
+        const savedZoom = map.getZoom?.();
+        const savedBearing = map.getBearing?.();
+        const savedPitch = map.getPitch?.();
+
+        const restoreAllAfterReload = () => {
             isMapWebglContextLost = false;
             restoreCustomLayersAndAlignmentAfterStyleLoad();
+            if (savedCenter && typeof savedZoom === 'number' && !isNaN(savedZoom)) {
+                try {
+                    map.jumpTo({
+                        center: savedCenter,
+                        zoom: savedZoom,
+                        bearing: typeof savedBearing === 'number' ? savedBearing : 0,
+                        pitch: typeof savedPitch === 'number' ? savedPitch : 0
+                    });
+                } catch (e) {}
+            }
+            ensureDomMarkersIntactAfterStyleSwitch();
             updateMapMarkersZoomScale();
             map.resize();
             map.triggerRepaint();
-        });
+        };
+
+        map.once('style.load', restoreAllAfterReload);
         map.setStyle(currentMapLayerPreset.getStyle(), { diff: false });
+
         setTimeout(() => {
-            isMapWebglContextLost = false;
+            if (!map) return;
             restoreCustomLayersAndAlignmentAfterStyleLoad();
             updateMapMarkersZoomScale();
             map.resize();
             map.triggerRepaint();
-        }, 320);
+        }, 350);
+
+        setTimeout(() => {
+            if (!map) return;
+            ensureDomMarkersIntactAfterStyleSwitch();
+            updateMapMarkersZoomScale();
+            map.resize();
+            map.triggerRepaint();
+        }, 900);
     } catch (e) {
         console.warn(`[MapRecovery:${reason}] 重建底圖樣式時發生例外:`, e);
     }
@@ -804,7 +854,8 @@ function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = fals
 
         map.resize();
 
-        if (forceRebuildStyle || isMapWebglContextBroken()) {
+        const shouldRebuild = Boolean(forceRebuildStyle || isMapBaseStyleAbnormal());
+        if (shouldRebuild) {
             rebuildMapStyleAndRestoreAllState(reason);
         } else {
             restoreCustomLayersAndAlignmentAfterStyleLoad();
@@ -824,7 +875,11 @@ function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = fals
         }, 260);
 
         if (showToast) {
-            showMapRefreshToast('🔄 地圖尺寸與圖層已重整（已保留目前路線狀態）');
+            showMapRefreshToast(
+                shouldRebuild
+                    ? '🔄 已重建底圖與圖層（保留目前路線、地標與車輛狀態）'
+                    : '🔄 地圖尺寸與圖層已重整（已保留目前路線狀態）'
+            );
         }
     } catch (e) {
         console.warn('輕量重整地圖時發生例外:', e);
@@ -969,7 +1024,7 @@ function switchMapBaseLayer(layerId) {
         refreshMapBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             menuPanel?.classList.add('hidden');
-            refreshMapCanvasAndLayers({ forceRebuildStyle: isMapWebglContextBroken(), showToast: true, reason: 'toolbar-button' });
+            refreshMapCanvasAndLayers({ forceRebuildStyle: true, showToast: true, reason: 'toolbar-button' });
         });
     }
 

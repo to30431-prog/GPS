@@ -486,8 +486,9 @@ function setAdminModeUI(unlocked) {
         currentCloudTab = 'shared';
         updateCloudTabButtons();
     } else {
-        adminToggleBtn.className = "px-2.5 h-9 rounded-xl bg-gray-100 text-gray-600 border border-gray-200 text-xs font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap";
-        adminToggleBtn.innerHTML = '🔒 一般唯讀';
+        // 一般使用者不顯示「一般唯讀」徽章與鎖頭圖示
+        adminToggleBtn.className = "hidden";
+        adminToggleBtn.innerHTML = '';
         cloudAdminTabBar?.classList.add('hidden');
         currentCloudTab = 'shared';
         updateCloudTabButtons();
@@ -505,14 +506,13 @@ function updateCloudTabButtons() {
 }
 
 adminToggleBtn.onclick = () => {
+    const isDev = (typeof localUserPermissionRole !== 'undefined' && localUserPermissionRole === 'developer');
     const hasRouteAuth = typeof canCurrentUserManageRoutes === 'function' && canCurrentUserManageRoutes();
     const hasBldgAuth = typeof canCurrentUserManageBuildings === 'function' && canCurrentUserManageBuildings();
     if (hasRouteAuth) {
-        alert('🛡️ 本裝置已獲「路線管理員」授權（由雲端自動辨識，無需輸入密碼）！\n\n• 可切換「⏳ 待審核區」進行審核微調、核准發布或駁回刪除\n• 可編輯與刪除路線\n• 可新增、修改與刪除社區大樓');
+        alert(isDev ? '本裝置已獲得開發者管理授權' : '本裝置已獲得管理授權');
     } else if (hasBldgAuth) {
-        alert('🏢 本裝置目前為「僅社區標註員」授權。\n\n• 可在地圖上新增、修改與刪除社區大樓標記\n• 路線審核、編輯與刪除功能維持鎖定（需由開發者開啟「🛡️ 路線管理」授權）');
-    } else {
-        alert('🔒 本裝置目前為「一般使用者（唯讀）」權限。\n\n系統已改為由雲端自動辨識裝置授權（無需輸入管理員密碼）；如需路線管理或社區標註權限，請由開發者於「👥 管理使用者」開啟您的授權開關。');
+        alert('本裝置已獲得社區標註授權');
     }
 };
 
@@ -2227,7 +2227,7 @@ async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
         if (map) {
             window.scrollTo(0, 0);
             map.resize();
-            if (isMapWebglContextBroken()) {
+            if (typeof isMapBaseStyleAbnormal === 'function' ? isMapBaseStyleAbnormal() : isMapWebglContextBroken()) {
                 rebuildMapStyleAndRestoreAllState(`wakeup-${sourceEvent}`);
             } else {
                 restoreCustomLayersAndAlignmentAfterStyleLoad();
@@ -2237,15 +2237,19 @@ async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
         }
     }, 150);
 
-    // 二次穩定檢查（420ms）：吸收 iOS Safari / Android Chrome 切換 App 時頂部/底部系統列動畫收合延遲
+    // 二次穩定檢查（420ms）：吸收 iOS Safari / Android Chrome 切換 App 時頂部/底部系統列動畫收合延遲；若底圖仍未載入或異常則觸發完整底圖重載
     mapWakeupSecondaryTimer = setTimeout(() => {
         mapWakeupSecondaryTimer = null;
         if (document.visibilityState === 'hidden' || !map) return;
         window.scrollTo(0, 0);
         map.resize();
-        ensureDomMarkersIntactAfterStyleSwitch();
-        updateMapMarkersZoomScale();
-        map.triggerRepaint();
+        if (typeof isMapBaseStyleAbnormal === 'function' && isMapBaseStyleAbnormal()) {
+            rebuildMapStyleAndRestoreAllState(`wakeup-late-${sourceEvent}`);
+        } else {
+            ensureDomMarkersIntactAfterStyleSwitch();
+            updateMapMarkersZoomScale();
+            map.triggerRepaint();
+        }
     }, 420);
 
     if (isBlackScreenActive || isRecording || followWatchId !== null || typeof activeFollowGpsHandler === 'function') {

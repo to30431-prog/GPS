@@ -87,6 +87,8 @@ function evaluateAndRenderAccessGateOverlay() {
     const overlay = document.getElementById('deviceAccessGateOverlay');
     if (!overlay) return;
 
+    const blockedView = document.getElementById('gateBlockedMaintenanceView');
+    const pendingCardWrap = document.getElementById('gatePendingCardWrap');
     const iconWrap = document.getElementById('gateOverlayIconWrap');
     const iconEl = document.getElementById('gateOverlayIcon');
     const badgeEl = document.getElementById('gateOverlayStatusBadge');
@@ -99,17 +101,12 @@ function evaluateAndRenderAccessGateOverlay() {
     const pendingApproval = !blocked && isCurrentDevicePendingApproval();
 
     if (blocked) {
-        // 🚫 此裝置已被開發者封鎖：即時鎖定畫面並停止同步與車隊雷達廣播
+        // 🚫 此裝置已被封鎖：全螢幕不透明遮罩完全屏蔽地圖，僅顯示「施工中...請稍後」並停止同步與車隊雷達廣播
         stopAndClearMyFleetRadarImmediately();
-        if (iconWrap) iconWrap.className = 'w-16 h-16 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-inner';
-        if (iconEl) iconEl.className = 'fa-solid fa-ban';
-        if (badgeEl) {
-            badgeEl.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-rose-100 text-rose-800 mb-2';
-            badgeEl.textContent = '🚫 裝置已封鎖鎖定';
-        }
-        if (titleEl) titleEl.textContent = '此裝置已被暫停使用權限';
-        if (descEl) descEl.textContent = '系統管理員已封鎖此裝置的存取權限，已即時停止地圖同步與車隊雷達廣播。如需恢復請聯繫開發者（凱哥）。';
-        formWrap?.classList.add('hidden');
+        overlay.className = 'fixed inset-0 bg-slate-950 z-[100003] flex items-center justify-center p-5 pointer-events-auto';
+        overlay.style.backgroundColor = '#020617';
+        pendingCardWrap?.classList.add('hidden');
+        blockedView?.classList.remove('hidden');
         overlay.classList.remove('hidden');
         return;
     }
@@ -117,6 +114,10 @@ function evaluateAndRenderAccessGateOverlay() {
     if (pendingApproval) {
         // ⏳ 全站門禁開啟且尚未核准：進入待核准狀態並暫停雷達廣播
         stopAndClearMyFleetRadarImmediately();
+        overlay.className = 'fixed inset-0 bg-slate-950/92 backdrop-blur-md z-[100003] flex items-center justify-center p-5 pointer-events-auto';
+        overlay.style.backgroundColor = '';
+        blockedView?.classList.add('hidden');
+        pendingCardWrap?.classList.remove('hidden');
         if (iconWrap) iconWrap.className = 'w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-inner';
         if (iconEl) iconEl.className = 'fa-solid fa-user-clock';
         if (badgeEl) {
@@ -137,6 +138,9 @@ function evaluateAndRenderAccessGateOverlay() {
 
     // 已核准且未封鎖：放行畫面，若原本雷達因門禁暫停且已有姓名，自動恢復啟動車隊雷達
     const wasGateVisible = !overlay.classList.contains('hidden');
+    overlay.style.backgroundColor = '';
+    blockedView?.classList.add('hidden');
+    pendingCardWrap?.classList.remove('hidden');
     overlay.classList.add('hidden');
     if (wasGateVisible && fleetUserName && !fleetRadarStarted) {
         startFleetRadarSystem();

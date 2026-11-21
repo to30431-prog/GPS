@@ -4,54 +4,54 @@
   let lastAppliedHeading = 0;
 
   // baseAngle: 圖片基準朝向（正俯視圖且車頭朝上者設為 0）
-  // 尺寸已依先前 64/68/72/62 放大 1.5 倍（再大 0.5 倍）
+  // 放大尺寸並搭配 CSS 鎖死，避免在路線預覽或重播容器中被壓縮
   const CAR_MODELS = {
     garbage_yellow: {
       id: 'garbage_yellow',
       name: '經典清運車',
       src: './assets/cars/garbage_yellow.png',
-      width: 96,
-      height: 96,
+      width: 124,
+      height: 124,
       baseAngle: 0
     },
     recycle_white: {
       id: 'recycle_white',
       name: '白藍資收車',
       src: './assets/cars/recycle_white.png',
-      width: 96,
-      height: 96,
+      width: 124,
+      height: 124,
       baseAngle: 0
     },
     claw_truck: {
       id: 'claw_truck',
       name: '重型抓斗車',
       src: './assets/cars/claw_truck.png',
-      width: 102,
-      height: 102,
+      width: 132,
+      height: 132,
       baseAngle: 0
     },
     thousand_sunny: {
       id: 'thousand_sunny',
       name: '千陽號',
       src: './assets/cars/thousand_sunny.png',
-      width: 108,
-      height: 108,
+      width: 140,
+      height: 140,
       baseAngle: 0
     },
     turtle: {
       id: 'turtle',
       name: '爬行綠蠵龜',
       src: './assets/cars/turtle.png',
-      width: 102,
-      height: 102,
+      width: 132,
+      height: 132,
       baseAngle: 0
     },
     sports_car: {
       id: 'sports_car',
       name: '赤紅超跑',
       src: './assets/cars/sports_car.png',
-      width: 93,
-      height: 93,
+      width: 120,
+      height: 120,
       baseAngle: 0
     }
   };
@@ -69,6 +69,7 @@
         align-items: center;
         justify-content: center;
         line-height: 1;
+        overflow: visible;
         user-select: none;
         -webkit-user-drag: none;
       }
@@ -81,6 +82,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        overflow: visible;
         transition: transform 0.35s cubic-bezier(0.21, 1.02, 0.33, 1);
         will-change: transform;
       }
@@ -88,12 +90,24 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        overflow: visible;
       }
       .vehicle-img-wrap img {
         display: block;
         object-fit: contain;
+        max-width: none !important;
+        max-height: none !important;
         pointer-events: none;
-        filter: drop-shadow(0 4px 7px rgba(15, 23, 42, 0.28));
+        filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
+      }
+      /* 換車選單卡片內縮圖限制在合理預覽大小，避免撐爆選單 */
+      button .vehicle-img-wrap img,
+      .car-option .vehicle-img-wrap img,
+      [data-car-select] .vehicle-img-wrap img,
+      .car-picker-item .vehicle-img-wrap img,
+      .vehicle-card .vehicle-img-wrap img {
+        max-width: 72px !important;
+        max-height: 72px !important;
       }
       /* 🐢 烏龜俯視划動 */
       .vehicle-img-wrap.is-moving[data-car="turtle"] img {

@@ -187,7 +187,7 @@
         <rect x="20" y="116" width="60" height="8" rx="3" fill="#0F172A" stroke="#334155" stroke-width="1.5"/>
       </svg>`
     }
-
+};
   function injectCarAnimations() {
     if (stylesInjected) return;
     stylesInjected = true;

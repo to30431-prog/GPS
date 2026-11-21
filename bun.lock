@@ -6,7 +6,7 @@
       "name": "yingge-clean-route-assistant-pro-max",
       "dependencies": {
         "@google/genai": "^3.6.1",
-        "express": "^5.2.1",
+        "express": "^5.3.0",
       },
     },
   },

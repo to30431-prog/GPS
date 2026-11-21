@@ -82,7 +82,9 @@ const DEFAULT_SYSTEM_CONFIG = {
     announcementText: '',
     aiDispatchModel: 'gemini-3.6-flash',
     aiApiKeys: [],
-    activeAiKeyId: ''
+    activeAiKeyId: '',
+    requireUserApproval: false,
+    buildingManagerPassword: '666666'
 };
 
 function clampNum(val, min, max, fallback) {
@@ -126,6 +128,9 @@ function normalizeSystemConfig(raw) {
         activeAiKeyId = '';
     }
 
+    const rawMgrPwd = typeof src.buildingManagerPassword === 'string' ? src.buildingManagerPassword.trim() : '';
+    const buildingManagerPassword = rawMgrPwd || DEFAULT_SYSTEM_CONFIG.buildingManagerPassword;
+
     return {
         radarIntervalSec: clampNum(src.radarIntervalSec, 2, 120, DEFAULT_SYSTEM_CONFIG.radarIntervalSec),
         lookAheadDistMeters: clampNum(src.lookAheadDistMeters, 20, 600, DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters),
@@ -144,7 +149,9 @@ function normalizeSystemConfig(raw) {
         announcementText: typeof src.announcementText === 'string' ? src.announcementText.trim() : DEFAULT_SYSTEM_CONFIG.announcementText,
         aiDispatchModel,
         aiApiKeys,
-        activeAiKeyId
+        activeAiKeyId,
+        requireUserApproval: typeof src.requireUserApproval === 'boolean' ? src.requireUserApproval : DEFAULT_SYSTEM_CONFIG.requireUserApproval,
+        buildingManagerPassword
     };
 }
 
@@ -8512,10 +8519,12 @@ window.setMode = function(sec, meters, text) {
 };
 
 // ==========================================
-// 🚛 9. 全自動車隊支援定位雷達（全模式通用）
+// 🚛 9. 全自動車隊支援定位雷達（全模式通用）＋ 👥 三層權限與人員門禁管理系統
 // ==========================================
 const LIVE_FLEET_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/live_fleet';
 const LIVE_FLEET_ALL_URL = `${LIVE_FLEET_BASE_URL}.json`;
+const FLEET_USERS_BASE_URL = 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app/fleet_users';
+const FLEET_USERS_ALL_URL = `${FLEET_USERS_BASE_URL}.json`;
 const SYSTEM_CONFIG_URL = `${FIREBASE_BASE_URL}/system_config.json`;
 const DEFAULT_RADAR_INTERVAL_SEC = 5;
 
@@ -8534,6 +8543,40 @@ if (!fleetDeviceId) {
 } else {
     localStorage.setItem('deviceId', fleetDeviceId);
     localStorage.setItem('fleet_device_id', fleetDeviceId);
+}
+
+// 🔐 三層權限分級狀態：'normal'（一般模式：唯讀瀏覽／搜尋／導航）| 'manager'（管理者模式：可新增／修改／刪除社區大樓）| 'developer'（開發者模式：最高權限）
+let localUserPermissionRole = localStorage.getItem('yingge_user_permission_role') || 'normal';
+if (!['normal', 'manager', 'developer'].includes(localUserPermissionRole)) {
+    localUserPermissionRole = 'normal';
+}
+let myCloudUserProfile = null;
+let allCloudFleetUsersMap = {};
+
+function isCurrentDeviceBlocked() {
+    if (localUserPermissionRole === 'developer') return false;
+    return Boolean(myCloudUserProfile && myCloudUserProfile.isBlocked === true);
+}
+
+function isCurrentDevicePendingApproval() {
+    if (localUserPermissionRole === 'developer') return false;
+    if (!systemNavConfig.requireUserApproval) return false;
+    if (!myCloudUserProfile) return true;
+    return myCloudUserProfile.isApproved !== true;
+}
+
+function isDeviceRestrictedByGatekeeper() {
+    return isCurrentDeviceBlocked() || isCurrentDevicePendingApproval();
+}
+
+function canCurrentUserManageBuildings() {
+    if (localUserPermissionRole === 'developer' || localUserPermissionRole === 'manager') {
+        return true;
+    }
+    if (myCloudUserProfile && myCloudUserProfile.canManageBuildings === true && !myCloudUserProfile.isBlocked) {
+        return true;
+    }
+    return false;
 }
 
 let fleetUserName = (localStorage.getItem('fleet_user_name') || '').trim();
@@ -8598,6 +8641,60 @@ function openFleetUserNameModal(isInitial) {
     setTimeout(() => fleetUserNameInput.focus(), 100);
 }
 
+// 同步本機使用者資料至 Firebase fleet_users/{deviceId}（嚴格使用 PATCH 只更新 displayName 與 lastActiveAt，絕不覆蓋開發者單向標註的 originalName 或權限欄位）
+async function syncMyFleetUserRecordToCloud(options = {}) {
+    if (!fleetDeviceId || !navigator.onLine) return null;
+    const cleanDisplayName = (options.displayName !== undefined ? String(options.displayName) : fleetUserName).trim();
+    if (!cleanDisplayName) return null;
+
+    const now = Date.now();
+    try {
+        // 先讀取雲端是否已有此裝置紀錄
+        const getRes = await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, { cache: 'no-store' }, 4500);
+        const existing = getRes.ok ? await getRes.json() : null;
+
+        let patchPayload;
+        if (existing && typeof existing === 'object') {
+            patchPayload = {
+                displayName: cleanDisplayName,
+                lastActiveAt: now
+            };
+            if (options.requestApproval === true && existing.isApproved !== true) {
+                patchPayload.requestedAt = now;
+            }
+        } else {
+            // 新裝置首次建立紀錄：若全站門禁開啟且非開發者，預設 isApproved: false（待核准）；否則預設 isApproved: true
+            const defaultApproved = (localUserPermissionRole === 'developer') || !systemNavConfig.requireUserApproval;
+            patchPayload = {
+                displayName: cleanDisplayName,
+                originalName: '',
+                isApproved: defaultApproved,
+                isBlocked: false,
+                canManageBuildings: false,
+                createdAt: now,
+                lastActiveAt: now
+            };
+        }
+
+        await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patchPayload)
+        }, 4500);
+
+        myCloudUserProfile = {
+            ...(existing && typeof existing === 'object' ? existing : {}),
+            ...patchPayload
+        };
+        if (typeof evaluateAndRenderAccessGateOverlay === 'function') {
+            evaluateAndRenderAccessGateOverlay();
+        }
+        return myCloudUserProfile;
+    } catch (e) {
+        return myCloudUserProfile;
+    }
+}
+
 function saveFleetUserNameFromModal() {
     const val = (fleetUserNameInput.value || '').trim();
     if (!val) {
@@ -8611,14 +8708,20 @@ function saveFleetUserNameFromModal() {
     syncFleetUserNameUI();
     fleetUserNameModal.classList.add('hidden');
 
-    // 立即跳出醒目美觀的歡迎提示框
-    showWelcomeProfileModal(fleetUserName);
-
-    // 在背景正常啟動原本的連線功能
-    startFleetRadarSystem();
-    if (currentFleetLat !== null && currentFleetLng !== null) {
-        uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
-    }
+    // 同步更新雲端 fleet_users 的 displayName（絕不影響開發者標註的 originalName）
+    syncMyFleetUserRecordToCloud({ displayName: fleetUserName, requestApproval: true }).then(() => {
+        if (isDeviceRestrictedByGatekeeper()) {
+            if (typeof evaluateAndRenderAccessGateOverlay === 'function') {
+                evaluateAndRenderAccessGateOverlay();
+            }
+            return;
+        }
+        showWelcomeProfileModal(fleetUserName);
+        startFleetRadarSystem();
+        if (currentFleetLat !== null && currentFleetLng !== null) {
+            uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+        }
+    });
 }
 
 btnSaveFleetUserName.onclick = saveFleetUserNameFromModal;
@@ -8643,6 +8746,8 @@ let pendingForcedFleetUpload = null;
 async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     if (!fleetUserName || typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     if (!navigator.onLine) return;
+    // 若此裝置已被封鎖或處於門禁待核准狀態，立即停止同步與車隊雷達廣播
+    if (isDeviceRestrictedByGatekeeper()) return;
     if (isUploadingFleetLocation) {
         if (forceUpload) {
             pendingForcedFleetUpload = { lat, lng };
@@ -8681,6 +8786,19 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
             body: JSON.stringify(payload),
             keepalive: true
         }, 5000);
+        // 順便每 25 秒更新一次 fleet_users 的 lastActiveAt 與 displayName（供開發者後台顯示 🟢 上線中 / ⚪ 離線）
+        if (!myCloudUserProfile || (now - Number(myCloudUserProfile.lastActiveAt || 0) >= 25000)) {
+            fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    displayName: fleetUserName,
+                    lastActiveAt: now
+                }),
+                keepalive: true
+            }, 4000).catch(() => {});
+            if (myCloudUserProfile) myCloudUserProfile.lastActiveAt = now;
+        }
     } catch (err) {
         // 巷弄斷網或超時靜默略過，還原座標基準以便下一週期自動恢復補傳
         lastUploadedFleetLat = prevLat;
@@ -8699,7 +8817,7 @@ window.onFleetPositionUpdate = function(lat, lng) {
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     currentFleetLat = lat;
     currentFleetLng = lng;
-    if (fleetUserName) {
+    if (fleetUserName && !isDeviceRestrictedByGatekeeper()) {
         uploadMyFleetLocation(lat, lng, false);
     }
 };
@@ -9752,6 +9870,12 @@ if (btnChooseDirtySpotPin) {
 
 if (btnChooseBuildingPin) {
     btnChooseBuildingPin.onclick = () => {
+        if (!canCurrentUserManageBuildings()) {
+            closeLongPressPinTypeModal(false);
+            alert('🔒 目前為「一般模式（唯讀）」。\n若要新增／修改／刪除「🏢 社區大樓」，請輸入管理者密碼解鎖，或請開發者開啟您的「社區標註授權開關」！');
+            openAdminPasswordModal();
+            return;
+        }
         const lat = pendingMapPinLat;
         const lng = pendingMapPinLng;
         closeLongPressPinTypeModal(false);
@@ -9760,6 +9884,11 @@ if (btnChooseBuildingPin) {
 }
 
 function openCreateBuildingPinModal(lat, lng, existingPin = null) {
+    if (!canCurrentUserManageBuildings()) {
+        alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可新增或修改社區大樓！');
+        openAdminPasswordModal();
+        return;
+    }
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     pendingMapPinLat = lat;
     pendingMapPinLng = lng;
@@ -9814,6 +9943,11 @@ if (buildingPinNameInput) {
 }
 
 async function saveBuildingMapPin() {
+    if (!canCurrentUserManageBuildings()) {
+        alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可儲存社區大樓！');
+        openAdminPasswordModal();
+        return;
+    }
     if (pendingMapPinLat === null || pendingMapPinLng === null) return;
     const buildingName = (buildingPinNameInput?.value || '').trim();
     if (!buildingName) {
@@ -9968,6 +10102,7 @@ function openViewMapPinModal(pin) {
     if (!pin) return;
     activeViewingMapPin = pin;
     const isBuilding = pin.pinType === 'building';
+    const hasBuildingAuth = canCurrentUserManageBuildings();
 
     if (viewMapPinModalCard) {
         viewMapPinModalCard.classList.toggle('border-orange-500', isBuilding);
@@ -9976,7 +10111,9 @@ function openViewMapPinModal(pin) {
     if (viewMapPinCategoryBadge) {
         if (isBuilding) {
             viewMapPinCategoryBadge.className = 'bg-orange-100 text-orange-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5';
-            viewMapPinCategoryBadge.innerHTML = '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓標記';
+            viewMapPinCategoryBadge.innerHTML = hasBuildingAuth
+                ? '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓（已授權管理）'
+                : '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓（一般唯讀）';
         } else {
             viewMapPinCategoryBadge.className = 'bg-blue-100 text-blue-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5';
             viewMapPinCategoryBadge.innerHTML = '<i class="fa-solid fa-location-dot text-blue-600"></i> 全車隊共享現場地標';
@@ -10000,6 +10137,13 @@ function openViewMapPinModal(pin) {
             viewMapPinBuildingNoteWrap.classList.remove('hidden');
             if (viewMapPinBuildingNoteInput) {
                 viewMapPinBuildingNoteInput.value = pin.note || '';
+                viewMapPinBuildingNoteInput.readOnly = !hasBuildingAuth;
+                viewMapPinBuildingNoteInput.placeholder = hasBuildingAuth
+                    ? '可輸入社區收運注意事項（例如：警衛室旁、子母車位置）...'
+                    : '（唯讀模式：需管理者權限或社區標註授權才可編輯備註）';
+            }
+            if (btnSaveMapPinBuildingNote) {
+                btnSaveMapPinBuildingNote.classList.toggle('hidden', !hasBuildingAuth);
             }
             if (viewMapPinNoteSavedStatus) {
                 viewMapPinNoteSavedStatus.classList.add('hidden');
@@ -10012,16 +10156,21 @@ function openViewMapPinModal(pin) {
     if (btnEditMapPinTitle) {
         if (isBuilding) {
             btnEditMapPinTitle.classList.remove('hidden');
-            btnEditMapPinTitle.innerHTML = '✏️ 編輯名稱';
+            btnEditMapPinTitle.innerHTML = hasBuildingAuth ? '✏️ 編輯名稱' : '🔑 解鎖管理';
         } else {
             btnEditMapPinTitle.classList.add('hidden');
         }
     }
 
     if (btnDeleteMapPin) {
-        btnDeleteMapPin.innerHTML = isBuilding
-            ? '🗑️ 刪除'
-            : '🗑️ 已清理／移除';
+        if (isBuilding && !hasBuildingAuth) {
+            btnDeleteMapPin.classList.add('hidden');
+        } else {
+            btnDeleteMapPin.classList.remove('hidden');
+            btnDeleteMapPin.innerHTML = isBuilding
+                ? '🗑️ 刪除'
+                : '🗑️ 已清理／移除';
+        }
     }
 
     syncDistanceGuideButtonUI(pin);
@@ -10051,6 +10200,11 @@ if (viewMapPinBuildingNoteInput) {
 if (btnSaveMapPinBuildingNote) {
     btnSaveMapPinBuildingNote.onclick = async (e) => {
         e.stopPropagation();
+        if (!canCurrentUserManageBuildings()) {
+            alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可修改社區備註！');
+            openAdminPasswordModal();
+            return;
+        }
         if (!activeViewingMapPin || !activeViewingMapPin.id) return;
         if (!navigator.onLine) {
             alert('⚠️ 目前無網路連線，無法儲存社區備註！');
@@ -10102,6 +10256,10 @@ if (btnSaveMapPinBuildingNote) {
 if (btnEditMapPinTitle) {
     btnEditMapPinTitle.onclick = () => {
         if (!activeViewingMapPin) return;
+        if (!canCurrentUserManageBuildings()) {
+            openAdminPasswordModal();
+            return;
+        }
         const targetPin = { ...activeViewingMapPin };
         closeViewMapPinModal();
         openCreateBuildingPinModal(Number(targetPin.lat), Number(targetPin.lng), targetPin);
@@ -10113,6 +10271,11 @@ if (btnDeleteMapPin) {
         if (!activeViewingMapPin || !activeViewingMapPin.id) return;
         const pinId = activeViewingMapPin.id;
         const isBuilding = activeViewingMapPin.pinType === 'building';
+        if (isBuilding && !canCurrentUserManageBuildings()) {
+            alert('🔒 需具備「管理者模式」或「社區標註授權」權限才可刪除社區大樓！');
+            openAdminPasswordModal();
+            return;
+        }
         const pinTitle = activeViewingMapPin.title || (isBuilding ? '此社區大樓' : '此地標');
 
         const confirmMsg = isBuilding
@@ -10489,7 +10652,7 @@ if (map.loaded()) {
 startSharedMapPinsSystem();
 
 // ==========================================
-// ⚙️ 10. 管理員隱藏設定面板（6 位數密碼驗證＋全隊導航參數與公告橫幅雙向即時同步 v3.1）
+// ⚙️ 10. 管理員隱藏設定面板（三層權限驗證＋全隊導航參數＋👥 管理使用者雙向即時同步 v3.27）
 // ==========================================
 const ADMIN_SETTINGS_PASSWORD = '888888';
 
@@ -10508,6 +10671,182 @@ async function fetchSystemConfig() {
     }
 }
 
+// --- 10.1.5 停止車隊雷達廣播與同步（當裝置被封鎖或進入門禁待核准時立即執行） ---
+function stopAndClearMyFleetRadarImmediately() {
+    if (fleetRadarWatchId !== null) {
+        try { navigator.geolocation.clearWatch(fleetRadarWatchId); } catch (e) {}
+        fleetRadarWatchId = null;
+    }
+    if (fleetPollTimer !== null) {
+        clearInterval(fleetPollTimer);
+        fleetPollTimer = null;
+    }
+    if (fleetHeartbeatTimer !== null) {
+        clearInterval(fleetHeartbeatTimer);
+        fleetHeartbeatTimer = null;
+    }
+    fleetRadarStarted = false;
+
+    // 立即從雲端 live_fleet 移除本機廣播節點
+    if (fleetDeviceId && navigator.onLine) {
+        fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+            method: 'DELETE',
+            keepalive: true
+        }, 4000).catch(() => {});
+    }
+
+    // 清除畫面上其他友車標記與在線名單
+    Object.keys(fleetLayerGroup).forEach(devId => {
+        try { fleetLayerGroup[devId].marker.remove(); } catch (e) {}
+        delete fleetLayerGroup[devId];
+    });
+    onlineFleetMembersList = [];
+    renderOnlineFleetListUI();
+}
+
+// --- 10.1.6 檢查本機在 fleet_users/{deviceId} 的核准／封鎖／社區標註授權狀態 ---
+let isCheckingMyUserAccess = false;
+async function checkMyFleetUserAccessStatus() {
+    if (!fleetDeviceId || !navigator.onLine || isCheckingMyUserAccess) return;
+    isCheckingMyUserAccess = true;
+    try {
+        const res = await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, { cache: 'no-store' }, 4500);
+        if (res.ok) {
+            const data = await res.json();
+            if (data && typeof data === 'object') {
+                myCloudUserProfile = data;
+            } else if (fleetUserName) {
+                // 若雲端紀錄還沒建立但已有本機名稱，自動補建一次
+                await syncMyFleetUserRecordToCloud({ displayName: fleetUserName });
+            } else {
+                myCloudUserProfile = null;
+            }
+        }
+        evaluateAndRenderAccessGateOverlay();
+    } catch (e) {
+    } finally {
+        isCheckingMyUserAccess = false;
+    }
+}
+
+function evaluateAndRenderAccessGateOverlay() {
+    const overlay = document.getElementById('deviceAccessGateOverlay');
+    if (!overlay) return;
+
+    const iconWrap = document.getElementById('gateOverlayIconWrap');
+    const iconEl = document.getElementById('gateOverlayIcon');
+    const badgeEl = document.getElementById('gateOverlayStatusBadge');
+    const titleEl = document.getElementById('gateOverlayTitle');
+    const descEl = document.getElementById('gateOverlayDesc');
+    const formWrap = document.getElementById('gateApplyFormWrap');
+    const nameInput = document.getElementById('gateApplyNameInput');
+
+    const blocked = isCurrentDeviceBlocked();
+    const pendingApproval = !blocked && isCurrentDevicePendingApproval();
+
+    if (blocked) {
+        // 🚫 此裝置已被開發者封鎖：即時鎖定畫面並停止同步與車隊雷達廣播
+        stopAndClearMyFleetRadarImmediately();
+        if (iconWrap) iconWrap.className = 'w-16 h-16 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-inner';
+        if (iconEl) iconEl.className = 'fa-solid fa-ban';
+        if (badgeEl) {
+            badgeEl.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-rose-100 text-rose-800 mb-2';
+            badgeEl.textContent = '🚫 裝置已封鎖鎖定';
+        }
+        if (titleEl) titleEl.textContent = '此裝置已被暫停使用權限';
+        if (descEl) descEl.textContent = '系統管理員已封鎖此裝置的存取權限，已即時停止地圖同步與車隊雷達廣播。如需恢復請聯繫開發者（凱哥）。';
+        formWrap?.classList.add('hidden');
+        overlay.classList.remove('hidden');
+        return;
+    }
+
+    if (pendingApproval) {
+        // ⏳ 全站門禁開啟且尚未核准：進入待核准狀態並暫停雷達廣播
+        stopAndClearMyFleetRadarImmediately();
+        if (iconWrap) iconWrap.className = 'w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3 text-3xl shadow-inner';
+        if (iconEl) iconEl.className = 'fa-solid fa-user-clock';
+        if (badgeEl) {
+            badgeEl.className = 'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-800 mb-2';
+            badgeEl.textContent = (myCloudUserProfile && myCloudUserProfile.displayName)
+                ? `⏳ 待核准中（${myCloudUserProfile.displayName}）`
+                : '⏳ 待開發者核准授權';
+        }
+        if (titleEl) titleEl.textContent = '需核准授權才可使用';
+        if (descEl) descEl.textContent = '目前系統已開啟全站門禁管制。請輸入您的稱呼並送出申請，待開發者（凱哥）按核准後即可自動放行。';
+        formWrap?.classList.remove('hidden');
+        if (nameInput && !nameInput.value.trim()) {
+            nameInput.value = fleetUserName || (myCloudUserProfile?.displayName || '');
+        }
+        overlay.classList.remove('hidden');
+        return;
+    }
+
+    // 已核准且未封鎖：放行畫面，若原本雷達因門禁暫停且已有姓名，自動恢復啟動車隊雷達
+    const wasGateVisible = !overlay.classList.contains('hidden');
+    overlay.classList.add('hidden');
+    if (wasGateVisible && fleetUserName && !fleetRadarStarted) {
+        startFleetRadarSystem();
+        if (currentFleetLat !== null && currentFleetLng !== null) {
+            uploadMyFleetLocation(currentFleetLat, currentFleetLng, true);
+        }
+    }
+}
+
+// 綁定全站門禁遮罩按鈕事件
+(function setupDeviceAccessGateOverlayEvents() {
+    const nameInput = document.getElementById('gateApplyNameInput');
+    const submitBtn = document.getElementById('btnSubmitGateApprovalRequest');
+    const feedbackEl = document.getElementById('gateApplyFeedback');
+    const checkNowBtn = document.getElementById('btnGateCheckNow');
+    const devUnlockBtn = document.getElementById('btnGateDeveloperUnlock');
+
+    submitBtn?.addEventListener('click', async () => {
+        const val = (nameInput?.value || '').trim();
+        if (!val) {
+            alert('請輸入您的顯示名稱或稱呼！');
+            nameInput?.focus();
+            return;
+        }
+        fleetUserName = val;
+        localStorage.setItem('fleet_user_name', fleetUserName);
+        localStorage.setItem('yinggeRouteLastAuthor', fleetUserName);
+        syncFleetUserNameUI();
+        fleetUserNameModal?.classList.add('hidden');
+
+        const origText = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = '送出中...';
+        try {
+            await syncMyFleetUserRecordToCloud({ displayName: fleetUserName, requestApproval: true });
+            if (feedbackEl) {
+                feedbackEl.textContent = `✅ 已以「${fleetUserName}」送出申請！等待開發者核准放行中...`;
+                feedbackEl.classList.remove('hidden');
+            }
+            evaluateAndRenderAccessGateOverlay();
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = origText;
+        }
+    });
+
+    checkNowBtn?.addEventListener('click', async () => {
+        const origHtml = checkNowBtn.innerHTML;
+        checkNowBtn.disabled = true;
+        checkNowBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>檢查中...';
+        try {
+            await checkAndApplyRadarInterval();
+            await checkMyFleetUserAccessStatus();
+        } finally {
+            checkNowBtn.disabled = false;
+            checkNowBtn.innerHTML = origHtml;
+        }
+    });
+
+    devUnlockBtn?.addEventListener('click', () => {
+        openAdminPasswordModal();
+    });
+})();
+
 // --- 10.2 套用完整系統參數至當前導航與畫面 ---
 function applySystemConfigToRuntime(newCfg) {
     const normalized = normalizeSystemConfig(newCfg);
@@ -10522,6 +10861,10 @@ function applySystemConfigToRuntime(newCfg) {
 
     // 1. 全隊頂部公告橫幅即時顯示／隱藏
     renderFleetAnnouncementBanner(normalized.announcementText);
+
+    // 1.2 全站門禁總開關狀態同步檢查
+    evaluateAndRenderAccessGateOverlay();
+    syncAdminGateStatusBadgeUI(normalized.requireUserApproval);
 
     // 1.5 左上角車隊雷達在線名單與地圖友車標記休眠狀態即時同步套用
     if (typeof fleetLayerGroup === 'object' && fleetLayerGroup) {
@@ -10575,6 +10918,7 @@ async function checkAndApplyRadarInterval() {
     try {
         const cloudCfg = await fetchSystemConfig();
         applySystemConfigToRuntime(cloudCfg);
+        await checkMyFleetUserAccessStatus();
     } finally {
         isCheckingSystemConfig = false;
     }
@@ -10582,7 +10926,7 @@ async function checkAndApplyRadarInterval() {
 
 // --- 10.4 以新秒數重新啟動車隊雷達輪詢（GPS 上傳 + 雷達讀取） ---
 function restartFleetRadarWithNewInterval(intervalSec) {
-    if (!fleetUserName) return;
+    if (!fleetUserName || isDeviceRestrictedByGatekeeper()) return;
 
     if (fleetPollTimer !== null) {
         clearInterval(fleetPollTimer);
@@ -10593,13 +10937,19 @@ function restartFleetRadarWithNewInterval(intervalSec) {
     fleetPollTimer = setInterval(fetchAndRenderFleetRadar, intervalMs);
 }
 
-// --- 10.5 初始化：啟動時立即讀取雲端系統參數、公告橫幅與雲端路線版本比對 ---
+// --- 10.5 初始化：啟動時立即讀取雲端系統參數、門禁狀態、公告橫幅與雲端路線版本比對 ---
 (async function initSystemConfigSync() {
     const cloudCfg = await fetchSystemConfig();
     currentRadarIntervalSec = cloudCfg.radarIntervalSec;
     lastKnownCloudInterval = cloudCfg.radarIntervalSec;
     applySystemConfigToRuntime(cloudCfg);
-    if (fleetRadarStarted && fleetUserName) {
+
+    if (fleetUserName) {
+        await syncMyFleetUserRecordToCloud({ displayName: fleetUserName });
+    }
+    await checkMyFleetUserAccessStatus();
+
+    if (fleetRadarStarted && fleetUserName && !isDeviceRestrictedByGatekeeper()) {
         restartFleetRadarWithNewInterval(cloudCfg.radarIntervalSec);
     }
     if (typeof checkCloudRouteUpdatesInBackground === 'function') {
@@ -10609,21 +10959,26 @@ function restartFleetRadarWithNewInterval(intervalSec) {
         if (typeof checkCloudRouteUpdatesInBackground === 'function') {
             checkCloudRouteUpdatesInBackground(true);
         }
+        checkMyFleetUserAccessStatus();
     });
-    // 確保即使尚未設定車隊名稱的裝置，也能每 10 秒自動同步全隊頂部公告與最新導航參數
+    // 每 6 秒自動同步全隊系統參數、全站門禁與封鎖狀態（確保被封鎖或核准時秒級生效）
     setInterval(() => {
         checkAndApplyRadarInterval();
-    }, 10000);
+    }, 6000);
 })();
 
-// --- 10.6 在每次 fetchAndRenderFleetRadar 時一併檢查雲端參數是否變更 ---
+// --- 10.6 在每次 fetchAndRenderFleetRadar 時一併檢查雲端參數與門禁是否變更 ---
 const _originalFetchAndRenderFleetRadar = fetchAndRenderFleetRadar;
 fetchAndRenderFleetRadar = async function() {
+    if (isDeviceRestrictedByGatekeeper()) {
+        stopAndClearMyFleetRadarImmediately();
+        return;
+    }
     await _originalFetchAndRenderFleetRadar();
     checkAndApplyRadarInterval();
 };
 
-// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發開發者模式驗證 ---
+// --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發權限驗證 ---
 (function setupAdminTitleTrigger() {
     const versionBadgeEl = document.getElementById('appVersionBadge');
     if (versionBadgeEl) {
@@ -10653,12 +11008,47 @@ fetchAndRenderFleetRadar = async function() {
     });
 })();
 
-// --- 10.8 密碼驗證彈窗 ---
+// --- 10.8 三層權限密碼驗證彈窗（一般模式 / 管理者模式 / 開發者模式） ---
+function syncAdminCurrentRoleBadgeUI() {
+    const badgeEl = document.getElementById('adminCurrentRoleBadge');
+    const logoutBtn = document.getElementById('btnLogoutAdminRole');
+    const hasCloudBldgAuth = Boolean(myCloudUserProfile && myCloudUserProfile.canManageBuildings === true);
+
+    if (badgeEl) {
+        if (localUserPermissionRole === 'developer') {
+            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-amber-500 text-white shadow-sm';
+            badgeEl.textContent = '🛠️ 開發者模式（最高權限）';
+        } else if (localUserPermissionRole === 'manager') {
+            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-orange-500 text-white shadow-sm';
+            badgeEl.textContent = '🏢 管理者模式（可管社區大樓）';
+        } else if (hasCloudBldgAuth) {
+            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300';
+            badgeEl.textContent = '🏢 已獲社區標註授權';
+        } else {
+            badgeEl.className = 'text-[11px] font-black px-2.5 py-0.5 rounded-lg bg-gray-200 text-gray-700';
+            badgeEl.textContent = '一般模式（唯讀）';
+        }
+    }
+    if (logoutBtn) {
+        logoutBtn.classList.toggle('hidden', localUserPermissionRole === 'normal');
+    }
+}
+
+function setLocalUserPermissionRole(newRole) {
+    localUserPermissionRole = ['normal', 'manager', 'developer'].includes(newRole) ? newRole : 'normal';
+    try {
+        localStorage.setItem('yingge_user_permission_role', localUserPermissionRole);
+    } catch (e) {}
+    syncAdminCurrentRoleBadgeUI();
+    evaluateAndRenderAccessGateOverlay();
+}
+
 function openAdminPasswordModal() {
     const modal = document.getElementById('adminPasswordModal');
     const input = document.getElementById('adminPasswordInput');
     const errorEl = document.getElementById('adminPasswordError');
     if (!modal || !input) return;
+    syncAdminCurrentRoleBadgeUI();
     input.value = '';
     errorEl?.classList.add('hidden');
     modal.classList.remove('hidden');
@@ -10669,13 +11059,49 @@ document.getElementById('btnVerifyAdminPassword')?.addEventListener('click', () 
     const input = document.getElementById('adminPasswordInput');
     const errorEl = document.getElementById('adminPasswordError');
     const pwd = (input?.value || '').trim();
+    const managerPwd = (systemNavConfig.buildingManagerPassword || '666666').trim();
+
     if (pwd === ADMIN_SETTINGS_PASSWORD) {
+        // 1. 開發者最高權限密碼（凱哥）
+        setLocalUserPermissionRole('developer');
         document.getElementById('adminPasswordModal')?.classList.add('hidden');
+        // 若自己這台裝置尚未核准或誤被封鎖，開發者登入時自動將本機設為核准且解除封鎖
+        if (fleetDeviceId && navigator.onLine) {
+            fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(fleetDeviceId)}.json`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    displayName: fleetUserName || '凱哥(開發者)',
+                    isApproved: true,
+                    isBlocked: false,
+                    canManageBuildings: true,
+                    lastActiveAt: Date.now()
+                })
+            }, 4000).catch(() => {});
+        }
         openAdminSettingsPanel();
+    } else if (pwd && pwd === managerPwd) {
+        // 2. 管理者模式獨立密碼（可新增／修改／刪除社區大樓）
+        setLocalUserPermissionRole('manager');
+        document.getElementById('adminPasswordModal')?.classList.add('hidden');
+        vibrate([35, 30, 35]);
+        alert('✅ 已解鎖「🏢 管理者模式」！\n您現在可以在地圖上長按新增、修改或刪除「社區大樓（橘色水滴）」標記。');
+        if (activeViewingMapPin) {
+            openViewMapPinModal(activeViewingMapPin);
+        }
     } else {
         errorEl?.classList.remove('hidden');
         if (input) { input.value = ''; input.focus(); }
         try { navigator.vibrate?.(200); } catch (e) {}
+    }
+});
+
+document.getElementById('btnLogoutAdminRole')?.addEventListener('click', () => {
+    setLocalUserPermissionRole('normal');
+    document.getElementById('adminPasswordModal')?.classList.add('hidden');
+    alert('ℹ️ 已切回「一般模式（唯讀瀏覽／搜尋／導航）」。');
+    if (activeViewingMapPin) {
+        openViewMapPinModal(activeViewingMapPin);
     }
 });
 
@@ -10688,6 +11114,488 @@ document.getElementById('adminPasswordInput')?.addEventListener('keydown', (e) =
 document.getElementById('btnCancelAdminPassword')?.addEventListener('click', () => {
     document.getElementById('adminPasswordModal')?.classList.add('hidden');
 });
+
+// --- 10.8.5 開發者模式雙書籤頁切換（⚙️ 系統與 AI 參數 | 👥 管理使用者）與人員權限管理中心 ---
+let activeAdminTab = 'system'; // 'system' | 'users'
+let isFetchingAdminFleetUsers = false;
+
+function switchAdminSettingsTab(tabName) {
+    activeAdminTab = tabName === 'users' ? 'users' : 'system';
+    const tabBtnSystem = document.getElementById('btnAdminTabSystem');
+    const tabBtnUsers = document.getElementById('btnAdminTabUsers');
+    const panelSystem = document.getElementById('adminTabPanelSystem');
+    const panelUsers = document.getElementById('adminTabPanelUsers');
+
+    if (activeAdminTab === 'users') {
+        if (tabBtnUsers) {
+            tabBtnUsers.className = 'py-2 px-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 bg-white text-amber-900 shadow-sm';
+        }
+        if (tabBtnSystem) {
+            tabBtnSystem.className = 'py-2 px-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 text-amber-800/75 hover:text-amber-950';
+        }
+        panelSystem?.classList.add('hidden');
+        panelUsers?.classList.remove('hidden');
+        fetchAndRenderAdminFleetUsersList();
+    } else {
+        if (tabBtnSystem) {
+            tabBtnSystem.className = 'py-2 px-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 bg-white text-amber-900 shadow-sm';
+        }
+        if (tabBtnUsers) {
+            tabBtnUsers.className = 'py-2 px-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 text-amber-800/75 hover:text-amber-950';
+        }
+        panelUsers?.classList.add('hidden');
+        panelSystem?.classList.remove('hidden');
+    }
+}
+
+document.getElementById('btnAdminTabSystem')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    switchAdminSettingsTab('system');
+});
+
+document.getElementById('btnAdminTabUsers')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    switchAdminSettingsTab('users');
+});
+
+function syncAdminGateStatusBadgeUI(requireApproval) {
+    const badgeEl = document.getElementById('adminGateStatusBadge');
+    const checkboxEl = document.getElementById('adminRequireUserApprovalInput');
+    if (checkboxEl) {
+        checkboxEl.checked = Boolean(requireApproval);
+    }
+    if (badgeEl) {
+        if (requireApproval) {
+            badgeEl.className = 'text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 border border-amber-400';
+            badgeEl.textContent = '🔒 需核准放行';
+        } else {
+            badgeEl.className = 'text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200';
+            badgeEl.textContent = '🔓 自由進入';
+        }
+    }
+}
+
+async function saveAdminUserGateSettingsToCloud() {
+    const reqApprovalEl = document.getElementById('adminRequireUserApprovalInput');
+    const mgrPwdEl = document.getElementById('adminBuildingManagerPwdInput');
+    const saveBtn = document.getElementById('btnSaveUserGateSettings');
+
+    const nextRequireApproval = Boolean(reqApprovalEl?.checked);
+    const nextManagerPwd = (mgrPwdEl?.value || '').trim() || '666666';
+    if (mgrPwdEl) mgrPwdEl.value = nextManagerPwd;
+
+    systemNavConfig.requireUserApproval = nextRequireApproval;
+    systemNavConfig.buildingManagerPassword = nextManagerPwd;
+    syncAdminGateStatusBadgeUI(nextRequireApproval);
+
+    try {
+        localStorage.setItem('yingge_system_nav_config_v31', JSON.stringify(systemNavConfig));
+    } catch (e) {}
+
+    const origText = saveBtn ? saveBtn.textContent : '儲存門禁設定';
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '同步中...';
+    }
+    try {
+        await fetchWithTimeout(SYSTEM_CONFIG_URL, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...systemNavConfig,
+                updatedAt: Date.now()
+            })
+        }, 5000);
+        if (saveBtn) {
+            saveBtn.textContent = '✓ 已同步';
+            setTimeout(() => {
+                saveBtn.disabled = false;
+                saveBtn.textContent = origText;
+            }, 1000);
+        }
+        fetchAndRenderAdminFleetUsersList();
+    } catch (e) {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = origText;
+        }
+        alert('⚠️ 儲存門禁設定失敗，請檢查網路連線！');
+    }
+}
+
+document.getElementById('adminRequireUserApprovalInput')?.addEventListener('change', () => {
+    saveAdminUserGateSettingsToCloud();
+});
+
+document.getElementById('btnSaveUserGateSettings')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    saveAdminUserGateSettingsToCloud();
+});
+
+document.getElementById('btnRefreshFleetUsers')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fetchAndRenderAdminFleetUsersList();
+});
+
+async function fetchAndRenderAdminFleetUsersList() {
+    if (isFetchingAdminFleetUsers) return;
+    isFetchingAdminFleetUsers = true;
+    const listContainer = document.getElementById('adminUsersListContainer');
+    const countSummaryEl = document.getElementById('adminUsersCountSummary');
+    const pendingBadgeEl = document.getElementById('adminUsersPendingBadge');
+
+    try {
+        // 同時讀取 fleet_users 與 live_fleet，將目前有在雷達上的裝置也自動納管合併
+        const [usersRes, liveRes] = await Promise.all([
+            fetchWithTimeout(FLEET_USERS_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null),
+            fetchWithTimeout(LIVE_FLEET_ALL_URL, { cache: 'no-store' }, 5000).catch(() => null)
+        ]);
+
+        const rawUsers = (usersRes && usersRes.ok) ? (await usersRes.json() || {}) : {};
+        const rawLive = (liveRes && liveRes.ok) ? (await liveRes.json() || {}) : {};
+        const now = Date.now();
+
+        const mergedMap = {};
+        if (rawUsers && typeof rawUsers === 'object') {
+            Object.entries(rawUsers).forEach(([devId, u]) => {
+                if (!devId || !u || typeof u !== 'object') return;
+                mergedMap[devId] = {
+                    deviceId: devId,
+                    displayName: String(u.displayName || '未命名隊員').trim(),
+                    originalName: String(u.originalName || '').trim(),
+                    isApproved: u.isApproved !== false,
+                    isBlocked: Boolean(u.isBlocked),
+                    canManageBuildings: Boolean(u.canManageBuildings),
+                    lastActiveAt: Number(u.lastActiveAt || u.createdAt || 0),
+                    createdAt: Number(u.createdAt || 0)
+                };
+            });
+        }
+
+        // 若 live_fleet 中有尚未寫入 fleet_users 的線上裝置，自動合併並回寫至 fleet_users
+        if (rawLive && typeof rawLive === 'object') {
+            Object.entries(rawLive).forEach(([devId, liveInfo]) => {
+                if (!devId || !liveInfo || typeof liveInfo !== 'object') return;
+                const liveTs = Number(liveInfo.updatedAt || 0);
+                const liveName = String(liveInfo.name || '隊員').trim();
+                if (mergedMap[devId]) {
+                    if (liveTs > mergedMap[devId].lastActiveAt) {
+                        mergedMap[devId].lastActiveAt = liveTs;
+                    }
+                    if (liveName && (!mergedMap[devId].displayName || mergedMap[devId].displayName === '未命名隊員')) {
+                        mergedMap[devId].displayName = liveName;
+                    }
+                } else {
+                    mergedMap[devId] = {
+                        deviceId: devId,
+                        displayName: liveName || '車隊隊員',
+                        originalName: '',
+                        isApproved: true,
+                        isBlocked: false,
+                        canManageBuildings: false,
+                        lastActiveAt: liveTs || now,
+                        createdAt: liveTs || now
+                    };
+                    fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(devId)}.json`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            displayName: liveName || '車隊隊員',
+                            isApproved: true,
+                            isBlocked: false,
+                            lastActiveAt: liveTs || now
+                        })
+                    }, 4000).catch(() => {});
+                }
+            });
+        }
+
+        allCloudFleetUsersMap = mergedMap;
+        if (fleetDeviceId && mergedMap[fleetDeviceId]) {
+            myCloudUserProfile = mergedMap[fleetDeviceId];
+        }
+
+        const userList = Object.values(mergedMap);
+        // 判斷「🟢 上線中 / ⚪ 離線」：距離最後心跳 <= 45 秒且未封鎖視為上線中
+        const ONLINE_HEARTBEAT_MS = 45 * 1000;
+        let onlineCount = 0;
+        let pendingCount = 0;
+
+        userList.forEach(u => {
+            u.isOnline = !u.isBlocked && (now - Number(u.lastActiveAt || 0) <= ONLINE_HEARTBEAT_MS);
+            if (u.isOnline) onlineCount++;
+            if (!u.isApproved && !u.isBlocked) pendingCount++;
+        });
+
+        // 排序：1. 待核准優先 ➔ 2. 上線中優先 ➔ 3. 最後活躍時間由新到舊
+        userList.sort((a, b) => {
+            const aPending = (!a.isApproved && !a.isBlocked) ? 1 : 0;
+            const bPending = (!b.isApproved && !b.isBlocked) ? 1 : 0;
+            if (aPending !== bPending) return bPending - aPending;
+            if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+            return (b.lastActiveAt || 0) - (a.lastActiveAt || 0);
+        });
+
+        if (countSummaryEl) {
+            countSummaryEl.textContent = `(共 ${userList.length} 人・🟢 上線 ${onlineCount}${pendingCount > 0 ? `・⏳ 待核准 ${pendingCount}` : ''})`;
+        }
+        if (pendingBadgeEl) {
+            if (pendingCount > 0) {
+                pendingBadgeEl.textContent = String(pendingCount);
+                pendingBadgeEl.classList.remove('hidden');
+            } else {
+                pendingBadgeEl.classList.add('hidden');
+            }
+        }
+
+        if (!listContainer) return;
+        listContainer.innerHTML = '';
+
+        if (userList.length === 0) {
+            listContainer.innerHTML = `
+                <div class="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs font-bold text-slate-400">
+                    目前尚無車隊裝置連線紀錄
+                </div>
+            `;
+            return;
+        }
+
+        userList.forEach(user => {
+            const isSelf = (user.deviceId === fleetDeviceId);
+            const isPending = !user.isApproved && !user.isBlocked;
+
+            const card = document.createElement('div');
+            card.className = user.isBlocked
+                ? 'bg-rose-50/80 border-2 border-rose-300 rounded-2xl p-3 space-y-2.5 shadow-sm'
+                : isPending
+                    ? 'bg-amber-50/90 border-2 border-amber-400 rounded-2xl p-3 space-y-2.5 shadow-sm'
+                    : 'bg-white border border-slate-200 rounded-2xl p-3 space-y-2.5 shadow-sm';
+
+            // 計算最後活躍時間文字（不顯示任何裝置 ID 亂碼！）
+            const elapsedSec = Math.max(0, Math.floor((now - Number(user.lastActiveAt || 0)) / 1000));
+            let activeTimeLabel = '剛剛活躍';
+            if (!user.lastActiveAt) {
+                activeTimeLabel = '尚無心跳';
+            } else if (elapsedSec < 45) {
+                activeTimeLabel = '即時在線';
+            } else if (elapsedSec < 3600) {
+                activeTimeLabel = `${Math.max(1, Math.floor(elapsedSec / 60))} 分鐘前`;
+            } else if (elapsedSec < 86400) {
+                activeTimeLabel = `${Math.floor(elapsedSec / 3600)} 小時前`;
+            } else {
+                activeTimeLabel = `${Math.floor(elapsedSec / 86400)} 天前`;
+            }
+
+            // 頂部資訊列：上線燈號 + 使用者自取顯示名稱 + 開發者單向原名標註（絕不顯示裝置 ID 亂碼）
+            const topRow = document.createElement('div');
+            topRow.className = 'flex items-start justify-between gap-2';
+
+            const nameWrap = document.createElement('div');
+            nameWrap.className = 'min-w-0 flex-1';
+
+            const statusDotHtml = user.isOnline
+                ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">🟢 上線中</span>`
+                : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">⚪ 離線 (${activeTimeLabel})</span>`;
+
+            const selfBadgeHtml = isSelf
+                ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-indigo-100 text-indigo-800">本機</span>`
+                : '';
+
+            const origNameBadgeHtml = user.originalName
+                ? `<div class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100/90 border border-amber-300 text-amber-950 text-[11px] font-black">
+                       <i class="fa-solid fa-tag text-amber-600 text-[10px]"></i>
+                       <span>原名：${escapeHtmlSafe(user.originalName)}</span>
+                   </div>`
+                : `<div class="mt-1 text-[10px] font-bold text-slate-400">尚未標註原名（點右方「✏️ 標註／改原名」單向備註）</div>`;
+
+            nameWrap.innerHTML = `
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-sm font-black text-slate-900 truncate">${escapeHtmlSafe(user.displayName || '隊員')}</span>
+                    ${selfBadgeHtml}
+                    ${statusDotHtml}
+                </div>
+                ${origNameBadgeHtml}
+            `;
+
+            // 右上角狀態徽章
+            const stateBadge = document.createElement('div');
+            stateBadge.className = 'flex flex-col items-end gap-1 flex-shrink-0';
+            if (user.isBlocked) {
+                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white">🚫 已封鎖鎖定</span>`;
+            } else if (isPending) {
+                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">⏳ 待核准申請</span>`;
+            } else {
+                stateBadge.innerHTML = `<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200">✓ 准許使用</span>`;
+            }
+
+            topRow.appendChild(nameWrap);
+            topRow.appendChild(stateBadge);
+            card.appendChild(topRow);
+
+            // 中間開關列：1. 准許使用／封鎖開關  2. 社區標註授權開關
+            const togglesGrid = document.createElement('div');
+            togglesGrid.className = 'grid grid-cols-2 gap-2 pt-1 border-t border-slate-100';
+
+            // 控制項 A：准許使用／封鎖開關
+            const accessToggleBox = document.createElement('div');
+            accessToggleBox.className = 'bg-slate-50 border border-slate-200 rounded-xl p-2 flex items-center justify-between gap-1.5';
+            const isAllowedActive = user.isApproved && !user.isBlocked;
+            accessToggleBox.innerHTML = `
+                <div class="min-w-0">
+                    <div class="text-[11px] font-black text-slate-800">准許使用／封鎖</div>
+                    <div class="text-[10px] font-bold ${user.isBlocked ? 'text-rose-600' : isPending ? 'text-amber-600' : 'text-emerald-600'}">
+                        ${user.isBlocked ? '已封鎖(鎖定畫面)' : isPending ? '待核准放行' : '正常授權使用'}
+                    </div>
+                </div>
+            `;
+            const accessBtn = document.createElement('button');
+            accessBtn.type = 'button';
+            if (isPending) {
+                accessBtn.className = 'bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap';
+                accessBtn.textContent = '✓ 核准';
+            } else if (user.isBlocked) {
+                accessBtn.className = 'bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black px-2.5 py-1.5 rounded-lg shadow active:scale-95 whitespace-nowrap';
+                accessBtn.textContent = '解除封鎖';
+            } else {
+                accessBtn.className = 'bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 text-[11px] font-black px-2.5 py-1.5 rounded-lg active:scale-95 whitespace-nowrap';
+                accessBtn.textContent = '🚫 封鎖';
+            }
+            accessBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                accessBtn.disabled = true;
+                if (isPending || user.isBlocked) {
+                    // 核准或解除封鎖 -> 准許使用
+                    await updateCloudFleetUserFields(user.deviceId, {
+                        isApproved: true,
+                        isBlocked: false
+                    });
+                } else {
+                    // 封鎖此裝置 -> 即時鎖定對方畫面並清除其 live_fleet 雷達節點
+                    if (isSelf && !confirm('⚠️ 這是您目前操作的本機裝置，確定要測試封鎖嗎？')) {
+                        accessBtn.disabled = false;
+                        return;
+                    }
+                    await updateCloudFleetUserFields(user.deviceId, {
+                        isBlocked: true
+                    });
+                    // 立即同步刪除該裝置在 live_fleet 的廣播節點
+                    fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, {
+                        method: 'DELETE'
+                    }, 4000).catch(() => {});
+                }
+                await fetchAndRenderAdminFleetUsersList();
+            });
+            accessToggleBox.appendChild(accessBtn);
+
+            // 控制項 B：社區標註授權開關
+            const bldgToggleBox = document.createElement('label');
+            bldgToggleBox.className = 'bg-slate-50 border border-slate-200 rounded-xl p-2 flex items-center justify-between gap-1.5 cursor-pointer';
+            bldgToggleBox.innerHTML = `
+                <div class="min-w-0">
+                    <div class="text-[11px] font-black text-slate-800">🏢 社區標註授權</div>
+                    <div class="text-[10px] font-bold ${user.canManageBuildings ? 'text-orange-600' : 'text-slate-400'}">
+                        ${user.canManageBuildings ? '可新增/改/刪社區' : '一般唯讀'}
+                    </div>
+                </div>
+            `;
+            const bldgCheckbox = document.createElement('input');
+            bldgCheckbox.type = 'checkbox';
+            bldgCheckbox.checked = Boolean(user.canManageBuildings);
+            bldgCheckbox.className = 'w-5 h-5 accent-orange-600 rounded cursor-pointer flex-shrink-0';
+            bldgCheckbox.addEventListener('change', async (e) => {
+                e.stopPropagation();
+                bldgCheckbox.disabled = true;
+                await updateCloudFleetUserFields(user.deviceId, {
+                    canManageBuildings: Boolean(bldgCheckbox.checked)
+                });
+                await fetchAndRenderAdminFleetUsersList();
+            });
+            bldgToggleBox.appendChild(bldgCheckbox);
+
+            togglesGrid.appendChild(accessToggleBox);
+            togglesGrid.appendChild(bldgToggleBox);
+            card.appendChild(togglesGrid);
+
+            // 底部動作按鈕列：✏️ 標註／改原名（單向，僅開發者可見與可改） ＋ 🗑️ 刪除紀錄
+            const bottomActions = document.createElement('div');
+            bottomActions.className = 'flex items-center justify-between gap-2 pt-1';
+
+            const editOrigNameBtn = document.createElement('button');
+            editOrigNameBtn.type = 'button';
+            editOrigNameBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-black py-1.5 px-2.5 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1';
+            editOrigNameBtn.innerHTML = '<span>✏️ 標註／改原名</span>';
+            editOrigNameBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const currentOrig = user.originalName || '';
+                const inputVal = prompt(
+                    `✏️ 單向標註「${user.displayName}」的真實原名：\n（僅開發者可見，絕不覆蓋對方自己取的顯示名稱；對方後續改暱稱時仍會保留此原名對照）`,
+                    currentOrig || user.displayName
+                );
+                if (inputVal === null) return;
+                const cleanOrig = inputVal.trim();
+                await updateCloudFleetUserFields(user.deviceId, {
+                    originalName: cleanOrig
+                });
+                await fetchAndRenderAdminFleetUsersList();
+            });
+
+            const deleteRecordBtn = document.createElement('button');
+            deleteRecordBtn.type = 'button';
+            deleteRecordBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-black py-1.5 px-3 rounded-xl text-[11px] active:scale-95 transition flex items-center justify-center gap-1';
+            deleteRecordBtn.innerHTML = '<span>🗑️ 刪除紀錄</span>';
+            deleteRecordBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const label = user.originalName ? `${user.displayName}（原名：${user.originalName}）` : user.displayName;
+                if (!confirm(`確定要刪除「${label}」的使用者紀錄嗎？`)) return;
+                deleteRecordBtn.disabled = true;
+                try {
+                    await Promise.all([
+                        fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
+                        fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(user.deviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
+                    ]);
+                } finally {
+                    await fetchAndRenderAdminFleetUsersList();
+                }
+            });
+
+            bottomActions.appendChild(editOrigNameBtn);
+            bottomActions.appendChild(deleteRecordBtn);
+            card.appendChild(bottomActions);
+
+            listContainer.appendChild(card);
+        });
+    } finally {
+        isFetchingAdminFleetUsers = false;
+    }
+}
+
+function escapeHtmlSafe(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
+    if (!targetDeviceId || !patchFields || typeof patchFields !== 'object') return;
+    try {
+        await fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...patchFields,
+                updatedByAdminAt: Date.now()
+            })
+        }, 5000);
+        if (targetDeviceId === fleetDeviceId) {
+            await checkMyFleetUserAccessStatus();
+        }
+    } catch (e) {
+        alert('⚠️ 更新使用者權限失敗，請檢查網路狀態！');
+    }
+}
 
 // --- 10.9 開發者模式設定面板表單渲染與雙向同步（含 v3.27 🤖 AI 智慧派工模型切換＋多組 API Key 管理） ---
 let selectedAdminAiModel = systemNavConfig.aiDispatchModel || 'gemini-3.6-flash';
@@ -11015,7 +11923,7 @@ async function persistAdminAiSettingsImmediately() {
     const cancelKeyBtn = document.getElementById('btnCancelNewAiKey');
 
     // 確保輸入框點擊或觸控時明確 stopPropagation 並 focus，絕不被外層攔截
-    [noteInput, keyInput, document.getElementById('adminAnnouncementInput')].forEach(inp => {
+    [noteInput, keyInput, document.getElementById('adminAnnouncementInput'), document.getElementById('adminBuildingManagerPwdInput')].forEach(inp => {
         if (!inp) return;
         ['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(evt => {
             inp.addEventListener(evt, (e) => {
@@ -11187,6 +12095,11 @@ function populateAdminSettingsForm(cfg) {
     setVal('adminMaxAccuracyInput', c.maxAccuracyMeters);
     setVal('adminMaxSpeedInput', c.maxSpeedKmh);
     setVal('adminMinLockSpeedInput', c.minLockSpeedKmh);
+
+    // 同步「👥 管理使用者」書籤頁中的全站門禁開關與管理者密碼
+    setChecked('adminRequireUserApprovalInput', c.requireUserApproval);
+    setVal('adminBuildingManagerPwdInput', c.buildingManagerPassword || '666666');
+    syncAdminGateStatusBadgeUI(c.requireUserApproval);
 }
 
 function readAdminSettingsForm() {
@@ -11236,7 +12149,9 @@ function readAdminSettingsForm() {
         minLockSpeedKmh: getVal('adminMinLockSpeedInput'),
         aiDispatchModel: selectedAdminAiModel,
         aiApiKeys: editingAdminAiKeys,
-        activeAiKeyId: editingActiveAiKeyId
+        activeAiKeyId: editingActiveAiKeyId,
+        requireUserApproval: getChecked('adminRequireUserApprovalInput'),
+        buildingManagerPassword: (getVal('adminBuildingManagerPwdInput') || '666666').trim()
     });
 }
 
@@ -11251,6 +12166,9 @@ async function openAdminSettingsPanel() {
     // 先以目前本機有效設定立即渲染，再從 Firebase 拉取最新雲端設定覆蓋
     populateAdminSettingsForm(systemNavConfig);
     modal.classList.remove('hidden');
+
+    // 背景載入使用者清單以更新「👥 管理使用者」待核准紅點徽章
+    fetchAndRenderAdminFleetUsersList();
 
     const cloudCfg = await fetchSystemConfig();
     // 若使用者此時已經按了「⚡ 測試連線」正在測試中，不要重繪表單避免打斷測試狀態顯示
@@ -12637,7 +13555,9 @@ async function resolveVehicleOriginForFurnitureOsrm() {
     return { lng: Number(p0.lng.toFixed(6)), lat: Number(p0.lat.toFixed(6)), heading: null, source: 'first_pin' };
 }
 
-// 多途經點一次性 OSRM 順向靠右規劃（帶入 continue_straight=true、approaches=curb;curb;... 與起點 bearings=${Math.round(heading)},45;;...）
+// 兩階段多途經點 OSRM 順向靠右規劃：
+// - 第一階段：先以無限制距離（不帶 curb 與 continue_straight）重排 #1～#N 順路順序並計算無限制基準距離
+// - 第二階段：以排好順序套用 continue_straight=true 與 approaches=unrestricted;curb;curb... 實現台灣右側靠停，並設有死胡同距離暴增（超過 1.35 倍）自動放寬 curb 的保底機制
 async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     if (!Array.isArray(waypoints) || waypoints.length < 2) {
         return waypoints.map(w => [w.lng, w.lat]);
@@ -12650,33 +13570,75 @@ async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
         ? `&bearings=${[`${validHeading},45`, ...waypoints.slice(1).map(() => '')].join(';')}`
         : '';
 
-    // 1. 優先嘗試全部點位皆設為 curb（approaches=curb;curb;...），次選起點 unrestricted、其餘插針點全設為 curb
-    const allCurbApproaches = waypoints.map(() => 'curb').join(';');
-    const originUnrestrictedApproaches = ['unrestricted', ...waypoints.slice(1).map(() => 'curb')].join(';');
-    const candidateUrls = [
-        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}${bearingsParam}`,
-        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}${bearingsParam}`
-    ];
-    if (bearingsParam) {
-        // 若起點正好位於死巷底導致初始 ±45 度方位角無解，保留 continue_straight=true 與 approaches=curb 作為第三順位
-        candidateUrls.push(
-            `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}`
-        );
-    }
+    // 先取得第一階段無限制基準路线與距離（不帶 curb 與 continue_straight），作為死胡同距離暴增 1.35 倍比較基準與保底路線
+    const unrestrictedUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+    let baselineUnrestrictedCoords = null;
+    let baselineUnrestrictedDistM = 0;
+    try {
+        const baseRes = await fetchWithTimeout(unrestrictedUrl, {}, 6000);
+        if (baseRes.ok) {
+            const baseData = await baseRes.json();
+            const r0 = baseData?.routes?.[0];
+            if (baseData?.code === 'Ok' && Array.isArray(r0?.geometry?.coordinates) && r0.geometry.coordinates.length >= 2) {
+                baselineUnrestrictedCoords = r0.geometry.coordinates;
+                baselineUnrestrictedDistM = Number(r0.distance) || (computeCoordsDistanceKm(baselineUnrestrictedCoords) * 1000);
+            }
+        }
+    } catch (e) {}
 
-    for (const osrmUrl of candidateUrls) {
+    // 第二階段：套用 continue_straight=true 與 approaches=unrestricted;curb;curb...（以及全 curb）實現台灣右側順向靠停
+    const originUnrestrictedApproaches = ['unrestricted', ...waypoints.slice(1).map(() => 'curb')].join(';');
+    const allCurbApproaches = waypoints.map(() => 'curb').join(';');
+    const stage2CurbUrls = [
+        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}${bearingsParam}`,
+        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}${bearingsParam}`,
+        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}`
+    ];
+
+    for (const osrmUrl of stage2CurbUrls) {
         try {
             const res = await fetchWithTimeout(osrmUrl, {}, 6500);
             if (!res.ok) continue;
             const data = await res.json();
-            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            const routeObj = data?.routes?.[0];
+            const coords = routeObj?.geometry?.coordinates;
             if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                const curbDistM = Number(routeObj.distance) || (computeCoordsDistanceKm(coords) * 1000);
+                // 死胡同距離暴增保底機制：若套用 curb 後總距離超過無限制基準距離的 1.35 倍（且多繞超過 250m），代表遇到死巷或單向封閉強迫大繞遠路，自動放寬 curb
+                if (
+                    baselineUnrestrictedDistM > 50 &&
+                    curbDistM > baselineUnrestrictedDistM * 1.35 &&
+                    (curbDistM - baselineUnrestrictedDistM) > 250
+                ) {
+                    continue;
+                }
                 return densifyRoadCoordinates(coords, 8);
             }
         } catch (e) {}
     }
 
-    // 備援：分段呼叫時同樣傳遞前一段抵達時的車頭方向角 (rollingHeading)，搭配 continue_straight=true 與 approaches=curb;curb
+    // 保底放寬機制：若死胡同導致 curb 距離暴增超過 1.35 倍，優先退回僅帶 continue_straight=true（放寬 curb）或第一階段無限制順路路線
+    try {
+        const relaxedCurbUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true`;
+        const res = await fetchWithTimeout(relaxedCurbUrl, {}, 6000);
+        if (res.ok) {
+            const data = await res.json();
+            const r0 = data?.routes?.[0];
+            const coords = r0?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                const relaxedDistM = Number(r0.distance) || (computeCoordsDistanceKm(coords) * 1000);
+                if (!baselineUnrestrictedDistM || relaxedDistM <= baselineUnrestrictedDistM * 1.35) {
+                    return densifyRoadCoordinates(coords, 8);
+                }
+            }
+        }
+    } catch (e) {}
+
+    if (baselineUnrestrictedCoords && baselineUnrestrictedCoords.length >= 2) {
+        return densifyRoadCoordinates(baselineUnrestrictedCoords, 8);
+    }
+
+    // 最終分段備援
     const combinedCoords = [[waypoints[0].lng, waypoints[0].lat]];
     let rollingHeading = validHeading;
     for (let i = 0; i < waypoints.length - 1; i++) {
@@ -12713,49 +13675,68 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
     }
-    showFurnitureToast('🤖 正在依目前車輛位置與車頭方向規劃靠右順向路線...');
+    showFurnitureToast('🤖 第一階段順路排序中，第二階段套用台灣靠右順向停靠...');
 
     try {
         const origin = await resolveVehicleOriginForFurnitureOsrm();
 
-        // 以目前車輛位置 (origin) 為出發點，採用最近鄰順路演算法重新排列所有插針順序 (#1 -> #2 -> #3...)
+        // 【第一階段】：使用無限制純距離（不帶 curb、continue_straight 或方位角懲罰）重排 #1～#N 順路順序並更新號碼牌，避免最左與最右兩端點位跨區折返
         const remainingPins = [...furnitureActiveData.pins];
         const orderedPins = [];
         let curLng = origin.lng;
         let curLat = origin.lat;
-        let curHeading = normalizeValidHeadingDeg(origin.heading);
 
+        // 嘗試先向 OSRM table API 取得無限制純路網距離矩陣（若超時則以純直線距離最近鄰＋2-opt 順路優化）
         while (remainingPins.length > 0) {
             let bestIdx = 0;
-            let bestScore = Infinity;
+            let bestDist = Infinity;
             for (let i = 0; i < remainingPins.length; i++) {
                 const dKm = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
-                let score = dKm;
-                // 若有當前車頭方向角，對正後方逆向點加上順向繞行權重，優先挑選順向站點避免一出發就原地調頭
-                if (curHeading !== null && dKm > 0.005) {
-                    const targetBearing = getBearing(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
-                    const angleDiff = getAngleDiff(curHeading, targetBearing);
-                    if (angleDiff > 120) {
-                        score += 0.18; // 約等於繞行一個街區的懲罰距離
-                    }
-                }
-                if (score < bestScore) {
-                    bestScore = score;
+                if (dKm < bestDist) {
+                    bestDist = dKm;
                     bestIdx = i;
                 }
             }
             const nextPin = remainingPins.splice(bestIdx, 1)[0];
-            if (getDistanceKm(curLng, curLat, nextPin.lng, nextPin.lat) > 0.005) {
-                curHeading = getBearing(curLng, curLat, nextPin.lng, nextPin.lat);
-            }
             orderedPins.push(nextPin);
             curLng = nextPin.lng;
             curLat = nextPin.lat;
         }
 
-        furnitureActiveData.pins = orderedPins;
+        // 針對排好的 orderedPins 進行無限制距離 2-opt 順路消除交叉折返（確保不會從最左跨區跳到最右再折返）
+        if (orderedPins.length >= 3) {
+            const getPtDist = (aLng, aLat, bLng, bLat) => getDistanceKm(aLng, aLat, bLng, bLat);
+            let improved = true;
+            let pass = 0;
+            while (improved && pass < 12) {
+                improved = false;
+                pass++;
+                for (let i = 0; i < orderedPins.length - 1; i++) {
+                    const prevLng = (i === 0) ? origin.lng : orderedPins[i - 1].lng;
+                    const prevLat = (i === 0) ? origin.lat : orderedPins[i - 1].lat;
+                    for (let k = i + 1; k < orderedPins.length; k++) {
+                        const nextAfterK = (k + 1 < orderedPins.length) ? orderedPins[k + 1] : null;
+                        const currEdgeDist =
+                            getPtDist(prevLng, prevLat, orderedPins[i].lng, orderedPins[i].lat) +
+                            (nextAfterK ? getPtDist(orderedPins[k].lng, orderedPins[k].lat, nextAfterK.lng, nextAfterK.lat) : 0);
+                        const swappedEdgeDist =
+                            getPtDist(prevLng, prevLat, orderedPins[k].lng, orderedPins[k].lat) +
+                            (nextAfterK ? getPtDist(orderedPins[i].lng, orderedPins[i].lat, nextAfterK.lng, nextAfterK.lat) : 0);
+                        if (swappedEdgeDist + 0.002 < currEdgeDist) {
+                            const reversedSeg = orderedPins.slice(i, k + 1).reverse();
+                            orderedPins.splice(i, k - i + 1, ...reversedSeg);
+                            improved = true;
+                        }
+                    }
+                }
+            }
+        }
 
-        // 建立完整途經點：由目前車輛位置出發 -> 第 1 支針 -> 第 2 支針 -> ...
+        // 更新 #1～#N 號碼牌順序
+        furnitureActiveData.pins = orderedPins;
+        renderAllFurnitureMapElements();
+
+        // 【第二階段】：以第一階段排好的 #1～#N 順路順序，套用 continue_straight=true 與 approaches=unrestricted;curb;curb...（含 1.35 倍死胡同自動放寬保底）
         const waypoints = [];
         const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, orderedPins[0].lng, orderedPins[0].lat) * 1000;
         if (distOriginToFirstM >= 12) {
@@ -12776,7 +13757,7 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
 
         renderAllFurnitureMapElements();
         await syncActiveFurnitureToFirebase(false);
-        showFurnitureToast(`✅ 已從目前車輛位置規劃靠右順向最優路線（共 ${furnitureActiveData.distanceKm} km）`);
+        showFurnitureToast(`✅ 已完成兩階段順路排序與靠右停靠路線（共 ${furnitureActiveData.distanceKm} km）`);
     } finally {
         isFurnitureOsrmBusy = false;
         if (btn) {
@@ -14128,9 +15109,10 @@ function syncAdminFurnitureEntryButtonUI() {
     }
 }
 
-function setFurnitureModeActive(enable) {
+function setFurnitureModeActive(enable, options = {}) {
     const furnitureUI = document.getElementById('furnitureModeUI');
     const furnitureLeftConnectControls = document.getElementById('furnitureLeftConnectControls');
+    const exitFurnitureBtn = document.getElementById('btnExitFurnitureMode');
     const topNavHeaderBar = document.getElementById('topNavHeaderBar');
     const mainUI = document.getElementById('mainUI');
     const routeDetailUI = document.getElementById('routeDetailUI');
@@ -14191,22 +15173,84 @@ function setFurnitureModeActive(enable) {
 
         furnitureUI?.classList.remove('hidden');
         furnitureLeftConnectControls?.classList.remove('hidden');
+        exitFurnitureBtn?.classList.remove('hidden');
         syncAdminFurnitureEntryButtonUI();
         fetchAndSyncTodayFurnitureCollab();
         renderAllFurnitureMapElements();
     } else {
+        // 1. 自動結束家具模式的循跡導航或路線播放狀態
+        if (window.isFurnitureNavOrReplayActive) {
+            window.isFurnitureNavOrReplayActive = false;
+            window.activeFurnitureSyntheticRoute = null;
+
+            if (isReplaying) {
+                stopSmoothPlayback();
+                VoiceQueue.clear();
+                document.getElementById('playbackUI')?.classList.add('hidden');
+                document.getElementById('musicAlertBanner')?.classList.add('hidden');
+                restoreRealGpsAfterReplay(true);
+            }
+
+            if (followWatchId !== null || activeFollowGpsHandler !== null) {
+                VoiceQueue.clear();
+                activeFollowGpsHandler = null;
+                if (followWatchId !== null) {
+                    navigator.geolocation.clearWatch(followWatchId);
+                    followWatchId = null;
+                }
+                if (window.tacticalTimer !== null) {
+                    clearInterval(window.tacticalTimer);
+                    window.tacticalTimer = null;
+                }
+                window.activeFollowMappedEvents = null;
+                document.getElementById('tacticalTimePanel')?.classList.add('hidden');
+                document.getElementById('tacticalStopBtn')?.classList.add('hidden');
+                document.getElementById('tacticalQuickAlertBtn')?.classList.add('hidden');
+                document.getElementById('musicAlertBanner')?.classList.add('hidden');
+                document.getElementById('offRouteWarning')?.classList.add('hidden');
+                exitBlackPowerSaveMode(false);
+                releaseScreenWakeLockIfIdle();
+                startIdleGPS();
+            }
+        }
+
+        // 2. 自動結束手動拉線、搜尋預覽與彈窗狀態
         if (isFurnitureManualConnecting) {
-            stopFurnitureManualConnectMode(true);
+            stopFurnitureManualConnectMode(false);
         }
         clearFurnitureSearchPreviewMarker();
         closeFurniturePinPopup();
         closeAiDispatchModal();
+
+        const searchInput = document.getElementById('furnitureAddressSearchInput');
+        if (searchInput) searchInput.value = '';
+        document.getElementById('btnClearFurnitureSearch')?.classList.add('hidden');
+        document.getElementById('btnQuickDropSearchPin')?.classList.add('hidden');
+        document.getElementById('furnitureSearchResultsPanel')?.classList.add('hidden');
+
+        // 3. 將家具模式的暫存插針與未完成路線收起／清空
+        if (options.clearTemporaryFurnitureState && furnitureActiveData) {
+            // 保留已標記「🔥 需垃圾車支援（純木頭）」且未收運的點位供一般垃圾車檢視，其餘暫存插針與未完成路線全部清空收起
+            const keptWoodSupportPins = Array.isArray(furnitureActiveData.pins)
+                ? furnitureActiveData.pins.filter(p => p && p.needsWoodTruckSupport && !p.collected)
+                : [];
+            furnitureActiveData.pins = keptWoodSupportPins;
+            furnitureActiveData.routeCoords = [];
+            furnitureActiveData.distanceKm = '0.00';
+            furnitureActiveData.updatedAt = Date.now();
+            isLocalFurnitureDirty = false;
+            saveLocalFurnitureBackup();
+            syncActiveFurnitureToFirebase(false);
+        }
 
         isFurnitureModeActive = false;
         window.isFurnitureModeActive = false;
 
         furnitureUI?.classList.add('hidden');
         furnitureLeftConnectControls?.classList.add('hidden');
+        exitFurnitureBtn?.classList.add('hidden');
+        document.getElementById('furnitureRouteNavBar')?.classList.add('hidden');
+
         if (topNavHeaderBar) {
             topNavHeaderBar.classList.remove('top-14', 'top-16');
             topNavHeaderBar.classList.add('top-6');
@@ -14255,12 +15299,19 @@ function setFurnitureModeActive(enable) {
 document.getElementById('btnAdminLaunchFurnitureMode')?.addEventListener('click', (e) => {
     e.stopPropagation();
     document.getElementById('adminSettingsModal')?.classList.add('hidden');
-    setFurnitureModeActive(!isFurnitureModeActive);
+    if (isFurnitureModeActive) {
+        vibrate(30);
+        setFurnitureModeActive(false, { clearTemporaryFurnitureState: true });
+    } else {
+        vibrate(30);
+        setFurnitureModeActive(true);
+    }
 });
 
 document.getElementById('btnExitFurnitureMode')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    setFurnitureModeActive(false);
+    vibrate(30);
+    setFurnitureModeActive(false, { clearTemporaryFurnitureState: true });
 });
 
 // 啟動時載入當日本機備份並每 6 秒從 Firebase 同步當日家具路線與「🔥 需垃圾車支援（純木頭）」火紅標記

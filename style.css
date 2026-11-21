@@ -627,6 +627,16 @@ input[type=range]::-webkit-slider-runnable-track {
     box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.35), 0 6px 16px rgba(185, 28, 28, 0.55) !important;
     animation: woodSupportFirePulse 1.25s infinite ease-in-out;
 }
+.furniture-pin-wrapper.is-drag-unlocked {
+    z-index: 80 !important;
+    cursor: grabbing;
+}
+.furniture-pin-pill.is-drag-unlocked {
+    transform: scale(1.18) !important;
+    border-color: #fde047 !important;
+    box-shadow: 0 0 0 5px rgba(250, 204, 21, 0.72), 0 10px 24px rgba(124, 58, 237, 0.65) !important;
+    animation: none !important;
+}
 
 @keyframes woodSupportFirePulse {
     0%, 100% {

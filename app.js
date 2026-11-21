@@ -6245,12 +6245,19 @@ let replayCumMeters = [];
 const speedOptions = [1, 2, 4, 6];
 let speedMultiplier = 1;
 
+function getActivePlaybackOrFollowRoute() {
+    if (window.isFurnitureNavOrReplayActive && window.activeFurnitureSyntheticRoute) {
+        return window.activeFurnitureSyntheticRoute;
+    }
+    return savedRoutes[selectedRouteIdx];
+}
+
 const playbackSlider = document.getElementById('playbackSlider');
 const playPauseBtn = document.getElementById('playPauseBtn');
 const speedToggleBtn = document.getElementById('speedToggleBtn');
 
 document.getElementById('startReplayBtn').onclick = () => {
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActivePlaybackOrFollowRoute();
     if (!route || !route.points || route.points.length < 2) return;
 
     stopSmoothPlayback();
@@ -6264,18 +6271,27 @@ document.getElementById('startReplayBtn').onclick = () => {
     }
 
     document.getElementById('routeDetailUI').classList.add('hidden');
+    if (window.isFurnitureNavOrReplayActive) {
+        document.getElementById('furnitureModeUI')?.classList.add('hidden');
+        document.getElementById('furnitureLeftConnectControls')?.classList.add('hidden');
+        document.getElementById('topBackBtn')?.classList.add('hidden');
+    }
     document.getElementById('playbackUI').classList.remove('hidden');
-    document.getElementById('appStatusTitle').innerText = '路線重播複習';
+    document.getElementById('appStatusTitle').innerText = window.isFurnitureNavOrReplayActive ? '🛋️ 家具路線播放' : '路線重播複習';
     document.getElementById('playbackTitle').innerText = route.name;
     speedToggleBtn.innerText = `${speedMultiplier}x`;
 
     // 初始化累積里程與語音標記事件，重置所有 played / prePlayed 狀態
     replayCumMeters = buildCumulativeRouteMeters(route.points);
-    replayVoiceEvents = prepareVoiceMarkerEvents(route, true);
+    replayVoiceEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
 
     // 初始狀態（currentTrackIndex = 0）：已行駛路段為空，未行駛路段完整高亮顯示
     updateProgressRouteLayers(route.points, 0, null, 0);
-    renderRouteMarkers(route);
+    if (window.isFurnitureNavOrReplayActive) {
+        if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
+    } else {
+        renderRouteMarkers(route);
+    }
 
     playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
     setCameraFollow(true);
@@ -6299,7 +6315,7 @@ document.getElementById('startReplayBtn').onclick = () => {
 };
 
 function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActivePlaybackOrFollowRoute();
     if (!route || !route.points || route.points.length < 2) return;
     const pts = route.points;
     const maxIdx = pts.length - 1;
@@ -6341,7 +6357,10 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
     );
 
     const badge = document.getElementById('replayMusicBadge');
-    if (p2.musicActive) {
+    if (window.isFurnitureNavOrReplayActive) {
+        badge.className = "bg-violet-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto";
+        badge.innerText = `🛋️ 家具清運路線播放中（共 ${(furnitureActiveData?.pins?.length || 0)} 站）`;
+    } else if (p2.musicActive) {
         badge.className = "bg-green-600 text-white text-xs font-extrabold px-4 py-1.5 rounded-full shadow-lg pointer-events-auto";
         badge.innerText = "🎵 目前路段：播放回收音樂中";
     } else {
@@ -6372,7 +6391,7 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
 
 function playbackLoop(timestamp) {
     if (!isPlaying) return;
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActivePlaybackOrFollowRoute();
     if (!route || !route.points || route.points.length < 2) { stopSmoothPlayback(); return; }
     if (!lastFrameTime) lastFrameTime = timestamp;
     const deltaSec = Math.min(Math.max((timestamp - lastFrameTime) / 1000, 0), 0.1);
@@ -6401,7 +6420,7 @@ function startSmoothPlayback() {
     }
     isReplaying = true;
     window.isReplaying = true;
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActivePlaybackOrFollowRoute();
     if (route && playProgress >= route.points.length - 1) {
         playProgress = 0;
         replayVoiceEvents.forEach(ev => {
@@ -6463,8 +6482,14 @@ document.getElementById('stopPlaybackBtn').onclick = () => {
     VoiceQueue.clear();
     document.getElementById('playbackUI').classList.add('hidden'); 
     document.getElementById('musicAlertBanner').classList.add('hidden');
+
+    if (window.isFurnitureNavOrReplayActive && typeof restoreFurnitureModeAfterNavOrReplay === 'function') {
+        restoreFurnitureModeAfterNavOrReplay();
+        restoreRealGpsAfterReplay(true);
+        return;
+    }
+
     document.getElementById('topBackBtn').classList.remove('hidden');
-    
     // 🚀 結束重播後自動歸位：先渲染路線預覽面板（不覆蓋鏡頭），再立即將 isReplaying 設回 false 並將黃色垃圾車與地圖鏡頭對齊最新真實 GPS 位置
     window.openRouteDetail(selectedRouteIdx, true); 
     restoreRealGpsAfterReplay(true);
@@ -6680,12 +6705,21 @@ document.getElementById('startFollowBtn').onclick = async () => {
         window.tacticalTimer = null;
     }
 
-    const route = savedRoutes[selectedRouteIdx];
+    const route = getActivePlaybackOrFollowRoute();
     if (!route) return;
     document.getElementById('routeDetailUI').classList.add('hidden');
+    if (window.isFurnitureNavOrReplayActive) {
+        document.getElementById('furnitureModeUI')?.classList.add('hidden');
+        document.getElementById('furnitureLeftConnectControls')?.classList.add('hidden');
+        document.getElementById('topBackBtn')?.classList.add('hidden');
+    }
     // 顯示右下角的獨立結束按鈕與左下角的一鍵標記黃色注意點按鈕
     document.getElementById('tacticalStopBtn').classList.remove('hidden');
-    document.getElementById('tacticalQuickAlertBtn')?.classList.remove('hidden');
+    if (window.isFurnitureNavOrReplayActive) {
+        document.getElementById('tacticalQuickAlertBtn')?.classList.add('hidden');
+    } else {
+        document.getElementById('tacticalQuickAlertBtn')?.classList.remove('hidden');
+    }
     document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
     
     let hasAnnouncedStart = false, hasAnnouncedEnd = false, wasOffRoute = false; 
@@ -6712,7 +6746,11 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     let currentTrackIndex = 0;
     updateProgressRouteLayers(route.points, 0, null, 0);
-    renderRouteMarkers(route);
+    if (window.isFurnitureNavOrReplayActive) {
+        if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
+    } else {
+        renderRouteMarkers(route);
+    }
     setCameraFollow(true);
 
     // 🚀 按下導航瞬間，強制將鏡頭拉近到「實戰特寫視角」並傾斜
@@ -6918,6 +6956,12 @@ const endFollowAction = () => {
     document.getElementById('offRouteWarning').classList.add('hidden');
     exitBlackPowerSaveMode(false);
     releaseScreenWakeLockIfIdle();
+
+    if (window.isFurnitureNavOrReplayActive && typeof restoreFurnitureModeAfterNavOrReplay === 'function') {
+        restoreFurnitureModeAfterNavOrReplay();
+        startIdleGPS();
+        return;
+    }
     window.openRouteDetail(selectedRouteIdx);
 };
 
@@ -11668,6 +11712,7 @@ document.getElementById('furnitureWoodSupportAlertBtn')?.addEventListener('click
 // 更新家具模式左下角插針統計小膠囊（📍 0 支針 ｜ 0.00 km）與各邊角按鈕啟用狀態
 function updateFurniturePanelUI() {
     const pinsCount = Array.isArray(furnitureActiveData.pins) ? furnitureActiveData.pins.length : 0;
+    const hasConnectedRoute = Array.isArray(furnitureActiveData.routeCoords) && furnitureActiveData.routeCoords.length >= 2;
     furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
 
     const pinCountBadge = document.getElementById('furniturePinCountBadge');
@@ -11680,6 +11725,7 @@ function updateFurniturePanelUI() {
     const autoOsrmBtn = document.getElementById('btnFurnitureAutoOsrmConnect');
     const manualConnectBtn = document.getElementById('btnFurnitureManualConnect');
     const manualConnectText = document.getElementById('furnitureManualConnectBtnText');
+    const routeNavBar = document.getElementById('furnitureRouteNavBar');
 
     if (undoBtn) undoBtn.disabled = (pinsCount === 0);
     if (clearBtn) clearBtn.disabled = (pinsCount === 0 && furnitureActiveData.routeCoords.length === 0);
@@ -11695,7 +11741,48 @@ function updateFurniturePanelUI() {
         }
     }
 
+    // 二、家具路線串接完成後，動態顯示「🧭 循跡導航」與「▶️ 路線播放」兩顆按鈕
+    if (routeNavBar) {
+        if (hasConnectedRoute && !isFurnitureManualConnecting) {
+            routeNavBar.classList.remove('hidden');
+        } else {
+            routeNavBar.classList.add('hidden');
+        }
+    }
+
     updateWoodSupportTopLeftAlertUI();
+}
+
+// 當長按 0.5 秒拖曳既有家具插針放開後，若已有串接好的路線，自動依目前插針順序重新更新 OSRM 順向靠右路線
+async function refreshFurnitureRouteAfterPinDragged() {
+    if (!Array.isArray(furnitureActiveData.routeCoords) || furnitureActiveData.routeCoords.length < 2) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 1) return;
+
+    try {
+        const origin = await resolveVehicleOriginForFurnitureOsrm();
+        const waypoints = [];
+        const p0 = furnitureActiveData.pins[0];
+        const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, p0.lng, p0.lat) * 1000;
+        if (distOriginToFirstM >= 12) {
+            waypoints.push({ lng: origin.lng, lat: origin.lat, isOrigin: true });
+        }
+        furnitureActiveData.pins.forEach(p => {
+            waypoints.push({ lng: p.lng, lat: p.lat, isOrigin: false });
+        });
+
+        if (waypoints.length >= 2) {
+            const updatedCoords = await fetchOsrmMultiWaypointRoute(waypoints, origin.heading);
+            if (Array.isArray(updatedCoords) && updatedCoords.length >= 2) {
+                furnitureActiveData.routeCoords = updatedCoords;
+                furnitureActiveData.distanceKm = computeCoordsDistanceKm(updatedCoords);
+                furnitureActiveData.updatedAt = Date.now();
+                isLocalFurnitureDirty = true;
+                saveLocalFurnitureBackup();
+                renderAllFurnitureMapElements();
+                syncActiveFurnitureToFirebase(false);
+            }
+        }
+    } catch (e) {}
 }
 
 // 渲染地圖上的家具路線圖層與所有定位針
@@ -11751,7 +11838,7 @@ function renderAllFurnitureMapElements() {
         map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON);
     } catch (e) {}
 
-    // 3. 渲染所有家具定位針（可拖曳微調座標）
+    // 3. 渲染所有家具定位針（預設鎖定防誤拉，長按 0.5 秒才解鎖拖曳）
     if (Array.isArray(furnitureActiveData.pins)) {
         furnitureActiveData.pins.forEach((pin, idx) => {
             createFurniturePinDomMarker(pin, idx);
@@ -11793,39 +11880,186 @@ function createFurniturePinDomMarker(pin, pinIdx) {
     wrapperEl.appendChild(pillEl);
     wrapperEl.appendChild(arrowEl);
 
-    wrapperEl.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        if (isFurnitureModeActive && isFurnitureManualConnecting) {
-            handleManualConnectSnapToPin(pinIdx);
-            return;
-        }
-        openFurniturePinActionPopup(pinIdx);
-    });
-
-    const canDrag = Boolean(isFurnitureModeActive && !isFurnitureManualConnecting);
+    // 預設鎖定位置不可直接拖曳（draggable: false），防止瀏覽地圖時誤拉動
     const marker = new maplibregl.Marker({
         element: wrapperEl,
         anchor: 'bottom',
         offset: [0, -4],
-        draggable: canDrag,
+        draggable: false,
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     })
         .setLngLat([Number(pin.lng), Number(pin.lat)])
         .addTo(map);
 
-    if (canDrag) {
-        marker.on('dragend', () => {
-            const pos = marker.getLngLat();
-            pin.lng = Number(pos.lng.toFixed(6));
-            pin.lat = Number(pos.lat.toFixed(6));
+    let suppressNextClick = false;
+    let pinHoldTimer = null;
+    let isPinDragUnlocked = false;
+    let hasPinMovedAfterUnlock = false;
+    let holdStartX = 0;
+    let holdStartY = 0;
+
+    function clearPinHoldTimer() {
+        if (pinHoldTimer !== null) {
+            clearTimeout(pinHoldTimer);
+            pinHoldTimer = null;
+        }
+    }
+
+    function unlockPinDrag() {
+        pinHoldTimer = null;
+        if (!isFurnitureModeActive || isFurnitureManualConnecting) return;
+        isPinDragUnlocked = true;
+        hasPinMovedAfterUnlock = false;
+        suppressNextClick = true;
+        closeFurniturePinPopup();
+        wrapperEl.classList.add('is-drag-unlocked');
+        pillEl.classList.add('is-drag-unlocked');
+        try { map.dragPan.disable(); } catch (e) {}
+        try { navigator.vibrate?.(45); } catch (e) {}
+        showFurnitureToast(`🔓 已解鎖 #${pinNumber} 號針拖曳，滑動移至新位置後放開`);
+    }
+
+    function moveUnlockedPinToClientXY(clientX, clientY) {
+        if (!isPinDragUnlocked) return;
+        const canvasContainer = map.getCanvasContainer();
+        const rect = canvasContainer.getBoundingClientRect();
+        const lngLat = map.unproject([clientX - rect.left, clientY - rect.top]);
+        if (lngLat && !isNaN(lngLat.lng) && !isNaN(lngLat.lat)) {
+            hasPinMovedAfterUnlock = true;
+            marker.setLngLat([lngLat.lng, lngLat.lat]);
+        }
+    }
+
+    function finishPinHoldOrDrag() {
+        clearPinHoldTimer();
+        if (!isPinDragUnlocked) return;
+        isPinDragUnlocked = false;
+        wrapperEl.classList.remove('is-drag-unlocked');
+        pillEl.classList.remove('is-drag-unlocked');
+        try { map.dragPan.enable(); } catch (e) {}
+
+        const pos = marker.getLngLat();
+        const newLng = Number(pos.lng.toFixed(6));
+        const newLat = Number(pos.lat.toFixed(6));
+        const movedMeters = getDistanceKm(pin.lng, pin.lat, newLng, newLat) * 1000;
+
+        if (hasPinMovedAfterUnlock && movedMeters >= 0.5) {
+            pin.lng = newLng;
+            pin.lat = newLat;
             pin.updatedAt = Date.now();
+            furnitureActiveData.updatedAt = Date.now();
             isLocalFurnitureDirty = true;
             saveLocalFurnitureBackup();
+            try { navigator.vibrate?.(30); } catch (e) {}
             renderAllFurnitureMapElements();
             syncActiveFurnitureToFirebase(false);
-        });
+            showFurnitureToast(`📍 已更新 #${pinNumber} 號針位置並重新鎖定`);
+
+            // 若已有串聯路線，同步自動更新路線
+            if (Array.isArray(furnitureActiveData.routeCoords) && furnitureActiveData.routeCoords.length >= 2) {
+                refreshFurnitureRouteAfterPinDragged();
+            }
+        } else {
+            showFurnitureToast(`🔒 #${pinNumber} 號針已重新鎖定`);
+        }
+
+        setTimeout(() => {
+            suppressNextClick = false;
+        }, 120);
     }
+
+    // 觸控長按 0.5 秒（500ms）解鎖拖曳
+    wrapperEl.addEventListener('touchstart', (ev) => {
+        if (!isFurnitureModeActive || isFurnitureManualConnecting) return;
+        if (!ev.touches || ev.touches.length !== 1) {
+            clearPinHoldTimer();
+            return;
+        }
+        const touch = ev.touches[0];
+        holdStartX = touch.clientX;
+        holdStartY = touch.clientY;
+        clearPinHoldTimer();
+        pinHoldTimer = setTimeout(() => {
+            unlockPinDrag();
+        }, 500);
+    }, { passive: true });
+
+    wrapperEl.addEventListener('touchmove', (ev) => {
+        if (!ev.touches || ev.touches.length !== 1) {
+            clearPinHoldTimer();
+            return;
+        }
+        const touch = ev.touches[0];
+        if (isPinDragUnlocked) {
+            if (ev.cancelable) ev.preventDefault();
+            ev.stopPropagation();
+            moveUnlockedPinToClientXY(touch.clientX, touch.clientY);
+            return;
+        }
+        if (pinHoldTimer !== null) {
+            const dist = Math.hypot(touch.clientX - holdStartX, touch.clientY - holdStartY);
+            if (dist >= 10) {
+                clearPinHoldTimer();
+            }
+        }
+    }, { passive: false });
+
+    wrapperEl.addEventListener('touchend', () => {
+        finishPinHoldOrDrag();
+    }, { passive: true });
+
+    wrapperEl.addEventListener('touchcancel', () => {
+        finishPinHoldOrDrag();
+    }, { passive: true });
+
+    // 滑鼠左鍵長按 0.5 秒（500ms）解鎖拖曳
+    wrapperEl.addEventListener('mousedown', (ev) => {
+        if (ev.button !== 0 || !isFurnitureModeActive || isFurnitureManualConnecting) return;
+        holdStartX = ev.clientX;
+        holdStartY = ev.clientY;
+        clearPinHoldTimer();
+
+        const onWindowMouseMove = (moveEv) => {
+            if (isPinDragUnlocked) {
+                moveEv.preventDefault();
+                moveUnlockedPinToClientXY(moveEv.clientX, moveEv.clientY);
+                return;
+            }
+            if (pinHoldTimer !== null) {
+                const dist = Math.hypot(moveEv.clientX - holdStartX, moveEv.clientY - holdStartY);
+                if (dist >= 10) {
+                    clearPinHoldTimer();
+                }
+            }
+        };
+
+        const onWindowMouseUp = () => {
+            window.removeEventListener('mousemove', onWindowMouseMove);
+            window.removeEventListener('mouseup', onWindowMouseUp);
+            finishPinHoldOrDrag();
+        };
+
+        window.addEventListener('mousemove', onWindowMouseMove);
+        window.addEventListener('mouseup', onWindowMouseUp);
+
+        pinHoldTimer = setTimeout(() => {
+            unlockPinDrag();
+        }, 500);
+    });
+
+    wrapperEl.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+        }
+        if (isFurnitureModeActive && isFurnitureManualConnecting) {
+            handleManualConnectSnapToPin(pinIdx);
+            return;
+        }
+        openFurniturePinActionPopup(pinIdx);
+    });
 
     furnitureDomMarkers.push(marker);
     return marker;
@@ -12010,25 +12244,121 @@ function addFurniturePinToWorkspace(lng, lat, labelText = '', options = {}) {
     isLocalFurnitureDirty = true;
     saveLocalFurnitureBackup();
     if (!options.silent) {
-        vibrate(25);
+        vibrate(40);
         renderAllFurnitureMapElements();
         syncActiveFurnitureToFirebase(false);
     }
 }
 
-// 家具模式下點擊地圖：直接插針（或手動拉線串聯模式下點擊加點／吸附目標針）
+// 家具模式下輕點地圖：取消單擊直接插針（防誤觸），僅在「手動拉線串」模式下保留點擊加點／吸附目標針
 function handleFurnitureMapClick(e) {
     if (!isFurnitureModeActive || !e?.lngLat) return;
-    const clickLng = Number(e.lngLat.lng.toFixed(6));
-    const clickLat = Number(e.lngLat.lat.toFixed(6));
-
     if (isFurnitureManualConnecting) {
+        const clickLng = Number(e.lngLat.lng.toFixed(6));
+        const clickLat = Number(e.lngLat.lat.toFixed(6));
         handleFurnitureManualClickPoint(clickLng, clickLat);
-        return;
+    }
+}
+
+// 一、家具模式「長按地圖 0.5 秒（500ms）才插針」（移動距離 < 10px，防滑動或縮放地圖時誤插針）
+(function setupFurnitureMapLongPressToPin() {
+    const FURNITURE_HOLD_MS = 500;
+    let mapHoldTimer = null;
+    let startX = 0;
+    let startY = 0;
+    let holdLngLat = null;
+    const canvasContainer = map.getCanvasContainer();
+
+    function clearMapHoldTimer() {
+        if (mapHoldTimer !== null) {
+            clearTimeout(mapHoldTimer);
+            mapHoldTimer = null;
+        }
+        holdLngLat = null;
     }
 
-    addFurniturePinToWorkspace(clickLng, clickLat, '');
-}
+    function isPinOrPopupTarget(targetEl) {
+        if (!targetEl || !targetEl.closest) return false;
+        return Boolean(
+            targetEl.closest('.furniture-pin-wrapper, .furniture-popup-wrapper, .shared-pin-wrapper, .fleet-truck-marker, .music-marker, .alert-compact-pin, .alert-popup-wrapper')
+        );
+    }
+
+    canvasContainer.addEventListener('touchstart', (e) => {
+        clearMapHoldTimer();
+        if (!isFurnitureModeActive || isFurnitureManualConnecting || window.isFurnitureNavOrReplayActive) return;
+        if (!e.touches || e.touches.length !== 1) return;
+        if (isPinOrPopupTarget(e.target)) return;
+
+        const touch = e.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        const rect = canvasContainer.getBoundingClientRect();
+        holdLngLat = map.unproject([touch.clientX - rect.left, touch.clientY - rect.top]);
+
+        mapHoldTimer = setTimeout(() => {
+            mapHoldTimer = null;
+            if (!isFurnitureModeActive || isFurnitureManualConnecting || window.isFurnitureNavOrReplayActive || !holdLngLat) return;
+            const pinLng = Number(holdLngLat.lng.toFixed(6));
+            const pinLat = Number(holdLngLat.lat.toFixed(6));
+            closeFurniturePinPopup();
+            try { navigator.vibrate?.(40); } catch (err) {}
+            addFurniturePinToWorkspace(pinLng, pinLat, '');
+            showFurnitureToast(`📍 已長按新增家具插針 #${furnitureActiveData.pins.length}`);
+        }, FURNITURE_HOLD_MS);
+    }, { passive: true });
+
+    canvasContainer.addEventListener('touchmove', (e) => {
+        if (mapHoldTimer === null) return;
+        if (!e.touches || e.touches.length !== 1) {
+            clearMapHoldTimer();
+            return;
+        }
+        const touch = e.touches[0];
+        if (Math.hypot(touch.clientX - startX, touch.clientY - startY) >= 10) {
+            clearMapHoldTimer();
+        }
+    }, { passive: true });
+
+    canvasContainer.addEventListener('touchend', clearMapHoldTimer, { passive: true });
+    canvasContainer.addEventListener('touchcancel', clearMapHoldTimer, { passive: true });
+
+    canvasContainer.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        clearMapHoldTimer();
+        if (!isFurnitureModeActive || isFurnitureManualConnecting || window.isFurnitureNavOrReplayActive) return;
+        if (isPinOrPopupTarget(e.target)) return;
+
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = canvasContainer.getBoundingClientRect();
+        holdLngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+
+        mapHoldTimer = setTimeout(() => {
+            mapHoldTimer = null;
+            if (!isFurnitureModeActive || isFurnitureManualConnecting || window.isFurnitureNavOrReplayActive || !holdLngLat) return;
+            const pinLng = Number(holdLngLat.lng.toFixed(6));
+            const pinLat = Number(holdLngLat.lat.toFixed(6));
+            closeFurniturePinPopup();
+            try { navigator.vibrate?.(40); } catch (err) {}
+            addFurniturePinToWorkspace(pinLng, pinLat, '');
+            showFurnitureToast(`📍 已長按新增家具插針 #${furnitureActiveData.pins.length}`);
+        }, FURNITURE_HOLD_MS);
+    });
+
+    canvasContainer.addEventListener('mousemove', (e) => {
+        if (mapHoldTimer === null) return;
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) >= 10) {
+            clearMapHoldTimer();
+        }
+    });
+
+    canvasContainer.addEventListener('mouseup', clearMapHoldTimer);
+
+    ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach(evtName => {
+        map.on(evtName, clearMapHoldTimer);
+    });
+})();
 
 // ==========================================
 // 🔍 免費 OSM Nominatim 地址／地標搜尋（400ms Debounce，優先偏向新北市鶯歌區範圍）
@@ -12644,6 +12974,120 @@ document.getElementById('btnFurnitureManualConnect')?.addEventListener('click', 
     } else {
         startFurnitureManualConnectMode();
     }
+});
+
+// ==========================================
+// 🧭▶️ 二、家具路線串接完成後：「🧭 循跡導航」與「▶️ 路線播放」引擎接通
+// ==========================================
+function buildSyntheticRouteFromActiveFurniture() {
+    if (!furnitureActiveData || !Array.isArray(furnitureActiveData.routeCoords) || furnitureActiveData.routeCoords.length < 2) {
+        return null;
+    }
+
+    const points = furnitureActiveData.routeCoords.map((coord, idx) => ({
+        lng: Number(coord[0]),
+        lat: Number(coord[1]),
+        time: Date.now() + idx * 1000,
+        musicActive: true,
+        music: true
+    }));
+
+    const events = (furnitureActiveData.pins || []).map((pin, idx) => {
+        const cleanAddr = String(pin.label || `家具點位 #${idx + 1}`).replace(/^新北市鶯歌區/, '').trim();
+        const notePart = pin.note ? `（${pin.note}）` : '';
+        const woodPart = pin.needsWoodTruckSupport ? '，純木頭需垃圾車支援' : '';
+        return {
+            type: 'alert',
+            lng: Number(pin.lng),
+            lat: Number(pin.lat),
+            note: `第 ${idx + 1} 站家具清運點：${cleanAddr}${notePart}${woodPart}`,
+            played: false,
+            prePlayed: false
+        };
+    });
+
+    const pinsCount = Array.isArray(furnitureActiveData.pins) ? furnitureActiveData.pins.length : 0;
+    return {
+        id: `furniture_active_${currentFurnitureDateStr}`,
+        name: `家具清運路線（${pinsCount} 站 · ${furnitureActiveData.distanceKm || '0.00'} km）`,
+        date: currentFurnitureDateStr,
+        distance: furnitureActiveData.distanceKm || computeCoordsDistanceKm(furnitureActiveData.routeCoords),
+        timeStr: `${pinsCount} 站家具點位`,
+        author: furnitureActiveData.author || '家具清運隊員',
+        points,
+        events,
+        callouts: []
+    };
+}
+
+function restoreFurnitureModeAfterNavOrReplay() {
+    window.isFurnitureNavOrReplayActive = false;
+    window.activeFurnitureSyntheticRoute = null;
+
+    // 清除一般路線重播／導航殘留的進度線圖層与 S/E DOM 標記
+    clearDomMarkers();
+    cachedBgRouteGeoJSON = emptyGeoJSON();
+    cachedSilentRouteGeoJSON = emptyGeoJSON();
+    cachedMusicRouteGeoJSON = emptyGeoJSON();
+    try {
+        map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+        map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
+        map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
+    } catch (e) {}
+
+    isFurnitureModeActive = true;
+    window.isFurnitureModeActive = true;
+
+    document.getElementById('routeDetailUI')?.classList.add('hidden');
+    document.getElementById('mainUI')?.classList.add('hidden');
+    document.getElementById('playbackUI')?.classList.add('hidden');
+    document.getElementById('topBackBtn')?.classList.add('hidden');
+
+    const topNavHeaderBar = document.getElementById('topNavHeaderBar');
+    if (topNavHeaderBar) {
+        topNavHeaderBar.classList.remove('top-6', 'top-14');
+        topNavHeaderBar.classList.add('top-16');
+    }
+    const appStatusTitle = document.getElementById('appStatusTitle');
+    if (appStatusTitle) {
+        appStatusTitle.innerText = '🛋️ 家具模式';
+    }
+
+    document.getElementById('furnitureModeUI')?.classList.remove('hidden');
+    document.getElementById('furnitureLeftConnectControls')?.classList.remove('hidden');
+    renderAllFurnitureMapElements();
+}
+
+document.getElementById('btnFurnitureStartFollowNav')?.addEventListener('click', () => {
+    if (isFurnitureManualConnecting) {
+        stopFurnitureManualConnectMode(true);
+    }
+    const syntheticRoute = buildSyntheticRouteFromActiveFurniture();
+    if (!syntheticRoute) {
+        showFurnitureToast('⚠️ 請先透過「自動沿路串」或「手動拉線串」建立家具路線');
+        return;
+    }
+    closeFurniturePinPopup();
+    window.activeFurnitureSyntheticRoute = syntheticRoute;
+    window.isFurnitureNavOrReplayActive = true;
+    vibrate(35);
+    document.getElementById('startFollowBtn')?.click();
+});
+
+document.getElementById('btnFurnitureStartReplay')?.addEventListener('click', () => {
+    if (isFurnitureManualConnecting) {
+        stopFurnitureManualConnectMode(true);
+    }
+    const syntheticRoute = buildSyntheticRouteFromActiveFurniture();
+    if (!syntheticRoute) {
+        showFurnitureToast('⚠️ 請先透過「自動沿路串」或「手動拉線串」建立家具路線');
+        return;
+    }
+    closeFurniturePinPopup();
+    window.activeFurnitureSyntheticRoute = syntheticRoute;
+    window.isFurnitureNavOrReplayActive = true;
+    vibrate(35);
+    document.getElementById('startReplayBtn')?.click();
 });
 
 // 撤銷上一支針與清空全部家具定位針按鈕

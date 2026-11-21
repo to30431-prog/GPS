@@ -1,0 +1,39 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "shared_routes": {
+      ".read": true,
+      ".write": true,
+      "$route_id": {
+        ".validate": "newData.hasChildren(['name', 'points']) && newData.child('name').isString() && newData.child('name').val().length <= 100 && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 50)) && (!newData.child('distance').exists() || newData.child('distance').isString() || newData.child('distance').isNumber()) && (!newData.child('routeVersion').exists() || newData.child('routeVersion').isNumber())"
+      }
+    },
+    "pending_routes": {
+      ".read": true,
+      ".write": true,
+      "$route_id": {
+        ".validate": "newData.hasChildren(['name', 'points']) && newData.child('name').isString() && newData.child('name').val().length <= 100 && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 50)) && (!newData.child('distance').exists() || newData.child('distance').isString() || newData.child('distance').isNumber()) && (!newData.child('routeVersion').exists() || newData.child('routeVersion').isNumber())"
+      }
+    },
+    "live_fleet": {
+      ".read": true,
+      "$device_id": {
+        ".write": true,
+        ".validate": "newData.hasChildren(['name', 'lat', 'lng', 'updatedAt']) && newData.child('name').isString() && newData.child('name').val().length <= 50 && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('updatedAt').isNumber() && (!newData.child('speedKmh').exists() || newData.child('speedKmh').isNumber())"
+      }
+    },
+    "map_pins": {
+      ".read": true,
+      "$pin_id": {
+        ".write": true,
+        ".validate": "newData.hasChildren(['title', 'lat', 'lng', 'createdAt']) && newData.child('title').isString() && newData.child('title').val().length <= 200 && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 50)) && (!newData.child('photo').exists() || (newData.child('photo').isString() && newData.child('photo').val().length <= 500000))"
+      }
+    },
+    "system_config": {
+      ".read": true,
+      ".write": true,
+      ".validate": "newData.hasChildren(['radarIntervalSec']) && newData.child('radarIntervalSec').isNumber() && newData.child('radarIntervalSec').val() >= 1 && newData.child('radarIntervalSec').val() <= 120 && (!newData.child('announcementText').exists() || (newData.child('announcementText').isString() && newData.child('announcementText').val().length <= 500)) && (!newData.child('lookAheadDistMeters').exists() || newData.child('lookAheadDistMeters').isNumber()) && (!newData.child('confirmDistMeters').exists() || newData.child('confirmDistMeters').isNumber()) && (!newData.child('voiceRate').exists() || newData.child('voiceRate').isNumber())"
+    }
+  }
+}

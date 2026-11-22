@@ -68,12 +68,12 @@
     lion_dance: {
       id: 'lion_dance',
       name: '祥獅獻瑞',
-      src: './assets/cars/lion_dance_1.jpg',
+      src: './assets/cars/lion_dance_1.png',
       frames: [
-        './assets/cars/lion_dance_1.jpg',
-        './assets/cars/lion_dance_2.jpg',
-        './assets/cars/lion_dance_3.jpg',
-        './assets/cars/lion_dance_4.jpg'
+        './assets/cars/lion_dance_1.png',
+        './assets/cars/lion_dance_2.png',
+        './assets/cars/lion_dance_3.png',
+        './assets/cars/lion_dance_4.png'
       ],
       width: 136,
       height: 136,
@@ -131,7 +131,6 @@
         filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
       }
 
-      /* 序列幀堆疊共用樣式（3格雪橇 / 4格舞獅） */
       .vehicle-sprite-stack {
         position: relative;
         display: inline-block;
@@ -160,12 +159,6 @@
       .vehicle-sprite-stack .sprite-frame-2 { z-index: 4; }
       .vehicle-sprite-stack .sprite-frame-3 { z-index: 5; }
 
-      /* 舞獅黑底輕量處理：亮色本體保留、深黑底弱化 */
-      .vehicle-img-wrap[data-car="lion_dance"] .sprite-frame {
-        border-radius: 999px;
-      }
-
-      /* 🎅 3 格雪橇逐格輪播 */
       .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-0 {
         animation: spriteFrame0Run 0.36s steps(1, end) infinite;
       }
@@ -190,7 +183,6 @@
         animation: lionFrame3Run 0.96s steps(1, end) infinite;
       }
 
-      /* 選單預覽、雷達小車標與省電模式停用逐格輪播，只顯示第 1 格 */
       button .vehicle-sprite-stack .sprite-frame,
       .car-option .vehicle-sprite-stack .sprite-frame,
       [data-car-select] .vehicle-sprite-stack .sprite-frame,
@@ -244,7 +236,6 @@
         75%, 100%    { opacity: 1; }
       }
 
-      /* ☀️ 千陽號專屬 SVG 前進水波紋 */
       .sunny-wake-svg {
         position: absolute;
         top: 50%;
@@ -288,7 +279,6 @@
         100% { opacity: 0; transform: translateY(24px) scaleX(1.32) scaleY(1.25); }
       }
 
-      /* 🚚💨 汽車車尾排氣動畫 */
       .car-exhaust-svg {
         position: absolute;
         top: 50%;
@@ -326,7 +316,6 @@
         100% { opacity: 0; transform: translateY(22px) scale(1.45); }
       }
 
-      /* 🐢 綠蠵龜後方划水尾波與氣泡 */
       .turtle-wake-svg {
         position: absolute;
         top: 50%;

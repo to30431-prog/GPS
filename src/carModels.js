@@ -75,8 +75,8 @@
         './assets/cars/lion_dance_3.png',
         './assets/cars/lion_dance_4.png'
       ],
-      width: 136,
-      height: 136,
+      width: 92,
+      height: 92,
       baseAngle: 0
     }
   };
@@ -415,7 +415,14 @@
         max-width: 72px !important;
         max-height: 72px !important;
       }
-
+button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
+      .car-option .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
+      [data-car-select] .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
+      .car-picker-item .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
+      .vehicle-card .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack {
+        width: 58px !important;
+        height: 58px !important;
+      }
       .vehicle-img-wrap.is-moving[data-car="turtle"] > img {
         animation: turtleWaddleTopDown 0.55s ease-in-out infinite alternate;
       }

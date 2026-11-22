@@ -185,11 +185,6 @@
                 <i id="voiceIcon" class="fa-solid fa-volume-high text-base"></i>
                 <span id="voiceLabel" class="text-[9px] font-bold leading-none mt-0.5">語音開</span>
             </button>
-            <!-- 🎵 主題連動簡易背景音樂開關（Web Audio API 八音盒合成） -->
-            <button id="bgmToggleBtn" type="button" class="bg-white text-gray-500 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200" title="背景音樂已靜音（點擊開啟）">
-                <i id="bgmIcon" class="fa-solid fa-music text-base opacity-50"></i>
-                <span id="bgmLabel" class="text-[9px] font-bold leading-none mt-0.5">音樂關</span>
-            </button>
             <!-- 🗺️ 圖層切換按鈕（選單本體獨立置於外層 fixed，避免被右側工具列 overflow-y:auto 裁切） -->
             <div id="mapLayerSwitcherWrapper" class="relative">
                 <button id="mapLayerSwitchBtn" type="button" class="bg-white text-emerald-700 w-11 h-11 rounded-2xl shadow-lg border-2 border-emerald-500 flex flex-col items-center justify-center active:scale-95" title="切換地圖底圖圖層">
@@ -1597,7 +1592,7 @@
     <script src="src/firebase-auth.js?v=3.32"></script>
     <script src="src/ai-settings.js?v=3.32"></script>
     <script src="src/furniture-osrm.js?v=3.32"></script>
-    <script src="src/bgm-player.js?v=3.34"></script>
+    <script src="src/bgm-player.js?v=3.35"></script>
     <script src="src/main.js?v=3.32"></script>
 </body>
 </html>

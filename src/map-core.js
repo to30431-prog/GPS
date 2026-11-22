@@ -1083,36 +1083,59 @@ function renderMapLayerMenuOptions() {
 
     listEl.innerHTML = '';
 
-    // 🎄 選項第一個：使用者節慶主題開關（可隨時自行開啟／關閉，與車模分開獨立選擇）
+    // 🎄 選項第一個：使用者節慶主題開關（耶誕節主題開啟時，右側內嵌專屬「水晶音樂開／關」切換膠囊）
     if (typeof getEffectiveFestivalThemeState === 'function') {
         const themeState = getEffectiveFestivalThemeState();
         const themeMeta = themeState.themeMeta;
         const isThemeOn = Boolean(themeState.isActive);
-        const themeBtn = document.createElement('button');
-        themeBtn.type = 'button';
-        themeBtn.id = 'mapLayerFestivalThemeToggleBtn';
-        themeBtn.className = isThemeOn
-            ? 'w-full text-left px-3 py-2 rounded-xl bg-red-50 border-2 border-red-400 text-red-900 flex items-center justify-between gap-2 transition-all active:scale-95'
-            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-95';
+        const showXmasMusicBtn = Boolean(isThemeOn && themeState.themeKey === 'christmas');
+        const isBgmOn = Boolean(window.BgmPlayer && typeof window.BgmPlayer.isEnabled === 'function' && window.BgmPlayer.isEnabled());
 
-        themeBtn.innerHTML = `
-            <div class="flex items-center gap-2.5 min-w-0">
+        const themeCard = document.createElement('div');
+        themeCard.setAttribute('role', 'button');
+        themeCard.setAttribute('tabindex', '0');
+        themeCard.id = 'mapLayerFestivalThemeToggleBtn';
+        themeCard.className = isThemeOn
+            ? 'w-full text-left px-3 py-2 rounded-xl bg-red-50 border-2 border-red-400 text-red-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none'
+            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none';
+
+        themeCard.innerHTML = `
+            <div class="flex items-center gap-2 min-w-0 flex-1">
                 <span class="text-base flex-shrink-0">${themeMeta.icon}</span>
                 <div class="min-w-0">
                     <div class="text-xs font-black truncate ${isThemeOn ? 'text-red-800' : 'text-gray-800'}">${themeMeta.name}</div>
-                    <div class="text-[10px] font-bold truncate ${isThemeOn ? 'text-red-600' : 'text-gray-400'}">${isThemeOn ? `${themeMeta.desc} · 點擊關閉` : '已關閉 · 點擊開啟'}</div>
+                    <div class="text-[10px] font-bold truncate ${isThemeOn ? 'text-red-600' : 'text-gray-400'}">${isThemeOn ? '已開啟 · 點擊關閉' : '已關閉 · 點擊開啟'}</div>
                 </div>
             </div>
-            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isThemeOn ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'}">${isThemeOn ? '開' : '關'}</span>
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+                ${showXmasMusicBtn ? `
+                <button type="button" id="mapLayerXmasBgmBtn" class="px-2 py-1 rounded-full text-[10px] font-black flex items-center gap-1 shadow-sm active:scale-90 transition-all whitespace-nowrap border ${
+                    isBgmOn
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-400'
+                        : 'bg-white hover:bg-gray-100 text-gray-600 border-gray-300'
+                }" title="${isBgmOn ? '點擊關閉聖誕水晶音樂' : '點擊開啟聖誕水晶音樂'}">
+                    <span>${isBgmOn ? '🎵 音樂開' : '🔇 音樂關'}</span>
+                </button>` : ''}
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isThemeOn ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'}">${isThemeOn ? '開' : '關'}</span>
+            </div>
         `;
 
-        themeBtn.addEventListener('click', (e) => {
+        themeCard.addEventListener('click', (e) => {
             e.stopPropagation();
             if (typeof toggleUserFestivalTheme === 'function') {
                 toggleUserFestivalTheme();
             }
         });
-        listEl.appendChild(themeBtn);
+
+        const xmasBgmBtn = themeCard.querySelector('#mapLayerXmasBgmBtn');
+        if (xmasBgmBtn) {
+            xmasBgmBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.BgmPlayer?.toggle();
+            });
+        }
+
+        listEl.appendChild(themeCard);
 
         const divider = document.createElement('div');
         divider.className = 'border-b border-gray-100 my-0.5';

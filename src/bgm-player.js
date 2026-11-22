@@ -1,104 +1,107 @@
 // ==========================================
 // [Module 11] src/bgm-player.js
-// 主題連動簡易背景音樂播放器（純 Web Audio API 八音盒合成，0 外部音檔）
-// - 常態背景音量輕柔（約 0.05），語音導航播報時自動平滑壓低至 15%（Audio Ducking）
-// - 支援聖誕主題《Jingle Bells》、一般／日間輕快小節奏、夜間／暗色柔和低音和弦
-// - 極致省電模式 (body.power-saving) 或切至背景 (document.hidden) 自動暫停，切回前景自動恢復
+// 耶誕節主題專屬「水晶八音盒（Celesta / Music Box）」背景音樂播放器（純 Web Audio API 合成，0 外部音檔）
+// - 兩首完整曲目依序串接無限循環：
+//   1. 完整版《Jingle Bells》（主歌 + 副歌）
+//   2. 曲間留白約 1 秒後接續完整版《We Wish You a Merry Christmas》（主歌 + 副歌）
+// - 常態音量輕柔（0.05），語音導航播報時自動平滑壓低至 15%（Audio Ducking）
+// - 僅在「耶誕節主題」開啟時播放；關閉主題、極致省電模式 (body.power-saving) 或切至背景時自動停止／暫停
 // ==========================================
 
-(function initFestivalBgmPlayer() {
+(function initChristmasCrystalBgmPlayer() {
     const STORAGE_KEY = 'yingge_bgm_enabled_v1';
-    const NORMAL_VOLUME = 0.05; // 輕柔常態背景音（0.04~0.06）
-    const DUCK_RATIO = 0.15;    // 語音播報時壓低至原音量 15%
+    const NORMAL_VOLUME = 0.05; // 輕柔背景陪襯音量（0.04~0.06）
+    const DUCK_RATIO = 0.15;    // 語音播報時平滑壓低至原音量 15%
 
-    // 音名對照頻率表（Hz）
+    // 高音域水晶八音盒音名頻率表（Hz）
     const NOTE_FREQ = {
-        F2: 87.31, G2: 98.00, A2: 110.00, B2: 123.47,
-        C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.00, B3: 246.94,
-        C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.00, B4: 493.88,
+        G4: 392.00, A4: 440.00, B4: 493.88,
         C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
         C6: 1046.50
     };
 
-    // 各主題對應旋律設定
-    const THEME_MELODIES = {
-        christmas: {
-            stepMs: 245,
-            wave: 'sine',
-            harmonicWave: 'triangle',
-            harmonicGain: 0.22,
-            decaySec: 0.42,
-            notes: [
-                'E5', 'E5', 'E5', '-',
-                'E5', 'E5', 'E5', '-',
-                'E5', 'G5', 'C5', 'D5', 'E5', '-', '-', '-',
-                'F5', 'F5', 'F5', 'F5',
-                'F5', 'E5', 'E5', 'E5',
-                'E5', 'D5', 'D5', 'E5', 'D5', '-', 'G5', '-'
-            ]
-        },
-        default: {
-            stepMs: 275,
-            wave: 'sine',
-            harmonicWave: 'triangle',
-            harmonicGain: 0.16,
-            decaySec: 0.36,
-            notes: [
-                'C5', 'E5', 'G5', '-',
-                'A5', 'G5', 'E5', '-',
-                'F5', 'A5', 'G5', 'E5',
-                'D5', '-', 'G5', '-',
-                'C5', 'E5', 'G5', 'C6',
-                'A5', 'G5', 'E5', '-',
-                'D5', 'F5', 'E5', 'D5',
-                'C5', '-', '-', '-'
-            ]
-        },
-        night: {
-            stepMs: 720,
-            wave: 'sine',
-            harmonicWave: 'triangle',
-            harmonicGain: 0.10,
-            decaySec: 1.35,
-            isChordMode: true,
-            notes: [
-                ['C3', 'G3', 'B3', 'E4'], '-',
-                ['A2', 'E3', 'G3', 'C4'], '-',
-                ['F2', 'C3', 'E3', 'A3'], '-',
-                ['G2', 'D3', 'E3', 'B3'], '-'
-            ]
-        }
-    };
+    // 1. 完整版《Jingle Bells》（主歌 Dashing through the snow + 副歌 Jingle bells）
+    const JINGLE_BELLS_FULL = [
+        // 主歌 A：Dashing through the snow, in a one-horse open sleigh
+        'G4', 'E5', 'D5', 'C5', 'G4', '-', '-', '-',
+        'G4', 'E5', 'D5', 'C5', 'A4', '-', '-', '-',
+        // O'er the fields we go, laughing all the way
+        'A4', 'F5', 'E5', 'D5', 'B4', '-', '-', '-',
+        'G5', 'G5', 'F5', 'D5', 'E5', '-', '-', '-',
+        // 主歌 B：Bells on bobtails ring, making spirits bright
+        'G4', 'E5', 'D5', 'C5', 'G4', '-', '-', '-',
+        'G4', 'E5', 'D5', 'C5', 'A4', '-', '-', 'A4',
+        // What fun it is to ride and sing a sleighing song tonight, Oh!
+        'A4', 'F5', 'E5', 'D5', 'G5', 'G5', 'G5', 'G5',
+        'A5', 'G5', 'F5', 'D5', 'C5', '-', 'G5', '-',
+
+        // 副歌 1：Jingle bells, jingle bells, jingle all the way
+        'E5', 'E5', 'E5', '-', 'E5', 'E5', 'E5', '-',
+        'E5', 'G5', 'C5', 'D5', 'E5', '-', '-', '-',
+        // Oh what fun it is to ride in a one-horse open sleigh, hey!
+        'F5', 'F5', 'F5', 'F5', 'F5', 'E5', 'E5', 'E5',
+        'E5', 'D5', 'D5', 'E5', 'D5', '-', 'G5', '-',
+
+        // 副歌 2：Jingle bells, jingle bells, jingle all the way
+        'E5', 'E5', 'E5', '-', 'E5', 'E5', 'E5', '-',
+        'E5', 'G5', 'C5', 'D5', 'E5', '-', '-', '-',
+        // Oh what fun it is to ride in a one-horse open sleigh!
+        'F5', 'F5', 'F5', 'F5', 'F5', 'E5', 'E5', 'E5',
+        'G5', 'G5', 'F5', 'D5', 'C5', '-', '-', '-'
+    ];
+
+    // 2. 完整版《We Wish You a Merry Christmas》（副歌 + 主歌 Good tidings + 尾聲副歌）
+    const WE_WISH_YOU_FULL = [
+        // 副歌：We wish you a Merry Christmas x3, and a Happy New Year
+        'G4', '-', 'C5', '-', 'C5', 'D5', 'C5', 'B4', 'A4', '-', 'A4', '-', 'A4', '-',
+        'D5', '-', 'D5', 'E5', 'D5', 'C5', 'B4', '-', 'G4', '-', 'G4', '-',
+        'E5', '-', 'E5', 'F5', 'E5', 'D5', 'C5', '-', 'A4', '-', 'G4', 'G4',
+        'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-',
+
+        // 主歌：Good tidings we bring to you and your kin; Good tidings for Christmas and a Happy New Year
+        'G4', '-', 'C5', '-', 'C5', '-', 'C5', '-', 'B4', '-', '-', '-',
+        'B4', '-', 'C5', '-', 'B4', '-', 'A4', '-', 'G4', '-', '-', '-',
+        'D5', '-', 'E5', '-', 'D5', '-', 'C5', '-', 'G5', '-', 'G4', 'G4',
+        'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-',
+
+        // 尾聲副歌：We wish you a Merry Christmas x3, and a Happy New Year
+        'G4', '-', 'C5', '-', 'C5', 'D5', 'C5', 'B4', 'A4', '-', 'A4', '-', 'A4', '-',
+        'D5', '-', 'D5', 'E5', 'D5', 'C5', 'B4', '-', 'G4', '-', 'G4', '-',
+        'E5', '-', 'E5', 'F5', 'E5', 'D5', 'C5', '-', 'A4', '-', 'G4', 'G4',
+        'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-'
+    ];
+
+    const PLAYLIST = [
+        { name: 'Jingle Bells', stepMs: 245, notes: JINGLE_BELLS_FULL },
+        { name: 'We Wish You a Merry Christmas', stepMs: 240, notes: WE_WISH_YOU_FULL }
+    ];
+    const INTER_SONG_GAP_MS = 1000; // 曲間留白約 1 秒
 
     let audioCtx = null;
     let masterGain = null;
     let stepTimer = null;
+    let gapTimer = null;
     let duckWatchTimer = null;
+    let songIndex = 0;
     let stepIndex = 0;
-    let currentThemeKey = 'default';
-    let isBgmEnabled = false;
+    let isBgmEnabled = true; // 預設開啟（使用者若手動關閉會記憶於 localStorage）
     let isVoiceDucking = false;
 
     try {
-        isBgmEnabled = localStorage.getItem(STORAGE_KEY) === '1';
-    } catch (e) {
-        isBgmEnabled = false;
-    }
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved === '0') isBgmEnabled = false;
+        else if (saved === '1') isBgmEnabled = true;
+    } catch (e) {}
 
-    function detectActiveThemeKey() {
+    function isChristmasThemeActive() {
         const body = document.body;
-        if (!body) return 'default';
+        if (!body) return false;
         const attrTheme = (body.getAttribute('data-theme') || '').toLowerCase();
-        if (attrTheme === 'christmas' || body.classList.contains('theme-christmas')) {
-            return 'christmas';
-        }
-        if (attrTheme === 'night' || attrTheme === 'dark' || body.classList.contains('theme-night') || body.classList.contains('theme-dark')) {
-            return 'night';
-        }
-        return 'default';
+        return attrTheme === 'christmas' || body.classList.contains('theme-christmas');
     }
 
     function isPausedBySystemState() {
+        if (!isChristmasThemeActive()) return true;
         if (document.hidden) return true;
         if (document.body && document.body.classList.contains('power-saving')) return true;
         return false;
@@ -145,49 +148,69 @@
         } catch (e) {}
     }
 
-    function playSingleTone(freq, melody, ampScale = 1) {
+    // 清脆透亮「水晶八音盒（Celesta / Music Box）」合成音色：
+    // - 主音：高音域 sine（attack ~0.008s，release ~0.75s）
+    // - 高八度泛音敲擊瞬態：極輕量 2x sine + 3x 晶亮點綴（快速衰減，營造金屬琴鍵／水晶敲擊感）
+    function playCrystalNote(freq) {
         if (!audioCtx || !masterGain || !freq) return;
         const now = audioCtx.currentTime;
-        const decay = melody.decaySec || 0.4;
+        const attack = 0.008;
+        const release = 0.75;
 
-        // 主八音盒音色（sine）
-        const osc1 = audioCtx.createOscillator();
-        const env1 = audioCtx.createGain();
-        osc1.type = melody.wave || 'sine';
-        osc1.frequency.setValueAtTime(freq, now);
+        // 1. 主正弦波（溫潤清澈延音）
+        const oscMain = audioCtx.createOscillator();
+        const envMain = audioCtx.createGain();
+        oscMain.type = 'sine';
+        oscMain.frequency.setValueAtTime(freq, now);
 
-        env1.gain.setValueAtTime(0.0001, now);
-        env1.gain.linearRampToValueAtTime(0.85 * ampScale, now + 0.014);
-        env1.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+        envMain.gain.setValueAtTime(0.0001, now);
+        envMain.gain.linearRampToValueAtTime(0.82, now + attack);
+        envMain.gain.exponentialRampToValueAtTime(0.0001, now + attack + release);
 
-        osc1.connect(env1);
-        env1.connect(masterGain);
-        osc1.start(now);
-        osc1.stop(now + decay + 0.04);
+        oscMain.connect(envMain);
+        envMain.connect(masterGain);
+        oscMain.start(now);
+        oscMain.stop(now + attack + release + 0.05);
 
-        // 輕微泛音增添八音盒清脆感（triangle）
-        if (melody.harmonicGain > 0) {
-            const osc2 = audioCtx.createOscillator();
-            const env2 = audioCtx.createGain();
-            osc2.type = melody.harmonicWave || 'triangle';
-            osc2.frequency.setValueAtTime(melody.isChordMode ? freq : freq * 2, now);
+        // 2. 高八度水晶泛音（清脆八音盒共鳴）
+        const oscOct = audioCtx.createOscillator();
+        const envOct = audioCtx.createGain();
+        oscOct.type = 'sine';
+        oscOct.frequency.setValueAtTime(freq * 2, now);
 
-            const hDecay = Math.min(decay * 0.72, 0.55);
-            env2.gain.setValueAtTime(0.0001, now);
-            env2.gain.linearRampToValueAtTime(melody.harmonicGain * ampScale, now + 0.012);
-            env2.gain.exponentialRampToValueAtTime(0.0001, now + hDecay);
+        envOct.gain.setValueAtTime(0.0001, now);
+        envOct.gain.linearRampToValueAtTime(0.22, now + 0.005);
+        envOct.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
 
-            osc2.connect(env2);
-            env2.connect(masterGain);
-            osc2.start(now);
-            osc2.stop(now + hDecay + 0.04);
-        }
+        oscOct.connect(envOct);
+        envOct.connect(masterGain);
+        oscOct.start(now);
+        oscOct.stop(now + 0.32);
+
+        // 3. 極輕量高頻敲擊瞬態（3 倍泛音，瞬間消散增加晶透感）
+        const oscSparkle = audioCtx.createOscillator();
+        const envSparkle = audioCtx.createGain();
+        oscSparkle.type = 'triangle';
+        oscSparkle.frequency.setValueAtTime(freq * 3, now);
+
+        envSparkle.gain.setValueAtTime(0.0001, now);
+        envSparkle.gain.linearRampToValueAtTime(0.075, now + 0.003);
+        envSparkle.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+
+        oscSparkle.connect(envSparkle);
+        envSparkle.connect(masterGain);
+        oscSparkle.start(now);
+        oscSparkle.stop(now + 0.14);
     }
 
-    function stopScheduler() {
+    function stopTimers() {
         if (stepTimer !== null) {
             clearInterval(stepTimer);
             stepTimer = null;
+        }
+        if (gapTimer !== null) {
+            clearTimeout(gapTimer);
+            gapTimer = null;
         }
         if (duckWatchTimer !== null) {
             clearInterval(duckWatchTimer);
@@ -195,55 +218,51 @@
         }
     }
 
-    function startScheduler() {
-        stopScheduler();
+    function startCurrentSongLoop() {
+        stopTimers();
         if (!isBgmEnabled || isPausedBySystemState()) return;
 
         const ctx = ensureAudioContext();
         if (!ctx) return;
 
-        currentThemeKey = detectActiveThemeKey();
-        const melody = THEME_MELODIES[currentThemeKey] || THEME_MELODIES.default;
         applyGainTarget(false);
+        const song = PLAYLIST[songIndex % PLAYLIST.length];
 
-        const playStep = () => {
+        const tick = () => {
             if (!isBgmEnabled || isPausedBySystemState()) {
-                stopScheduler();
+                stopTimers();
                 applyGainTarget(false);
                 return;
             }
             if (!audioCtx || audioCtx.state !== 'running') return;
 
-            const activeKey = detectActiveThemeKey();
-            if (activeKey !== currentThemeKey) {
-                currentThemeKey = activeKey;
+            if (stepIndex >= song.notes.length) {
+                // 本曲播畢：留白約 1 秒後自動切換下一首並循環
+                stopTimers();
+                songIndex = (songIndex + 1) % PLAYLIST.length;
                 stepIndex = 0;
-                startScheduler();
+                gapTimer = setTimeout(() => {
+                    gapTimer = null;
+                    if (isBgmEnabled && !isPausedBySystemState()) {
+                        startCurrentSongLoop();
+                    }
+                }, INTER_SONG_GAP_MS);
                 return;
             }
 
-            const curMelody = THEME_MELODIES[currentThemeKey] || THEME_MELODIES.default;
-            const entry = curMelody.notes[stepIndex % curMelody.notes.length];
-            stepIndex = (stepIndex + 1) % curMelody.notes.length;
+            const noteName = song.notes[stepIndex];
+            stepIndex += 1;
 
-            if (!entry || entry === '-') return;
-
-            if (Array.isArray(entry)) {
-                const perVoiceScale = 0.42;
-                entry.forEach(noteName => {
-                    const f = NOTE_FREQ[noteName];
-                    if (f) playSingleTone(f, curMelody, perVoiceScale);
-                });
-            } else {
-                const f = NOTE_FREQ[entry];
-                if (f) playSingleTone(f, curMelody, 1);
+            if (noteName && noteName !== '-') {
+                const freq = NOTE_FREQ[noteName];
+                if (freq) playCrystalNote(freq);
             }
         };
 
-        playStep();
-        stepTimer = setInterval(playStep, melody.stepMs);
+        tick();
+        stepTimer = setInterval(tick, song.stepMs);
 
-        // 安全監看 speechSynthesis.speaking 狀態，確保任何語音播報都會壓低 BGM
+        // 安全監看 speechSynthesis.speaking 狀態，確保語音播報必觸發 Audio Ducking
         duckWatchTimer = setInterval(() => {
             const speakingNow = Boolean(
                 (typeof VoiceQueue !== 'undefined' && VoiceQueue.isSpeaking) ||
@@ -255,40 +274,22 @@
         }, 180);
     }
 
-    function updateBgmToggleButtonUI() {
-        const btn = document.getElementById('bgmToggleBtn');
-        const icon = document.getElementById('bgmIcon');
-        const label = document.getElementById('bgmLabel');
-        if (!btn) return;
-
-        if (isBgmEnabled) {
-            btn.className = 'bg-pink-500 text-white w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-pink-400';
-            if (icon) icon.className = 'fa-solid fa-music text-base';
-            if (label) label.textContent = '音樂開';
-            btn.title = '背景音樂已開啟（點擊靜音）';
-        } else {
-            btn.className = 'bg-white text-gray-500 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200';
-            if (icon) icon.className = 'fa-solid fa-music text-base opacity-50';
-            if (label) label.textContent = '音樂關';
-            btn.title = '背景音樂已靜音（點擊開啟）';
-        }
-    }
-
     function setEnabled(enabled) {
         isBgmEnabled = Boolean(enabled);
         try {
             localStorage.setItem(STORAGE_KEY, isBgmEnabled ? '1' : '0');
         } catch (e) {}
 
-        updateBgmToggleButtonUI();
-
-        if (isBgmEnabled) {
+        if (isBgmEnabled && !isPausedBySystemState()) {
             ensureAudioContext();
-            stepIndex = 0;
-            startScheduler();
+            startCurrentSongLoop();
         } else {
-            stopScheduler();
+            stopTimers();
             applyGainTarget(false);
+        }
+
+        if (typeof renderMapLayerMenuOptions === 'function') {
+            renderMapLayerMenuOptions();
         }
     }
 
@@ -305,60 +306,56 @@
     }
 
     function setTheme(themeKey) {
-        const normalized = THEME_MELODIES[themeKey] ? themeKey : detectActiveThemeKey();
-        if (normalized !== currentThemeKey) {
-            currentThemeKey = normalized;
-            stepIndex = 0;
-            if (isBgmEnabled && !isPausedBySystemState()) {
-                startScheduler();
+        const isXmas = themeKey === 'christmas' || isChristmasThemeActive();
+        if (!isXmas) {
+            stopTimers();
+            applyGainTarget(false);
+            return;
+        }
+        if (isBgmEnabled && !isPausedBySystemState()) {
+            if (stepTimer === null && gapTimer === null) {
+                songIndex = 0;
+                stepIndex = 0;
+                startCurrentSongLoop();
             }
         } else {
-            syncPlaybackState();
+            stopTimers();
+            applyGainTarget(false);
         }
     }
 
     function syncPlaybackState() {
-        updateBgmToggleButtonUI();
         if (!isBgmEnabled || isPausedBySystemState()) {
-            stopScheduler();
+            stopTimers();
             applyGainTarget(false);
             return;
         }
         const ctx = ensureAudioContext();
-        if (ctx && stepTimer === null) {
-            startScheduler();
+        if (ctx && stepTimer === null && gapTimer === null) {
+            startCurrentSongLoop();
         } else {
             applyGainTarget(false);
         }
     }
 
     function unlockAndSync() {
-        if (!isBgmEnabled) return;
+        if (!isBgmEnabled || isPausedBySystemState()) return;
         const ctx = ensureAudioContext();
         if (!ctx) return;
         if (ctx.state === 'suspended') {
             ctx.resume().then(() => {
-                if (isBgmEnabled && !isPausedBySystemState() && stepTimer === null) {
-                    startScheduler();
+                if (isBgmEnabled && !isPausedBySystemState() && stepTimer === null && gapTimer === null) {
+                    startCurrentSongLoop();
                 }
             }).catch(() => {});
-        } else if (!isPausedBySystemState() && stepTimer === null) {
-            startScheduler();
+        } else if (stepTimer === null && gapTimer === null) {
+            startCurrentSongLoop();
         }
     }
 
-    // 綁定工具列背景音樂按鈕
-    const bgmBtn = document.getElementById('bgmToggleBtn');
-    if (bgmBtn) {
-        bgmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggle();
-        });
-    }
-
-    // 行動裝置首次互動解鎖 AudioContext（若使用者先前已記憶開啟音樂）
+    // 行動裝置首次互動解鎖 AudioContext（僅當聖誕主題與音樂皆為開啟時）
     const onFirstUserGesture = () => {
-        if (isBgmEnabled) {
+        if (isBgmEnabled && !isPausedBySystemState()) {
             unlockAndSync();
         }
     };
@@ -366,12 +363,10 @@
         document.addEventListener(evt, onFirstUserGesture, { passive: true });
     });
 
-    // 切至背景自動暫停、回前景自動恢復
+    // 切至背景分頁自動暫停，切回前景且非省電模式時自動恢復
     document.addEventListener('visibilitychange', () => {
         syncPlaybackState();
     });
-
-    updateBgmToggleButtonUI();
 
     window.BgmPlayer = {
         toggle,
@@ -380,7 +375,6 @@
         setTheme,
         setVoiceDucking,
         syncPlaybackState,
-        unlockAndSync,
-        updateUI: updateBgmToggleButtonUI
+        unlockAndSync
     };
 })();

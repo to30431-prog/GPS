@@ -185,25 +185,12 @@
                 <i id="voiceIcon" class="fa-solid fa-volume-high text-base"></i>
                 <span id="voiceLabel" class="text-[9px] font-bold leading-none mt-0.5">語音開</span>
             </button>
-            <!-- 🗺️ 圖層切換按鈕與彈出選單 -->
+            <!-- 🗺️ 圖層切換按鈕（選單本體獨立置於外層 fixed，避免被右側工具列 overflow-y:auto 裁切） -->
             <div id="mapLayerSwitcherWrapper" class="relative">
                 <button id="mapLayerSwitchBtn" type="button" class="bg-white text-emerald-700 w-11 h-11 rounded-2xl shadow-lg border-2 border-emerald-500 flex flex-col items-center justify-center active:scale-95" title="切換地圖底圖圖層">
                     <span class="text-sm leading-none">🗺️</span>
                     <span class="text-[9px] font-bold leading-none mt-0.5">圖層</span>
                 </button>
-                <div id="mapLayerMenuPanel" class="hidden absolute right-12 top-0 mr-2 w-64 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-200 p-2.5 z-[99999] flex flex-col gap-1.5">
-                    <div class="px-2 py-1 border-b border-gray-100 flex items-center justify-between">
-                        <span class="text-xs font-black text-gray-800 flex items-center gap-1">🗺️ 切換地圖圖層</span>
-                        <span id="currentMapLayerBadge" class="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Google 地圖</span>
-                    </div>
-                    <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[55vh] overflow-y-auto"></div>
-                    <div class="pt-1 border-t border-gray-100">
-                        <button id="menuRefreshMapBtn" type="button" class="w-full px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 font-black text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all">
-                            <i class="fa-solid fa-arrows-rotate text-sky-600"></i>
-                            <span>輕量重整地圖（保留目前狀態）</span>
-                        </button>
-                    </div>
-                </div>
             </div>
             <!-- 🔄 輕量重整地圖按鈕（僅重算尺寸與重繪圖層，不重載頁面、不遺失未存路線狀態） -->
             <button id="refreshMapBtn" type="button" class="bg-white text-sky-700 w-11 h-11 rounded-2xl shadow-lg border-2 border-sky-400 flex flex-col items-center justify-center active:scale-95" title="輕量重整地圖尺寸與圖層（不重載網頁、保留未存狀態）">
@@ -216,6 +203,21 @@
             </button>
             <button id="followStopBtn" class="hidden bg-red-600 text-white px-3 py-2.5 rounded-2xl shadow-lg font-bold text-xs flex items-center gap-1 active:scale-95 !hidden">
                 <i class="fa-solid fa-xmark"></i> 結束遵循
+            </button>
+        </div>
+    </div>
+
+    <!-- 🗺️ 地圖圖層與節慶主題切換彈出選單（獨立 fixed 浮層，不受右側工具列捲動容器裁切） -->
+    <div id="mapLayerMenuPanel" class="hidden fixed right-16 top-24 w-64 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-200 p-2.5 z-[99999] flex flex-col gap-1.5 pointer-events-auto">
+        <div class="px-2 py-1 border-b border-gray-100 flex items-center justify-between">
+            <span class="text-xs font-black text-gray-800 flex items-center gap-1">🗺️ 切換地圖圖層</span>
+            <span id="currentMapLayerBadge" class="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Google 地圖</span>
+        </div>
+        <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[55vh] overflow-y-auto"></div>
+        <div class="pt-1 border-t border-gray-100">
+            <button id="menuRefreshMapBtn" type="button" class="w-full px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 font-black text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all">
+                <i class="fa-solid fa-arrows-rotate text-sky-600"></i>
+                <span>輕量重整地圖（保留目前狀態）</span>
             </button>
         </div>
     </div>

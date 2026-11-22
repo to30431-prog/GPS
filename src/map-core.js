@@ -6,7 +6,10 @@
 // --- 1. 初始化 MapLibre GL 向量／圖磚旋轉地圖（預設採用 Google 地圖，支援 6 種免費免 Key 圖層隨時切換、localStorage 記憶偏好，向量圖層強制路名永遠水平 viewport） ---
 const MAP_LAYER_STORAGE_KEY = 'selectedMapLayer';
 
-function buildRasterMapStyle(tileUrl, layerTitle, attributionText = '© Google', maxZoom = 19) {
+function buildRasterMapStyle(tileUrl, layerTitle, attributionText = '© Google', maxZoom = 19, styleKey = 'default') {
+    const safeKey = String(styleKey || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const sourceId = `custom-raster-tiles-${safeKey}`;
+    const layerId = `custom-raster-base-layer-${safeKey}`;
     const sourceDef = {
         type: 'raster',
         tiles: [tileUrl],
@@ -21,13 +24,13 @@ function buildRasterMapStyle(tileUrl, layerTitle, attributionText = '© Google',
         name: layerTitle,
         glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
         sources: {
-            'custom-raster-tiles': sourceDef
+            [sourceId]: sourceDef
         },
         layers: [
             {
-                id: 'custom-raster-base-layer',
+                id: layerId,
                 type: 'raster',
-                source: 'custom-raster-tiles',
+                source: sourceId,
                 minzoom: 0,
                 maxzoom: 22
             }
@@ -48,7 +51,8 @@ const MAP_LAYER_PRESETS = [
             'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
             'Google 地圖（預設）',
             '© Google',
-            20
+            20,
+            'google_roadmap'
         )
     },
     {
@@ -63,7 +67,8 @@ const MAP_LAYER_PRESETS = [
             'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
             'Google 衛星混合',
             '© Google',
-            20
+            20,
+            'google_hybrid'
         )
     },
     {
@@ -78,7 +83,8 @@ const MAP_LAYER_PRESETS = [
             'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}',
             '門牌詳細（國土測繪）',
             '© 內政部國土測繪中心 NLSC',
-            19
+            19,
+            'nlsc_emap'
         )
     },
     {
@@ -1152,22 +1158,34 @@ function switchMapBaseLayer(layerId) {
 
     renderMapLayerMenuOptions();
 
-    // 切換底圖後，監聽 map.once('style.load') 自動重繪所有自訂路線圖層與文字水平設定
-    map.once('style.load', () => {
-        restoreCustomLayersAndAlignmentAfterStyleLoad();
-    });
-
+    // 一律使用 { diff: false } 強制完整重載樣式，確保不同網格／向量底圖切換必定觸發 map.on('style.load') 並依序重建所有自訂路線、插針、社區與車隊雷達圖層
     try {
-        map.setStyle(targetPreset.getStyle());
+        map.setStyle(targetPreset.getStyle(), { diff: false });
     } catch (e) {
         console.error('切換底圖圖層時發生錯誤:', e);
     }
 }
 
+function positionMapLayerMenuPanel() {
+    const switchBtn = document.getElementById('mapLayerSwitchBtn');
+    const menuPanel = document.getElementById('mapLayerMenuPanel');
+    if (!switchBtn || !menuPanel || menuPanel.classList.contains('hidden')) return;
+
+    const btnRect = switchBtn.getBoundingClientRect();
+    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+    const panelHeight = menuPanel.offsetHeight || 360;
+    const rightPx = Math.max(12, Math.round(vw - btnRect.left + 8));
+    const maxTop = Math.max(12, vh - panelHeight - 14);
+    const topPx = Math.max(12, Math.min(Math.round(btnRect.top), maxTop));
+
+    menuPanel.style.right = `${rightPx}px`;
+    menuPanel.style.top = `${topPx}px`;
+}
+
 (function initMapLayerSwitcherUI() {
     const switchBtn = document.getElementById('mapLayerSwitchBtn');
     const menuPanel = document.getElementById('mapLayerMenuPanel');
-    const wrapper = document.getElementById('mapLayerSwitcherWrapper');
     const refreshMapBtn = document.getElementById('refreshMapBtn');
     const menuRefreshMapBtn = document.getElementById('menuRefreshMapBtn');
 
@@ -1176,10 +1194,20 @@ function switchMapBaseLayer(layerId) {
     if (switchBtn && menuPanel) {
         switchBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            renderMapLayerMenuOptions();
-            menuPanel.classList.toggle('hidden');
+            const willOpen = menuPanel.classList.contains('hidden');
+            if (willOpen) {
+                renderMapLayerMenuOptions();
+                menuPanel.classList.remove('hidden');
+                positionMapLayerMenuPanel();
+            } else {
+                menuPanel.classList.add('hidden');
+            }
         });
     }
+
+    window.addEventListener('resize', () => {
+        positionMapLayerMenuPanel();
+    });
 
     if (refreshMapBtn) {
         refreshMapBtn.addEventListener('click', (e) => {
@@ -1197,10 +1225,12 @@ function switchMapBaseLayer(layerId) {
         });
     }
 
-    // 點擊面板外部任意處自動關閉圖層選單
+    // 點擊面板與圖層按鈕外部任意處自動關閉圖層選單
     document.addEventListener('pointerdown', (e) => {
         if (!menuPanel || menuPanel.classList.contains('hidden')) return;
-        if (wrapper && !wrapper.contains(e.target)) {
+        const clickedInsideMenu = menuPanel.contains(e.target);
+        const clickedSwitchBtn = switchBtn && switchBtn.contains(e.target);
+        if (!clickedInsideMenu && !clickedSwitchBtn) {
             menuPanel.classList.add('hidden');
         }
     });

@@ -53,14 +53,179 @@ const btnSaveMapPinBuildingNoteText = document.getElementById('btnSaveMapPinBuil
 const viewMapPinNoteSavedStatus = document.getElementById('viewMapPinNoteSavedStatus');
 const btnEditMapPinTitle = document.getElementById('btnEditMapPinTitle');
 const btnDeleteMapPin = document.getElementById('btnDeleteMapPin');
+const btnResolveMapPin = document.getElementById('btnResolveMapPin');
 const btnCloseViewMapPin = document.getElementById('btnCloseViewMapPin');
 const btnCloseViewMapPinTop = document.getElementById('btnCloseViewMapPinTop');
+const viewMapPinAlertMetaRow = document.getElementById('viewMapPinAlertMetaRow');
+const viewMapPinAlertStatusText = document.getElementById('viewMapPinAlertStatusText');
+const viewMapPinAlertExpiryText = document.getElementById('viewMapPinAlertExpiryText');
+
+const roadAlertTypeSelector = document.getElementById('roadAlertTypeSelector');
+const roadAlertExpirySelector = document.getElementById('roadAlertExpirySelector');
+
+const roadAlertMiniWidget = document.getElementById('roadAlertMiniWidget');
+const roadAlertMiniMainBtn = document.getElementById('roadAlertMiniMainBtn');
+const roadAlertMiniIcon = document.getElementById('roadAlertMiniIcon');
+const roadAlertMiniTypeText = document.getElementById('roadAlertMiniTypeText');
+const roadAlertMiniCountBadge = document.getElementById('roadAlertMiniCountBadge');
+const roadAlertMiniTitleText = document.getElementById('roadAlertMiniTitleText');
+const roadAlertMiniNextBtn = document.getElementById('roadAlertMiniNextBtn');
 
 const pinDistanceGuideBanner = document.getElementById('pinDistanceGuideBanner');
 const pinDistanceGuideText = document.getElementById('pinDistanceGuideText');
 const btnCancelPinDistanceGuideBanner = document.getElementById('btnCancelPinDistanceGuideBanner');
 
-function ensurePinDistanceGuideLayer() {
+// ==========================================
+// ⚠️ 路段警示插釘類型設定（封閉／施工／喜喪／活動／其他）與時效過濾
+// ==========================================
+const ROAD_ALERT_TYPES = {
+    closure: {
+        key: 'closure',
+        label: '封閉',
+        defaultTitle: '路段封閉',
+        iconClass: 'fa-solid fa-triangle-exclamation',
+        iconTextClass: 'text-white',
+        color: '#dc2626',
+        cssClass: 'alert-type-closure',
+        modalBorderClass: 'border-red-500',
+        badgeClass: 'bg-red-100 text-red-800',
+        badgeIconClass: 'text-red-600',
+        miniBtnClass: 'bg-red-600/95 hover:bg-red-700 text-white',
+        miniIconBgClass: 'bg-white/20 text-white'
+    },
+    construction: {
+        key: 'construction',
+        label: '施工',
+        defaultTitle: '道路施工',
+        iconClass: 'fa-solid fa-person-digging',
+        iconTextClass: 'text-gray-950',
+        color: '#d97706',
+        cssClass: 'alert-type-construction',
+        modalBorderClass: 'border-yellow-500',
+        badgeClass: 'bg-yellow-100 text-yellow-900',
+        badgeIconClass: 'text-yellow-700',
+        miniBtnClass: 'bg-yellow-400/95 hover:bg-yellow-500 text-gray-950',
+        miniIconBgClass: 'bg-gray-950/15 text-gray-950'
+    },
+    ceremony: {
+        key: 'ceremony',
+        label: '喜喪',
+        defaultTitle: '喜喪管制',
+        iconClass: 'fa-solid fa-ribbon',
+        iconTextClass: 'text-white',
+        color: '#9333ea',
+        cssClass: 'alert-type-ceremony',
+        modalBorderClass: 'border-purple-500',
+        badgeClass: 'bg-purple-100 text-purple-800',
+        badgeIconClass: 'text-purple-600',
+        miniBtnClass: 'bg-purple-600/95 hover:bg-purple-700 text-white',
+        miniIconBgClass: 'bg-white/20 text-white'
+    },
+    event: {
+        key: 'event',
+        label: '活動',
+        defaultTitle: '活動管制',
+        iconClass: 'fa-solid fa-bullhorn',
+        iconTextClass: 'text-white',
+        color: '#0284c7',
+        cssClass: 'alert-type-event',
+        modalBorderClass: 'border-sky-500',
+        badgeClass: 'bg-sky-100 text-sky-800',
+        badgeIconClass: 'text-sky-600',
+        miniBtnClass: 'bg-sky-600/95 hover:bg-sky-700 text-white',
+        miniIconBgClass: 'bg-white/20 text-white'
+    },
+    other: {
+        key: 'other',
+        label: '其他警示',
+        defaultTitle: '路段警示',
+        iconClass: 'fa-solid fa-circle-exclamation',
+        iconTextClass: 'text-white',
+        color: '#2563eb',
+        cssClass: 'alert-type-other',
+        modalBorderClass: 'border-blue-500',
+        badgeClass: 'bg-blue-100 text-blue-800',
+        badgeIconClass: 'text-blue-600',
+        miniBtnClass: 'bg-blue-600/95 hover:bg-blue-700 text-white',
+        miniIconBgClass: 'bg-white/20 text-white'
+    }
+};
+
+let selectedRoadAlertType = 'closure';
+let selectedRoadAlertExpiryHours = 24;
+let roadAlertMiniCycleIdx = 0;
+
+function getRoadAlertTypeMeta(alertType) {
+    if (alertType && ROAD_ALERT_TYPES[alertType]) {
+        return ROAD_ALERT_TYPES[alertType];
+    }
+    return ROAD_ALERT_TYPES.other;
+}
+
+function isRoadAlertPinActive(pin, now = Date.now()) {
+    if (!pin || pin.pinType === 'building') return false;
+    if (pin.status === 'resolved' || Number(pin.resolvedAt) > 0) return false;
+    const expiresAt = Number(pin.expiresAt || 0);
+    if (expiresAt > 0 && now > expiresAt) return false;
+    return true;
+}
+
+function formatAlertRemainingTime(expiresAt) {
+    const ts = Number(expiresAt || 0);
+    if (!ts || ts <= 0) return '長期有效';
+    const diffMs = ts - Date.now();
+    if (diffMs <= 0) return '已過期';
+    const diffMin = Math.ceil(diffMs / 60000);
+    if (diffMin < 60) return `剩餘約 ${diffMin} 分鐘`;
+    const diffHours = Math.round(diffMin / 60);
+    if (diffHours < 48) return `剩餘約 ${diffHours} 小時`;
+    const diffDays = Math.round(diffHours / 24);
+    return `剩餘約 ${diffDays} 天`;
+}
+
+function getActiveRoadAlertPins() {
+    const now = Date.now();
+    const list = [];
+    if (typeof pinsLayerGroup === 'object' && pinsLayerGroup) {
+        Object.values(pinsLayerGroup).forEach(entry => {
+            const pin = entry && entry.data;
+            if (pin && isRoadAlertPinActive(pin, now)) {
+                list.push(pin);
+            }
+        });
+    }
+    list.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+    return list;
+}
+
+function resolvePinGuideOriginLngLat(fallbackOrigin) {
+    if (typeof currentFleetLng === 'number' && !isNaN(currentFleetLng) &&
+        typeof currentFleetLat === 'number' && !isNaN(currentFleetLat)) {
+        return [currentFleetLng, currentFleetLat];
+    }
+    if (typeof lastValidGpsLng === 'number' && !isNaN(lastValidGpsLng) &&
+        typeof lastValidGpsLat === 'number' && !isNaN(lastValidGpsLat)) {
+        return [lastValidGpsLng, lastValidGpsLat];
+    }
+    if (Array.isArray(fallbackOrigin) && fallbackOrigin.length >= 2 &&
+        !isNaN(Number(fallbackOrigin[0])) && !isNaN(Number(fallbackOrigin[1]))) {
+        return [Number(fallbackOrigin[0]), Number(fallbackOrigin[1])];
+    }
+    if (typeof map !== 'undefined' && map && typeof map.getCenter === 'function') {
+        const c = map.getCenter();
+        if (c && !isNaN(c.lng) && !isNaN(c.lat)) {
+            return [c.lng, c.lat];
+        }
+    }
+    return Array.isArray(lastKnownLngLat) ? [Number(lastKnownLngLat[0]), Number(lastKnownLngLat[1])] : [121.346, 24.954];
+}
+
+function getPinGuideLineColor(pin) {
+    if (!pin || pin.pinType === 'building') return '#2563eb';
+    return getRoadAlertTypeMeta(pin.alertType).color || '#2563eb';
+}
+
+function ensurePinDistanceGuideLayer(lineColor = '#2563eb') {
     if (!map || !map.isStyleLoaded()) return false;
     if (!map.getSource('pin-distance-guide')) {
         map.addSource('pin-distance-guide', {
@@ -78,12 +243,16 @@ function ensurePinDistanceGuideLayer() {
                 'line-cap': 'round'
             },
             paint: {
-                'line-color': '#2563eb',
+                'line-color': lineColor,
                 'line-width': 4.5,
                 'line-dasharray': [2, 2],
-                'line-opacity': 0.92
+                'line-opacity': 0.94
             }
         });
+    } else {
+        try {
+            map.setPaintProperty('pin-distance-guide-line', 'line-color', lineColor);
+        } catch (e) {}
     }
     return true;
 }
@@ -100,11 +269,56 @@ function syncDistanceGuideButtonUI(pin) {
     if (!btnDistanceGuideMapPin) return;
     const isGuidingThisPin = Boolean(activeDistanceGuidePin && pin && activeDistanceGuidePin.id === pin.id);
     if (isGuidingThisPin) {
-        btnDistanceGuideMapPin.className = 'bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
+        btnDistanceGuideMapPin.className = 'bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-2.5 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
         btnDistanceGuideMapPin.innerHTML = '🎯 取消距離指引';
     } else {
-        btnDistanceGuideMapPin.className = 'bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
+        btnDistanceGuideMapPin.className = 'bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2.5 px-2 rounded-2xl shadow-md active:scale-95 flex items-center justify-center gap-1.5 text-xs sm:text-sm';
         btnDistanceGuideMapPin.innerHTML = '🎯 距離指引';
+    }
+}
+
+function updateRoadAlertMiniWidgetUI() {
+    if (!roadAlertMiniWidget || !roadAlertMiniMainBtn) return;
+    const activeAlerts = getActiveRoadAlertPins();
+    if (activeAlerts.length === 0) {
+        roadAlertMiniWidget.classList.add('hidden');
+        roadAlertMiniCycleIdx = 0;
+        return;
+    }
+
+    if (roadAlertMiniCycleIdx >= activeAlerts.length) {
+        roadAlertMiniCycleIdx = 0;
+    }
+    const currentAlert = activeAlerts[roadAlertMiniCycleIdx];
+    const meta = getRoadAlertTypeMeta(currentAlert.alertType);
+    const isGuidingCurrent = Boolean(activeDistanceGuidePin && activeDistanceGuidePin.id === currentAlert.id);
+
+    roadAlertMiniWidget.classList.remove('hidden');
+    roadAlertMiniMainBtn.className = `road-alert-mini-btn ${meta.miniBtnClass} px-2.5 py-1.5 rounded-2xl shadow-xl border-2 border-white flex items-center gap-2 active:scale-95 transition-all min-w-0 ${isGuidingCurrent ? 'is-guiding' : ''}`;
+
+    if (roadAlertMiniIcon) {
+        roadAlertMiniIcon.className = `w-6 h-6 rounded-full ${meta.miniIconBgClass} flex items-center justify-center text-xs flex-shrink-0`;
+        roadAlertMiniIcon.innerHTML = `<i class="${meta.iconClass}"></i>`;
+    }
+    if (roadAlertMiniTypeText) {
+        roadAlertMiniTypeText.textContent = meta.label;
+    }
+    if (roadAlertMiniCountBadge) {
+        if (activeAlerts.length > 1) {
+            roadAlertMiniCountBadge.textContent = `${roadAlertMiniCycleIdx + 1}/${activeAlerts.length}`;
+            roadAlertMiniCountBadge.classList.remove('hidden');
+        } else {
+            roadAlertMiniCountBadge.classList.add('hidden');
+        }
+    }
+    if (roadAlertMiniTitleText) {
+        const displayTitle = (currentAlert.title || meta.defaultTitle).trim();
+        roadAlertMiniTitleText.textContent = isGuidingCurrent
+            ? `${displayTitle} · 再次點擊收合`
+            : displayTitle;
+    }
+    if (roadAlertMiniNextBtn) {
+        roadAlertMiniNextBtn.classList.toggle('hidden', activeAlerts.length <= 1);
     }
 }
 
@@ -127,6 +341,7 @@ function clearPinDistanceGuide() {
     if (activeViewingMapPin) {
         syncDistanceGuideButtonUI(activeViewingMapPin);
     }
+    updateRoadAlertMiniWidgetUI();
 }
 
 function updatePinDistanceGuideRender() {
@@ -140,17 +355,13 @@ function updatePinDistanceGuideRender() {
         return;
     }
 
-    const userLng = (typeof currentFleetLng === 'number' && !isNaN(currentFleetLng))
-        ? currentFleetLng
-        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[0]) : 121.346);
-    const userLat = (typeof currentFleetLat === 'number' && !isNaN(currentFleetLat))
-        ? currentFleetLat
-        : (Array.isArray(lastKnownLngLat) ? Number(lastKnownLngLat[1]) : 24.954);
+    const [userLng, userLat] = resolvePinGuideOriginLngLat(activeDistanceGuidePin._fallbackOrigin);
+    const lineColor = getPinGuideLineColor(activeDistanceGuidePin);
 
     const distMeters = getDistanceKm(userLng, userLat, targetLng, targetLat) * 1000;
     const distLabel = formatDistanceToPinText(distMeters);
 
-    if (ensurePinDistanceGuideLayer()) {
+    if (ensurePinDistanceGuideLayer(lineColor)) {
         map.getSource('pin-distance-guide')?.setData({
             type: 'FeatureCollection',
             features: [
@@ -194,13 +405,41 @@ function updatePinDistanceGuideRender() {
     const badgeDom = pinDistanceLineMarker.getElement();
     if (badgeDom) {
         badgeDom.textContent = `🎯 ${distLabel}`;
+        badgeDom.style.background = lineColor;
     }
 
     if (pinDistanceGuideBanner && pinDistanceGuideText) {
         const shortTitle = (activeDistanceGuidePin.title || '目標地標').slice(0, 10);
         pinDistanceGuideText.textContent = `${shortTitle} · ${distLabel}`;
+        pinDistanceGuideBanner.style.backgroundColor = lineColor;
         pinDistanceGuideBanner.classList.remove('hidden');
     }
+}
+
+function startPinDistanceGuide(pin, options = {}) {
+    if (!pin) return;
+    if (pinDistanceGuideTimer !== null) {
+        clearInterval(pinDistanceGuideTimer);
+        pinDistanceGuideTimer = null;
+    }
+
+    const fallbackOrigin = options.fallbackOrigin || (() => {
+        if (typeof map !== 'undefined' && map && typeof map.getCenter === 'function') {
+            const c = map.getCenter();
+            if (c && !isNaN(c.lng) && !isNaN(c.lat)) return [c.lng, c.lat];
+        }
+        return null;
+    })();
+
+    activeDistanceGuidePin = { ...pin, _fallbackOrigin: fallbackOrigin };
+    syncDistanceGuideButtonUI(pin);
+    if (options.closeModal !== false) {
+        closeViewMapPinModal();
+    }
+
+    updatePinDistanceGuideRender();
+    pinDistanceGuideTimer = setInterval(updatePinDistanceGuideRender, 1000);
+    updateRoadAlertMiniWidgetUI();
 }
 
 function togglePinDistanceGuide(pin) {
@@ -209,18 +448,78 @@ function togglePinDistanceGuide(pin) {
         clearPinDistanceGuide();
         return;
     }
+    startPinDistanceGuide(pin, { closeModal: true });
+}
 
-    if (pinDistanceGuideTimer !== null) {
-        clearInterval(pinDistanceGuideTimer);
-        pinDistanceGuideTimer = null;
+function focusAndGuideRoadAlertPin(pin) {
+    if (!pin) return;
+    const targetLng = Number(pin.lng);
+    const targetLat = Number(pin.lat);
+    if (isNaN(targetLng) || isNaN(targetLat)) return;
+
+    // 先擷取飛往前的畫面中心作為無 GPS 時的虛線起點，避免飛到目標後起終點重疊
+    let preFlyCenter = null;
+    if (typeof map !== 'undefined' && map && typeof map.getCenter === 'function') {
+        const c = map.getCenter();
+        if (c && !isNaN(c.lng) && !isNaN(c.lat)) {
+            preFlyCenter = [c.lng, c.lat];
+        }
     }
 
-    activeDistanceGuidePin = { ...pin };
-    syncDistanceGuideButtonUI(pin);
-    closeViewMapPinModal();
+    if (typeof setCameraFollow === 'function') {
+        setCameraFollow(false);
+    }
+    if (typeof map !== 'undefined' && map && typeof map.flyTo === 'function') {
+        map.flyTo({
+            center: [targetLng, targetLat],
+            zoom: Math.max(map.getZoom(), 16.5),
+            duration: 750
+        });
+    }
 
-    updatePinDistanceGuideRender();
-    pinDistanceGuideTimer = setInterval(updatePinDistanceGuideRender, 1000);
+    startPinDistanceGuide(pin, { fallbackOrigin: preFlyCenter, closeModal: false });
+}
+
+if (roadAlertMiniMainBtn) {
+    roadAlertMiniMainBtn.onclick = (e) => {
+        e.stopPropagation();
+        const activeAlerts = getActiveRoadAlertPins();
+        if (activeAlerts.length === 0) {
+            updateRoadAlertMiniWidgetUI();
+            return;
+        }
+        if (roadAlertMiniCycleIdx >= activeAlerts.length) {
+            roadAlertMiniCycleIdx = 0;
+        }
+        const currentAlert = activeAlerts[roadAlertMiniCycleIdx];
+        if (activeDistanceGuidePin && activeDistanceGuidePin.id === currentAlert.id) {
+            clearPinDistanceGuide();
+            return;
+        }
+        focusAndGuideRoadAlertPin(currentAlert);
+    };
+}
+
+if (roadAlertMiniNextBtn) {
+    roadAlertMiniNextBtn.onclick = (e) => {
+        e.stopPropagation();
+        const activeAlerts = getActiveRoadAlertPins();
+        if (activeAlerts.length <= 1) return;
+        roadAlertMiniCycleIdx = (roadAlertMiniCycleIdx + 1) % activeAlerts.length;
+        const nextAlert = activeAlerts[roadAlertMiniCycleIdx];
+        focusAndGuideRoadAlertPin(nextAlert);
+    };
+}
+
+// 確保切換任何底圖 style 後，若目前有啟用中的虛線引導線也能自動重繪恢復
+if (typeof map !== 'undefined' && map && typeof map.on === 'function') {
+    map.on('style.load', () => {
+        if (activeDistanceGuidePin) {
+            setTimeout(() => {
+                if (activeDistanceGuidePin) updatePinDistanceGuideRender();
+            }, 60);
+        }
+    });
 }
 
 if (btnCancelPinDistanceGuideBanner) {
@@ -562,10 +861,82 @@ async function saveBuildingMapPin() {
 
 if (btnSaveBuildingPin) btnSaveBuildingPin.onclick = saveBuildingMapPin;
 
+function syncRoadAlertTypeSelectorUI() {
+    if (!roadAlertTypeSelector) return;
+    const buttons = roadAlertTypeSelector.querySelectorAll('.road-alert-type-btn');
+    buttons.forEach(btn => {
+        const typeKey = btn.getAttribute('data-alert-type');
+        const isSelected = (typeKey === selectedRoadAlertType);
+        btn.classList.remove(
+            'border-red-500', 'bg-red-50', 'text-red-700',
+            'border-yellow-500', 'bg-yellow-50', 'text-yellow-900',
+            'border-purple-500', 'bg-purple-50', 'text-purple-800',
+            'border-sky-500', 'bg-sky-50', 'text-sky-800',
+            'border-blue-500', 'bg-blue-50', 'text-blue-800',
+            'border-gray-200', 'bg-gray-50', 'text-gray-700',
+            'ring-2', 'ring-offset-1', 'ring-red-300', 'ring-yellow-300', 'ring-purple-300', 'ring-sky-300', 'ring-blue-300'
+        );
+        if (isSelected) {
+            const activeMap = {
+                closure: ['border-red-500', 'bg-red-50', 'text-red-700', 'ring-2', 'ring-offset-1', 'ring-red-300'],
+                construction: ['border-yellow-500', 'bg-yellow-50', 'text-yellow-900', 'ring-2', 'ring-offset-1', 'ring-yellow-300'],
+                ceremony: ['border-purple-500', 'bg-purple-50', 'text-purple-800', 'ring-2', 'ring-offset-1', 'ring-purple-300'],
+                event: ['border-sky-500', 'bg-sky-50', 'text-sky-800', 'ring-2', 'ring-offset-1', 'ring-sky-300'],
+                other: ['border-blue-500', 'bg-blue-50', 'text-blue-800', 'ring-2', 'ring-offset-1', 'ring-blue-300']
+            };
+            btn.classList.add(...(activeMap[typeKey] || activeMap.other));
+        } else {
+            btn.classList.add('border-gray-200', 'bg-gray-50', 'text-gray-700');
+        }
+    });
+}
+
+function syncRoadAlertExpirySelectorUI() {
+    if (!roadAlertExpirySelector) return;
+    const buttons = roadAlertExpirySelector.querySelectorAll('.road-alert-expiry-btn');
+    buttons.forEach(btn => {
+        const hours = Number(btn.getAttribute('data-expiry-hours'));
+        const isSelected = (hours === selectedRoadAlertExpiryHours);
+        if (isSelected) {
+            btn.className = 'road-alert-expiry-btn py-1.5 px-1 rounded-xl border-2 border-blue-600 bg-blue-50 text-blue-700 text-[11px] font-black active:scale-95';
+        } else {
+            btn.className = 'road-alert-expiry-btn py-1.5 px-1 rounded-xl border border-gray-200 bg-gray-50 text-gray-600 text-[11px] font-extrabold active:scale-95';
+        }
+    });
+}
+
+if (roadAlertTypeSelector) {
+    roadAlertTypeSelector.addEventListener('click', (e) => {
+        const btn = e.target.closest('.road-alert-type-btn');
+        if (!btn) return;
+        const typeKey = btn.getAttribute('data-alert-type');
+        if (typeKey && ROAD_ALERT_TYPES[typeKey]) {
+            selectedRoadAlertType = typeKey;
+            syncRoadAlertTypeSelectorUI();
+        }
+    });
+}
+
+if (roadAlertExpirySelector) {
+    roadAlertExpirySelector.addEventListener('click', (e) => {
+        const btn = e.target.closest('.road-alert-expiry-btn');
+        if (!btn) return;
+        const hours = Number(btn.getAttribute('data-expiry-hours'));
+        if (!isNaN(hours) && hours >= 0) {
+            selectedRoadAlertExpiryHours = hours;
+            syncRoadAlertExpirySelectorUI();
+        }
+    });
+}
+
 function openCreateMapPinModal(lat, lng) {
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     pendingMapPinLat = lat;
     pendingMapPinLng = lng;
+    selectedRoadAlertType = 'closure';
+    selectedRoadAlertExpiryHours = 24;
+    syncRoadAlertTypeSelectorUI();
+    syncRoadAlertExpirySelectorUI();
 
     if (createMapPinCoordsText) {
         createMapPinCoordsText.innerText = `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
@@ -579,7 +950,6 @@ function openCreateMapPinModal(lat, lng) {
     if (createMapPinModal) {
         window.history.pushState({ pwa: true }, '');
         createMapPinModal.classList.remove('hidden');
-        setTimeout(() => mapPinTitleInput?.focus(), 120);
     }
 }
 
@@ -594,36 +964,42 @@ if (btnCloseCreateMapPinTop) btnCloseCreateMapPinTop.onclick = closeCreateMapPin
 
 async function saveNewSharedMapPin() {
     if (pendingMapPinLat === null || pendingMapPinLng === null) return;
-    const titleVal = (mapPinTitleInput?.value || '').trim();
-    if (!titleVal) {
-        alert('請輸入地標備註標題或說明（例如：巷口大型廢棄物堆置）！');
-        mapPinTitleInput?.focus();
-        return;
-    }
+    const typeMeta = getRoadAlertTypeMeta(selectedRoadAlertType);
+    const noteVal = (mapPinTitleInput?.value || '').trim();
+    const titleVal = noteVal || typeMeta.defaultTitle;
+
     if (!navigator.onLine) {
-        alert('⚠️ 目前無網路連線，請確認網路狀態後再新增共享地標！');
+        alert('⚠️ 目前無網路連線，請確認網路狀態後再新增路段警示！');
         return;
     }
 
     const pinId = 'pin_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
     const authorName = (fleetUserName || localStorage.getItem('fleet_user_name') || localStorage.getItem('yinggeRouteLastAuthor') || '熱心隊員').trim();
     const createdAt = Date.now();
+    const expiresAt = selectedRoadAlertExpiryHours > 0
+        ? createdAt + selectedRoadAlertExpiryHours * 3600 * 1000
+        : 0;
 
     const pinData = {
         id: pinId,
         pinType: 'dirty',
+        alertType: typeMeta.key,
+        status: 'active',
+        expiresAt: expiresAt,
         lat: Number(pendingMapPinLat.toFixed(6)),
         lng: Number(pendingMapPinLng.toFixed(6)),
         title: titleVal,
+        note: noteVal,
         photo: currentMapPinPhotoBase64 || '',
         author: authorName,
-        createdAt: createdAt
+        createdAt: createdAt,
+        updatedAt: createdAt
     };
 
     const origBtnHtml = btnSaveMapPin ? btnSaveMapPin.innerHTML : '';
     if (btnSaveMapPin) {
         btnSaveMapPin.disabled = true;
-        btnSaveMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在上傳地標...';
+        btnSaveMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在上傳警示...';
     }
 
     try {
@@ -635,11 +1011,12 @@ async function saveNewSharedMapPin() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         upsertPinMarkerOnMap(pinId, pinData);
+        updateRoadAlertMiniWidgetUI();
         closeCreateMapPinModal();
         fetchAndRenderSharedMapPins();
     } catch (err) {
-        console.error('上傳共享地標失敗:', err);
-        alert('❌ 新增地標失敗（網路不穩或 5 秒連線逾時），請稍後再試！');
+        console.error('上傳路段警示失敗:', err);
+        alert('❌ 新增警示失敗（網路不穩或 5 秒連線逾時），請稍後再試！');
     } finally {
         if (btnSaveMapPin) {
             btnSaveMapPin.disabled = false;
@@ -655,10 +1032,12 @@ function openViewMapPinModal(pin) {
     activeViewingMapPin = pin;
     const isBuilding = pin.pinType === 'building';
     const hasBuildingAuth = canCurrentUserManageBuildings();
+    const alertMeta = isBuilding ? null : getRoadAlertTypeMeta(pin.alertType);
+    const isAlertActive = !isBuilding && isRoadAlertPinActive(pin);
 
     if (viewMapPinModalCard) {
-        viewMapPinModalCard.classList.toggle('border-orange-500', isBuilding);
-        viewMapPinModalCard.classList.toggle('border-blue-500', !isBuilding);
+        viewMapPinModalCard.classList.remove('border-orange-500', 'border-blue-500', 'border-red-500', 'border-yellow-500', 'border-purple-500', 'border-sky-500');
+        viewMapPinModalCard.classList.add(isBuilding ? 'border-orange-500' : alertMeta.modalBorderClass);
     }
     if (viewMapPinCategoryBadge) {
         if (isBuilding) {
@@ -667,14 +1046,32 @@ function openViewMapPinModal(pin) {
                 ? '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓（已授權管理）'
                 : '<i class="fa-solid fa-building text-orange-600"></i> 全車隊共享社區大樓（一般唯讀）';
         } else {
-            viewMapPinCategoryBadge.className = 'bg-blue-100 text-blue-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5';
-            viewMapPinCategoryBadge.innerHTML = '<i class="fa-solid fa-location-dot text-blue-600"></i> 全車隊共享現場地標';
+            viewMapPinCategoryBadge.className = `${alertMeta.badgeClass} text-xs font-black px-3 py-1 rounded-full flex items-center gap-1.5`;
+            viewMapPinCategoryBadge.innerHTML = `<i class="${alertMeta.iconClass} ${alertMeta.badgeIconClass}"></i> 路段警示 · ${alertMeta.label}`;
         }
     }
 
-    if (viewMapPinTitleText) viewMapPinTitleText.textContent = pin.title || (isBuilding ? '社區大樓' : '現場注意事項');
+    if (viewMapPinTitleText) viewMapPinTitleText.textContent = pin.title || (isBuilding ? '社區大樓' : alertMeta.defaultTitle);
     if (viewMapPinAuthorText) viewMapPinAuthorText.textContent = pin.author || '熱心隊員';
     if (viewMapPinTimeText) viewMapPinTimeText.textContent = formatPinCreatedAt(pin.updatedAt || pin.createdAt);
+
+    if (viewMapPinAlertMetaRow) {
+        if (!isBuilding) {
+            viewMapPinAlertMetaRow.classList.remove('hidden');
+            if (viewMapPinAlertStatusText) {
+                viewMapPinAlertStatusText.textContent = isAlertActive ? '🟢 狀態：有效中' : '⚪ 狀態：已解除／過期';
+            }
+            if (viewMapPinAlertExpiryText) {
+                viewMapPinAlertExpiryText.textContent = formatAlertRemainingTime(pin.expiresAt);
+            }
+        } else {
+            viewMapPinAlertMetaRow.classList.add('hidden');
+        }
+    }
+
+    if (btnResolveMapPin) {
+        btnResolveMapPin.classList.toggle('hidden', isBuilding || !isAlertActive);
+    }
 
     if (!isBuilding && pin.photo) {
         if (viewMapPinPhotoImg) viewMapPinPhotoImg.src = pin.photo;
@@ -719,9 +1116,7 @@ function openViewMapPinModal(pin) {
             btnDeleteMapPin.classList.add('hidden');
         } else {
             btnDeleteMapPin.classList.remove('hidden');
-            btnDeleteMapPin.innerHTML = isBuilding
-                ? '🗑️ 刪除'
-                : '🗑️ 已清理／移除';
+            btnDeleteMapPin.innerHTML = '🗑️ 刪除';
         }
     }
 
@@ -731,6 +1126,57 @@ function openViewMapPinModal(pin) {
         window.history.pushState({ pwa: true }, '');
         viewMapPinModal.classList.remove('hidden');
     }
+}
+
+if (btnResolveMapPin) {
+    btnResolveMapPin.onclick = async () => {
+        if (!activeViewingMapPin || !activeViewingMapPin.id) return;
+        if (activeViewingMapPin.pinType === 'building') return;
+        if (!navigator.onLine) {
+            alert('⚠️ 目前無網路連線，無法同步解除警示！');
+            return;
+        }
+
+        const pinId = activeViewingMapPin.id;
+        const now = Date.now();
+        const resolvedPinData = {
+            ...activeViewingMapPin,
+            id: pinId,
+            status: 'resolved',
+            resolvedAt: now,
+            updatedAt: now
+        };
+
+        const origHtml = btnResolveMapPin.innerHTML;
+        btnResolveMapPin.disabled = true;
+        btnResolveMapPin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>正在同步解除...</span>';
+
+        try {
+            const res = await fetchWithTimeout(`${MAP_PINS_BASE_URL}/${encodeURIComponent(pinId)}.json`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(resolvedPinData)
+            }, 5000);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+            if (pinsLayerGroup[pinId]) {
+                try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
+                delete pinsLayerGroup[pinId];
+            }
+            if (activeDistanceGuidePin && activeDistanceGuidePin.id === pinId) {
+                clearPinDistanceGuide();
+            }
+            updateRoadAlertMiniWidgetUI();
+            closeViewMapPinModal();
+            fetchAndRenderSharedMapPins();
+        } catch (err) {
+            console.error('標記路段警示已解除失敗:', err);
+            alert('❌ 解除警示失敗（網路不穩或連線逾時），請稍後再試！');
+        } finally {
+            btnResolveMapPin.disabled = false;
+            btnResolveMapPin.innerHTML = origHtml;
+        }
+    };
 }
 
 function closeViewMapPinModal() {
@@ -854,6 +1300,7 @@ if (btnDeleteMapPin) {
             if (activeDistanceGuidePin && activeDistanceGuidePin.id === pinId) {
                 clearPinDistanceGuide();
             }
+            updateRoadAlertMiniWidgetUI();
             closeViewMapPinModal();
             fetchAndRenderSharedMapPins();
         } catch (err) {
@@ -868,21 +1315,34 @@ if (btnDeleteMapPin) {
 
 function createSharedPinMarkerElement(pin) {
     const isBuilding = pin.pinType === 'building';
+    const alertMeta = isBuilding ? null : getRoadAlertTypeMeta(pin.alertType);
     const wrapper = document.createElement('div');
-    wrapper.className = isBuilding ? 'shared-pin-wrapper is-building-pin' : 'shared-pin-wrapper';
+    wrapper.className = isBuilding
+        ? 'shared-pin-wrapper is-building-pin'
+        : `shared-pin-wrapper is-road-alert ${alertMeta.cssClass}`;
 
     const scaleInner = document.createElement('div');
     scaleInner.className = 'shared-pin-scale-inner';
 
     const labelEl = document.createElement('div');
-    labelEl.className = isBuilding ? 'shared-pin-label is-building' : 'shared-pin-label';
-    labelEl.textContent = isBuilding
-        ? `🏢 ${pin.title || '社區大樓'}`
-        : (pin.title || '現場地標');
+    labelEl.className = isBuilding
+        ? 'shared-pin-label is-building'
+        : `shared-pin-label ${alertMeta.cssClass}`;
+    if (isBuilding) {
+        labelEl.textContent = `🏢 ${pin.title || '社區大樓'}`;
+    } else {
+        const rawTitle = (pin.title || alertMeta.defaultTitle).trim();
+        labelEl.textContent = rawTitle.startsWith(alertMeta.label) || rawTitle.startsWith(`[${alertMeta.label}]`)
+            ? rawTitle
+            : `[${alertMeta.label}] ${rawTitle}`;
+    }
     scaleInner.appendChild(labelEl);
 
     const teardrop = document.createElement('div');
-    teardrop.className = isBuilding ? 'shared-pin-teardrop is-building' : 'shared-pin-teardrop';
+    teardrop.className = isBuilding
+        ? 'shared-pin-teardrop is-building'
+        : `shared-pin-teardrop ${alertMeta.cssClass}`;
+    teardrop.style.position = 'relative';
 
     const inner = document.createElement('div');
     inner.className = 'shared-pin-inner';
@@ -892,10 +1352,18 @@ function createSharedPinMarkerElement(pin) {
     } else if (pin.photo) {
         const img = document.createElement('img');
         img.src = pin.photo;
-        img.alt = pin.title || '地標縮圖';
+        img.alt = pin.title || alertMeta.defaultTitle;
         inner.appendChild(img);
+
+        const cornerBadge = document.createElement('span');
+        cornerBadge.className = 'shared-pin-type-corner';
+        cornerBadge.style.backgroundColor = alertMeta.color;
+        cornerBadge.innerHTML = `<i class="${alertMeta.iconClass} ${alertMeta.iconTextClass}"></i>`;
+        inner.style.position = 'relative';
+        inner.style.overflow = 'visible';
+        inner.appendChild(cornerBadge);
     } else {
-        inner.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-white text-sm"></i>';
+        inner.innerHTML = `<i class="${alertMeta.iconClass} ${alertMeta.iconTextClass} text-base"></i>`;
     }
 
     teardrop.appendChild(inner);
@@ -1010,7 +1478,7 @@ function upsertPinMarkerOnMap(pinId, pinData) {
     if (isNaN(lat) || isNaN(lng)) return;
 
     const normalizedPin = { ...pinData, id: pinId, lat, lng };
-    const signature = `${normalizedPin.pinType || 'dirty'}|${normalizedPin.title || ''}|${Boolean(normalizedPin.photo)}|${(normalizedPin.photo || '').length}`;
+    const signature = `${normalizedPin.pinType || 'dirty'}|${normalizedPin.alertType || 'other'}|${normalizedPin.status || 'active'}|${normalizedPin.expiresAt || 0}|${normalizedPin.title || ''}|${Boolean(normalizedPin.photo)}|${(normalizedPin.photo || '').length}`;
 
     if (pinsLayerGroup[pinId]) {
         pinsLayerGroup[pinId].marker.setLngLat([lng, lat]);
@@ -1051,6 +1519,7 @@ async function fetchAndRenderSharedMapPins() {
         if (!res.ok) return;
         const data = await res.json();
         const activePinIds = new Set();
+        const now = Date.now();
 
         if (data && typeof data === 'object') {
             Object.entries(data).forEach(([key, pin]) => {
@@ -1059,12 +1528,18 @@ async function fetchAndRenderSharedMapPins() {
                 const lat = Number(pin.lat);
                 const lng = Number(pin.lng);
                 if (isNaN(lat) || isNaN(lng)) return;
+
+                // 非社區大樓之路段警示套用狀態與時效過濾（已解除或已過期自動隱藏）
+                if (pin.pinType !== 'building' && !isRoadAlertPinActive(pin, now)) {
+                    return;
+                }
+
                 activePinIds.add(pinId);
                 upsertPinMarkerOnMap(pinId, { ...pin, id: pinId });
             });
         }
 
-        // 同步清除已被隊友銷案移除的地標
+        // 同步清除已被隊友銷案、已解除或已過期的地標
         Object.keys(pinsLayerGroup).forEach(pinId => {
             if (!activePinIds.has(pinId)) {
                 try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
@@ -1074,6 +1549,7 @@ async function fetchAndRenderSharedMapPins() {
                 }
             }
         });
+        updateRoadAlertMiniWidgetUI();
         if (activeDistanceGuidePin) {
             updatePinDistanceGuideRender();
         }
@@ -1197,12 +1673,34 @@ async function fetchAndRenderSharedMapPins() {
     });
 })();
 
+function pruneExpiredRoadAlertPins() {
+    const now = Date.now();
+    let changed = false;
+    Object.keys(pinsLayerGroup).forEach(pinId => {
+        const pin = pinsLayerGroup[pinId]?.data;
+        if (pin && pin.pinType !== 'building' && !isRoadAlertPinActive(pin, now)) {
+            try { pinsLayerGroup[pinId].marker.remove(); } catch (e) {}
+            delete pinsLayerGroup[pinId];
+            if (activeDistanceGuidePin && activeDistanceGuidePin.id === pinId) {
+                clearPinDistanceGuide();
+            }
+            changed = true;
+        }
+    });
+    if (changed) {
+        updateRoadAlertMiniWidgetUI();
+    }
+}
+
 function startSharedMapPinsSystem() {
     if (mapPinsPollTimer !== null) {
         clearInterval(mapPinsPollTimer);
         mapPinsPollTimer = null;
     }
     fetchAndRenderSharedMapPins();
-    mapPinsPollTimer = setInterval(fetchAndRenderSharedMapPins, 20000);
+    mapPinsPollTimer = setInterval(() => {
+        pruneExpiredRoadAlertPins();
+        fetchAndRenderSharedMapPins();
+    }, 20000);
 }
 

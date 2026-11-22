@@ -51,6 +51,19 @@
       width: 120,
       height: 120,
       baseAngle: 0
+    },
+    santa_sleigh: {
+      id: 'santa_sleigh',
+      name: '聖誕馴鹿雪橇',
+      src: './assets/cars/santa_sleigh_1.png',
+      frames: [
+        './assets/cars/santa_sleigh_1.png',
+        './assets/cars/santa_sleigh_2.png',
+        './assets/cars/santa_sleigh_3.png'
+      ],
+      width: 136,
+      height: 136,
+      baseAngle: 0
     }
   };
 
@@ -90,7 +103,7 @@
         justify-content: center;
         overflow: visible;
       }
-      .vehicle-img-wrap img {
+      .vehicle-img-wrap > img {
         position: relative;
         z-index: 2;
         display: block;
@@ -99,6 +112,84 @@
         max-height: none !important;
         pointer-events: none;
         filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
+      }
+
+      /* 🎅 3 格連續動作逐格輪播（馴鹿拉雪橇） */
+      .vehicle-sprite-stack {
+        position: relative;
+        display: inline-block;
+        overflow: visible;
+      }
+      .vehicle-sprite-stack .sprite-frame {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        max-width: none !important;
+        max-height: none !important;
+        pointer-events: none;
+        opacity: 0;
+        filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
+      }
+      /* 靜止時固定顯示第 1 格 */
+      .vehicle-sprite-stack .sprite-frame-0 {
+        position: relative;
+        opacity: 1;
+        z-index: 2;
+      }
+      .vehicle-sprite-stack .sprite-frame-1 {
+        z-index: 3;
+      }
+      .vehicle-sprite-stack .sprite-frame-2 {
+        z-index: 4;
+      }
+
+      /* 移動中啟動 3 格逐格奔跑輪播（每輪 0.36s，每格約 0.12s） */
+      .vehicle-img-wrap.is-moving .vehicle-sprite-stack .sprite-frame-0 {
+        animation: spriteFrame0Run 0.36s steps(1, end) infinite;
+      }
+      .vehicle-img-wrap.is-moving .vehicle-sprite-stack .sprite-frame-1 {
+        animation: spriteFrame1Run 0.36s steps(1, end) infinite;
+      }
+      .vehicle-img-wrap.is-moving .vehicle-sprite-stack .sprite-frame-2 {
+        animation: spriteFrame2Run 0.36s steps(1, end) infinite;
+      }
+
+      /* 選單預覽、雷達小車標與省電模式停用逐格輪播，只顯示第 1 格 */
+      button .vehicle-sprite-stack .sprite-frame,
+      .car-option .vehicle-sprite-stack .sprite-frame,
+      [data-car-select] .vehicle-sprite-stack .sprite-frame,
+      .car-picker-item .vehicle-sprite-stack .sprite-frame,
+      .vehicle-card .vehicle-sprite-stack .sprite-frame,
+      .fleet-car-svg-wrap .vehicle-sprite-stack .sprite-frame,
+      body.power-saving .vehicle-sprite-stack .sprite-frame {
+        animation: none !important;
+        opacity: 0 !important;
+      }
+      button .vehicle-sprite-stack .sprite-frame-0,
+      .car-option .vehicle-sprite-stack .sprite-frame-0,
+      [data-car-select] .vehicle-sprite-stack .sprite-frame-0,
+      .car-picker-item .vehicle-sprite-stack .sprite-frame-0,
+      .vehicle-card .vehicle-sprite-stack .sprite-frame-0,
+      .fleet-car-svg-wrap .vehicle-sprite-stack .sprite-frame-0,
+      body.power-saving .vehicle-sprite-stack .sprite-frame-0 {
+        opacity: 1 !important;
+      }
+
+      @keyframes spriteFrame0Run {
+        0%, 33.32%   { opacity: 1; }
+        33.33%, 100% { opacity: 0; }
+      }
+      @keyframes spriteFrame1Run {
+        0%, 33.32%   { opacity: 0; }
+        33.33%, 66.65% { opacity: 1; }
+        66.66%, 100% { opacity: 0; }
+      }
+      @keyframes spriteFrame2Run {
+        0%, 66.65%   { opacity: 0; }
+        66.66%, 100% { opacity: 1; }
       }
 
       /* ☀️ 千陽號專屬 SVG 前進水波紋 */
@@ -175,7 +266,7 @@
         opacity: 0;
         transition: opacity 0.2s ease;
       }
-      .vehicle-img-wrap.is-moving:not([data-car="thousand_sunny"]):not([data-car="turtle"]) .car-exhaust-svg {
+      .vehicle-img-wrap.is-moving:not([data-car="thousand_sunny"]):not([data-car="turtle"]):not([data-car="santa_sleigh"]) .car-exhaust-svg {
         opacity: 1;
       }
       .exhaust-puff-1 {
@@ -207,7 +298,7 @@
         }
       }
 
-      /* 🐢 綠蠵龜後方划水尾波與氣泡（僅修改烏龜） */
+      /* 🐢 綠蠵龜後方划水尾波與氣泡 */
       .turtle-wake-svg {
         position: absolute;
         top: 50%;
@@ -332,7 +423,7 @@
         animation: sunnyBobTopDown 1.2s ease-in-out infinite;
       }
       /* 🚚💨 一般車輛俯視行駛輕微震動 */
-      .vehicle-img-wrap.is-moving:not([data-car="turtle"]):not([data-car="thousand_sunny"]) > img {
+      .vehicle-img-wrap.is-moving:not([data-car="turtle"]):not([data-car="thousand_sunny"]):not([data-car="santa_sleigh"]) > img {
         animation: carDriveBounceTopDown 0.5s ease-in-out infinite;
       }
       /* 靜態與省電模式移除動畫 */
@@ -408,6 +499,19 @@
     `;
   }
 
+  function renderVehicleVisual(model) {
+    if (Array.isArray(model.frames) && model.frames.length >= 3) {
+      return `
+        <span class="vehicle-sprite-stack" style="width:${model.width}px;height:${model.height}px;">
+          <img class="sprite-frame sprite-frame-0" src="${model.frames[0]}" alt="${model.name}" width="${model.width}" height="${model.height}" loading="eager" />
+          <img class="sprite-frame sprite-frame-1" src="${model.frames[1]}" alt="" width="${model.width}" height="${model.height}" loading="eager" aria-hidden="true" />
+          <img class="sprite-frame sprite-frame-2" src="${model.frames[2]}" alt="" width="${model.width}" height="${model.height}" loading="eager" aria-hidden="true" />
+        </span>
+      `;
+    }
+    return `<img src="${model.src}" alt="${model.name}" width="${model.width}" height="${model.height}" loading="eager" />`;
+  }
+
   function syncCarMovingState(isMoving) {
     const pausedByPowerSave = document.body.classList.contains('power-saving');
     const active = Boolean(isMoving) && !pausedByPowerSave;
@@ -459,7 +563,7 @@
       effectHtml = getSunnyWakeSvg();
     } else if (model.id === 'turtle') {
       effectHtml = getTurtleWakeSvg();
-    } else {
+    } else if (model.id !== 'santa_sleigh') {
       effectHtml = getCarExhaustSvg();
     }
 
@@ -468,7 +572,7 @@
         <span class="vehicle-heading-rotator">
           <span class="vehicle-anim vehicle-img-wrap${movingClass}" data-car="${model.id}">
             ${effectHtml}
-            <img src="${model.src}" alt="${model.name}" width="${model.width}" height="${model.height}" loading="eager" />
+            ${renderVehicleVisual(model)}
           </span>
         </span>
       </span>

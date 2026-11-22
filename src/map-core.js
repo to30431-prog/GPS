@@ -1076,6 +1076,43 @@ function renderMapLayerMenuOptions() {
     if (!listEl) return;
 
     listEl.innerHTML = '';
+
+    // 🎄 選項第一個：使用者節慶主題開關（可隨時自行開啟／關閉，與車模分開獨立選擇）
+    if (typeof getEffectiveFestivalThemeState === 'function') {
+        const themeState = getEffectiveFestivalThemeState();
+        const themeMeta = themeState.themeMeta;
+        const isThemeOn = Boolean(themeState.isActive);
+        const themeBtn = document.createElement('button');
+        themeBtn.type = 'button';
+        themeBtn.id = 'mapLayerFestivalThemeToggleBtn';
+        themeBtn.className = isThemeOn
+            ? 'w-full text-left px-3 py-2 rounded-xl bg-red-50 border-2 border-red-400 text-red-900 flex items-center justify-between gap-2 transition-all active:scale-95'
+            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-95';
+
+        themeBtn.innerHTML = `
+            <div class="flex items-center gap-2.5 min-w-0">
+                <span class="text-base flex-shrink-0">${themeMeta.icon}</span>
+                <div class="min-w-0">
+                    <div class="text-xs font-black truncate ${isThemeOn ? 'text-red-800' : 'text-gray-800'}">${themeMeta.name}</div>
+                    <div class="text-[10px] font-bold truncate ${isThemeOn ? 'text-red-600' : 'text-gray-400'}">${isThemeOn ? `${themeMeta.desc} · 點擊關閉` : '已關閉 · 點擊開啟'}</div>
+                </div>
+            </div>
+            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isThemeOn ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'}">${isThemeOn ? '開' : '關'}</span>
+        `;
+
+        themeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof toggleUserFestivalTheme === 'function') {
+                toggleUserFestivalTheme();
+            }
+        });
+        listEl.appendChild(themeBtn);
+
+        const divider = document.createElement('div');
+        divider.className = 'border-b border-gray-100 my-0.5';
+        listEl.appendChild(divider);
+    }
+
     MAP_LAYER_PRESETS.forEach(preset => {
         const isSelected = (preset.id === currentMapLayerPreset?.id);
         const btn = document.createElement('button');

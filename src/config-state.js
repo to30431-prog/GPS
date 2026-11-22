@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.29';
+const APP_VERSION = 'v3.32';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.29
+// 確保畫面上所有版本號膠囊同步顯示為 v3.32
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -68,6 +68,17 @@ let lastRouteLayerRenderTime = 0;
 // ==========================================
 const ALLOWED_AI_DISPATCH_MODELS = ['gemini-3.6-flash', 'gemini-4-hydrogen'];
 
+const FESTIVAL_THEMES = {
+    christmas: {
+        id: 'christmas',
+        name: '耶誕節主題',
+        icon: '🎄',
+        desc: '滿版飄雪＋聖誕按鈕裝飾',
+        bodyClass: 'theme-christmas',
+        hasSnow: true
+    }
+};
+
 const DEFAULT_SYSTEM_CONFIG = {
     radarIntervalSec: 5,
     lookAheadDistMeters: 100,
@@ -88,7 +99,9 @@ const DEFAULT_SYSTEM_CONFIG = {
     aiApiKeys: [],
     activeAiKeyId: '',
     requireUserApproval: false,
-    buildingManagerPassword: '666666'
+    buildingManagerPassword: '666666',
+    festivalThemeEnabled: false,
+    festivalTheme: 'christmas'
 };
 
 function clampNum(val, min, max, fallback) {
@@ -134,6 +147,8 @@ function normalizeSystemConfig(raw) {
 
     const rawMgrPwd = typeof src.buildingManagerPassword === 'string' ? src.buildingManagerPassword.trim() : '';
     const buildingManagerPassword = rawMgrPwd || DEFAULT_SYSTEM_CONFIG.buildingManagerPassword;
+    const rawFestivalTheme = typeof src.festivalTheme === 'string' ? src.festivalTheme.trim() : '';
+    const festivalTheme = FESTIVAL_THEMES[rawFestivalTheme] ? rawFestivalTheme : DEFAULT_SYSTEM_CONFIG.festivalTheme;
 
     return {
         radarIntervalSec: clampNum(src.radarIntervalSec, 2, 120, DEFAULT_SYSTEM_CONFIG.radarIntervalSec),
@@ -155,7 +170,9 @@ function normalizeSystemConfig(raw) {
         aiApiKeys,
         activeAiKeyId,
         requireUserApproval: typeof src.requireUserApproval === 'boolean' ? src.requireUserApproval : DEFAULT_SYSTEM_CONFIG.requireUserApproval,
-        buildingManagerPassword
+        buildingManagerPassword,
+        festivalThemeEnabled: typeof src.festivalThemeEnabled === 'boolean' ? src.festivalThemeEnabled : DEFAULT_SYSTEM_CONFIG.festivalThemeEnabled,
+        festivalTheme
     };
 }
 
@@ -181,6 +198,208 @@ function renderFleetAnnouncementBanner(text) {
     }
 }
 renderFleetAnnouncementBanner(systemNavConfig.announcementText);
+
+// ==========================================
+// 🎄 節慶主題系統（開發者全隊開啟與選定主題 ＋ 隊員於「圖層」選單第一項自行開關 ＋ 滿版輕量飄雪引擎）
+// ==========================================
+const FESTIVAL_THEME_USER_PREF_KEY = 'yingge_festival_theme_user_pref_v1';
+let festivalSnowRafId = null;
+let festivalSnowFlakes = [];
+let festivalSnowLastTs = 0;
+
+function getEffectiveFestivalThemeState() {
+    const fleetEnabled = Boolean(systemNavConfig && systemNavConfig.festivalThemeEnabled);
+    const themeKey = (systemNavConfig && FESTIVAL_THEMES[systemNavConfig.festivalTheme])
+        ? systemNavConfig.festivalTheme
+        : 'christmas';
+    const themeMeta = FESTIVAL_THEMES[themeKey] || FESTIVAL_THEMES.christmas;
+
+    let userPref = null;
+    try {
+        const raw = localStorage.getItem(FESTIVAL_THEME_USER_PREF_KEY);
+        if (raw === 'on' || raw === 'off') userPref = raw;
+    } catch (e) {}
+
+    const isActive = (userPref === 'off')
+        ? false
+        : (userPref === 'on' ? true : fleetEnabled);
+
+    return { isActive, themeKey, themeMeta, fleetEnabled, userPref };
+}
+
+function toggleUserFestivalTheme() {
+    const state = getEffectiveFestivalThemeState();
+    const nextActive = !state.isActive;
+    try {
+        if (nextActive === state.fleetEnabled) {
+            localStorage.removeItem(FESTIVAL_THEME_USER_PREF_KEY);
+        } else {
+            localStorage.setItem(FESTIVAL_THEME_USER_PREF_KEY, nextActive ? 'on' : 'off');
+        }
+    } catch (e) {}
+
+    applyFestivalThemeToRuntime();
+    if (typeof renderMapLayerMenuOptions === 'function') {
+        renderMapLayerMenuOptions();
+    }
+    return nextActive;
+}
+
+function stopFestivalSnowAnimation(hideCanvas = true) {
+    if (festivalSnowRafId !== null) {
+        cancelAnimationFrame(festivalSnowRafId);
+        festivalSnowRafId = null;
+    }
+    festivalSnowLastTs = 0;
+    if (hideCanvas) {
+        const canvas = document.getElementById('festivalSnowCanvas');
+        if (canvas) {
+            canvas.classList.add('hidden');
+            const ctx = canvas.getContext('2d');
+            if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+    }
+}
+
+function initFestivalSnowFlakes(width, height) {
+    const count = Math.max(36, Math.min(72, Math.round((width * height) / 14000)));
+    festivalSnowFlakes = [];
+    for (let i = 0; i < count; i++) {
+        const radius = 1.4 + Math.random() * 2.8;
+        festivalSnowFlakes.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            r: radius,
+            speedY: 22 + radius * 13 + Math.random() * 14,
+            driftAmp: 10 + Math.random() * 18,
+            driftPhase: Math.random() * Math.PI * 2,
+            driftFreq: 0.55 + Math.random() * 0.85,
+            alpha: 0.45 + Math.random() * 0.48
+        });
+    }
+}
+
+function syncFestivalThemeSnowState() {
+    const state = getEffectiveFestivalThemeState();
+    const isPowerSave = Boolean(document.body && document.body.classList.contains('power-saving'));
+    const shouldRun = Boolean(state.isActive && state.themeMeta.hasSnow && !isPowerSave && !document.hidden);
+
+    if (!shouldRun) {
+        stopFestivalSnowAnimation(true);
+        return;
+    }
+
+    const canvas = document.getElementById('festivalSnowCanvas');
+    if (!canvas) return;
+    canvas.classList.remove('hidden');
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = window.innerWidth || document.documentElement.clientWidth || 360;
+    const height = window.innerHeight || document.documentElement.clientHeight || 640;
+    const targetW = Math.round(width * dpr);
+    const targetH = Math.round(height * dpr);
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        initFestivalSnowFlakes(width, height);
+    } else if (festivalSnowFlakes.length === 0) {
+        initFestivalSnowFlakes(width, height);
+    }
+
+    if (festivalSnowRafId !== null) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const tick = (now) => {
+        if (document.hidden || (document.body && document.body.classList.contains('power-saving'))) {
+            stopFestivalSnowAnimation(true);
+            return;
+        }
+        const curState = getEffectiveFestivalThemeState();
+        if (!curState.isActive || !curState.themeMeta.hasSnow) {
+            stopFestivalSnowAnimation(true);
+            return;
+        }
+
+        const dt = festivalSnowLastTs ? Math.min(0.05, (now - festivalSnowLastTs) / 1000) : 0.016;
+        festivalSnowLastTs = now;
+
+        const w = window.innerWidth || width;
+        const h = window.innerHeight || height;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        for (let i = 0; i < festivalSnowFlakes.length; i++) {
+            const f = festivalSnowFlakes[i];
+            f.y += f.speedY * dt;
+            f.driftPhase += f.driftFreq * dt;
+            const drawX = f.x + Math.sin(f.driftPhase) * f.driftAmp;
+
+            if (f.y - f.r > h) {
+                f.y = -f.r - Math.random() * 12;
+                f.x = Math.random() * w;
+            }
+
+            ctx.beginPath();
+            ctx.arc(drawX, f.y, f.r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${f.alpha.toFixed(2)})`;
+            ctx.fill();
+
+            if (f.r >= 3.1) {
+                ctx.beginPath();
+                ctx.arc(drawX, f.y, f.r * 1.9, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(224, 242, 254, ${(f.alpha * 0.24).toFixed(2)})`;
+                ctx.fill();
+            }
+        }
+
+        festivalSnowRafId = requestAnimationFrame(tick);
+    };
+
+    festivalSnowLastTs = 0;
+    festivalSnowRafId = requestAnimationFrame(tick);
+}
+
+function applyFestivalThemeToRuntime() {
+    const state = getEffectiveFestivalThemeState();
+    if (document.body) {
+        Object.values(FESTIVAL_THEMES).forEach(t => {
+            if (t.bodyClass) document.body.classList.remove(t.bodyClass);
+        });
+        if (state.isActive && state.themeMeta.bodyClass) {
+            document.body.classList.add(state.themeMeta.bodyClass);
+        }
+    }
+    syncFestivalThemeSnowState();
+}
+
+window.getEffectiveFestivalThemeState = getEffectiveFestivalThemeState;
+window.toggleUserFestivalTheme = toggleUserFestivalTheme;
+window.applyFestivalThemeToRuntime = applyFestivalThemeToRuntime;
+window.syncFestivalThemeSnowState = syncFestivalThemeSnowState;
+
+window.addEventListener('resize', () => {
+    const state = getEffectiveFestivalThemeState();
+    if (state.isActive && state.themeMeta.hasSnow) {
+        const canvas = document.getElementById('festivalSnowCanvas');
+        if (canvas) {
+            const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+            const w = window.innerWidth || 360;
+            const h = window.innerHeight || 640;
+            canvas.width = Math.round(w * dpr);
+            canvas.height = Math.round(h * dpr);
+            initFestivalSnowFlakes(w, h);
+        }
+    }
+});
+
+document.addEventListener('visibilitychange', () => {
+    syncFestivalThemeSnowState();
+});
+
+applyFestivalThemeToRuntime();
 
 // 確認系統列與背景維持純黑 #000000
 function ensurePureBlackSystemBars() {

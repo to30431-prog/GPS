@@ -220,6 +220,14 @@ function applySystemConfigToRuntime(newCfg) {
     // 1. 全隊頂部公告橫幅即時顯示／隱藏
     renderFleetAnnouncementBanner(normalized.announcementText);
 
+    // 1.1 全隊節慶主題即時同步套用（尊重隊員本機手動開關偏好）
+    if (typeof applyFestivalThemeToRuntime === 'function') {
+        applyFestivalThemeToRuntime();
+    }
+    if (typeof renderMapLayerMenuOptions === 'function') {
+        renderMapLayerMenuOptions();
+    }
+
     // 1.2 全站門禁總開關狀態同步檢查
     evaluateAndRenderAccessGateOverlay();
     syncAdminGateStatusBadgeUI(normalized.requireUserApproval);

@@ -1097,3 +1097,93 @@ input, textarea {
         max-height: calc(100dvh - 110px);
     }
 }
+
+/* ==========================================
+   🎄 耶誕節主題（body.theme-christmas）：滿版飄雪搭配按鈕積雪與聖誕紅綠金裝飾
+   ========================================== */
+body.theme-christmas #topNavHeaderBar > div:first-child > div:first-child > div {
+    position: relative;
+    border: 2px solid #dc2626 !important;
+    background: linear-gradient(180deg, #ffffff 0%, #fef2f2 100%) !important;
+    box-shadow: 0 4px 14px rgba(185, 28, 28, 0.28), inset 0 3px 0 rgba(255, 255, 255, 0.95) !important;
+}
+body.theme-christmas #topNavHeaderBar > div:first-child > div:first-child > div::after {
+    content: '🎄';
+    font-size: 13px;
+    margin-left: 2px;
+    line-height: 1;
+    pointer-events: none;
+}
+body.theme-christmas #appVersionBadge {
+    background: #15803d !important;
+    color: #fef08a !important;
+}
+body.theme-christmas #fleetUserBadgeBtn {
+    border: 2px solid #16a34a !important;
+    background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%) !important;
+    box-shadow: 0 3px 10px rgba(21, 128, 61, 0.25) !important;
+}
+
+/* 右側工具列按鈕：頂部白色積雪帽沿＋紅金節慶邊框 */
+body.theme-christmas #rightMapToolbar > button,
+body.theme-christmas #rightMapToolbar #mapLayerSwitchBtn {
+    position: relative;
+    overflow: visible !important;
+    border: 2px solid #ef4444 !important;
+    box-shadow: 0 4px 12px rgba(185, 28, 28, 0.28), 0 0 0 1.5px rgba(254, 240, 138, 0.65) !important;
+}
+body.theme-christmas #rightMapToolbar > button::before,
+body.theme-christmas #rightMapToolbar #mapLayerSwitchBtn::before {
+    content: '';
+    position: absolute;
+    top: -3px;
+    left: 4px;
+    right: 4px;
+    height: 6px;
+    background: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
+    border-radius: 999px 999px 6px 6px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+    pointer-events: none;
+    z-index: 2;
+}
+body.theme-christmas #mapLayerSwitchBtn::after {
+    content: '❄️';
+    position: absolute;
+    top: -7px;
+    right: -6px;
+    font-size: 11px;
+    line-height: 1;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+    pointer-events: none;
+    z-index: 3;
+}
+
+/* 底部主要操作按鈕：淡金聖誕光暈與頂部積雪點綴 */
+body.theme-christmas #idleUI button,
+body.theme-christmas #routeDetailUI #startFollowBtn,
+body.theme-christmas #routeDetailUI #startReplayBtn {
+    position: relative;
+    box-shadow: 0 4px 14px rgba(185, 28, 28, 0.28), inset 0 2.5px 0 rgba(255, 255, 255, 0.85) !important;
+}
+body.theme-christmas #idleUI button::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: 12px;
+    right: 12px;
+    height: 4.5px;
+    background: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
+    border-radius: 999px;
+    opacity: 0.92;
+    pointer-events: none;
+}
+
+/* 極致省電模式下自動隱藏雪花畫布與裝飾陰影 */
+body.theme-christmas.power-saving #festivalSnowCanvas {
+    display: none !important;
+}
+body.theme-christmas.power-saving #rightMapToolbar > button,
+body.theme-christmas.power-saving #rightMapToolbar #mapLayerSwitchBtn,
+body.theme-christmas.power-saving #idleUI button {
+    box-shadow: none !important;
+}

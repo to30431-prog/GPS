@@ -306,6 +306,7 @@ async function enterBlackPowerSaveMode(fromUserGesture = true) {
     isScreenAutoWoken = false;
     document.body?.classList.add('power-saving');
     window.syncCarMovingState?.(false);
+    window.syncFestivalThemeSnowState?.();
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.style.backgroundColor = '#000000';
@@ -340,6 +341,7 @@ function exitBlackPowerSaveMode(fromUserGesture = true) {
     isScreenAutoWoken = false;
     document.body?.classList.remove('power-saving');
     window.syncCarMovingState?.(Boolean(isPlaying || (typeof lastRecordedSpeedKmh === 'number' && lastRecordedSpeedKmh > 1.8)));
+    window.syncFestivalThemeSnowState?.();
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.classList.add('hidden');

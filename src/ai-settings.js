@@ -505,7 +505,28 @@ function populateAdminSettingsForm(cfg) {
     // 同步「👥 管理使用者」書籤頁中的全站門禁開關
     setChecked('adminRequireUserApprovalInput', c.requireUserApproval);
     syncAdminGateStatusBadgeUI(c.requireUserApproval);
+
+    // 同步「🎄 全隊節慶主題設定」
+    setChecked('adminFestivalThemeEnabledInput', c.festivalThemeEnabled);
+    setVal('adminFestivalThemeSelect', c.festivalTheme || 'christmas');
+    syncAdminFestivalThemeBadgeUI(c.festivalThemeEnabled);
 }
+
+function syncAdminFestivalThemeBadgeUI(enabled) {
+    const badge = document.getElementById('adminFestivalThemeStatusBadge');
+    if (!badge) return;
+    if (enabled) {
+        badge.textContent = '全隊開啟中';
+        badge.className = 'text-[10px] font-black bg-red-600 text-white px-2 py-0.5 rounded-full';
+    } else {
+        badge.textContent = '未開啟';
+        badge.className = 'text-[10px] font-black bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full';
+    }
+}
+
+document.getElementById('adminFestivalThemeEnabledInput')?.addEventListener('change', (e) => {
+    syncAdminFestivalThemeBadgeUI(Boolean(e.target?.checked));
+});
 
 function readAdminSettingsForm() {
     const getVal = (id) => document.getElementById(id)?.value;
@@ -557,7 +578,9 @@ function readAdminSettingsForm() {
         aiApiKeys: editingAdminAiKeys,
         activeAiKeyId: editingActiveAiKeyId,
         requireApproval: reqApprovalVal,
-        requireUserApproval: reqApprovalVal
+        requireUserApproval: reqApprovalVal,
+        festivalThemeEnabled: getChecked('adminFestivalThemeEnabledInput'),
+        festivalTheme: getVal('adminFestivalThemeSelect') || 'christmas'
     });
 }
 

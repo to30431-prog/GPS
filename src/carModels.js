@@ -3,10 +3,6 @@
   let stylesInjected = false;
   let lastAppliedHeading = 0;
 
-  // 舞獅去背快取（將黑底轉為透明，保留亮部與舞獅本體）
-  const transparentFrameCache = new Map();
-  const pendingFramePromises = new Map();
-
   const CAR_MODELS = {
     garbage_yellow: {
       id: 'garbage_yellow',
@@ -79,98 +75,11 @@
         './assets/cars/lion_dance_3.jpg',
         './assets/cars/lion_dance_4.jpg'
       ],
-      removeBlackBg: true,
       width: 136,
       height: 136,
       baseAngle: 0
     }
   };
-
-  /**
-   * 去除黑底並做邊緣羽化，回傳透明 PNG DataURL
-   */
-  function getTransparentFrameSrc(rawSrc) {
-    if (transparentFrameCache.has(rawSrc)) {
-      return Promise.resolve(transparentFrameCache.get(rawSrc));
-    }
-    if (pendingFramePromises.has(rawSrc)) {
-      return pendingFramePromises.get(rawSrc);
-    }
-
-    const promise = new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const w = img.naturalWidth || img.width || 256;
-          const h = img.naturalHeight || img.height || 256;
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          ctx.drawImage(img, 0, 0, w, h);
-
-          const imgData = ctx.getImageData(0, 0, w, h);
-          const d = imgData.data;
-
-          // 低於 low 轉全透明，low~high 之間羽化保留白色絨毛與金色動態線條邊緣
-          const low = 24;
-          const high = 68;
-          const span = high - low;
-
-          for (let i = 0; i < d.length; i += 4) {
-            const r = d[i];
-            const g = d[i + 1];
-            const b = d[i + 2];
-            const maxRgb = Math.max(r, g, b);
-            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-            const bright = Math.max(maxRgb, luma);
-
-            if (bright <= low) {
-              d[i + 3] = 0;
-            } else if (bright < high) {
-              const t = (bright - low) / span;
-              d[i + 3] = Math.round(d[i + 3] * t * t);
-            }
-          }
-
-          ctx.putImageData(imgData, 0, 0);
-          const dataUrl = canvas.toDataURL('image/png');
-          transparentFrameCache.set(rawSrc, dataUrl);
-          resolve(dataUrl);
-        } catch (err) {
-          console.warn('[carModels] 舞獅去背失敗，改用原圖:', rawSrc, err);
-          resolve(rawSrc);
-        } finally {
-          pendingFramePromises.delete(rawSrc);
-        }
-      };
-      img.onerror = () => {
-        pendingFramePromises.delete(rawSrc);
-        resolve(rawSrc);
-      };
-      img.src = rawSrc;
-    });
-
-    pendingFramePromises.set(rawSrc, promise);
-    return promise;
-  }
-
-  function hydrateLionBlackBgRemoval() {
-    const lion = CAR_MODELS.lion_dance;
-    if (!lion || !Array.isArray(lion.frames)) return;
-
-    lion.frames.forEach((frameUrl, idx) => {
-      getTransparentFrameSrc(frameUrl).then((cleanUrl) => {
-        if (!cleanUrl || cleanUrl === frameUrl) return;
-        document
-          .querySelectorAll(`img[data-lion-frame="${idx}"]`)
-          .forEach((imgEl) => {
-            imgEl.src = cleanUrl;
-          });
-      });
-    });
-  }
 
   function injectCarAnimations() {
     if (stylesInjected) return;
@@ -188,6 +97,7 @@
         overflow: visible;
         user-select: none;
         -webkit-user-drag: none;
+        pointer-events: none;
       }
       .vehicle-nav-ring {
         display: none !important;
@@ -200,6 +110,7 @@
         justify-content: center;
         overflow: visible;
         will-change: transform;
+        pointer-events: none;
       }
       .vehicle-img-wrap {
         position: relative;
@@ -207,6 +118,7 @@
         align-items: center;
         justify-content: center;
         overflow: visible;
+        pointer-events: none;
       }
       .vehicle-img-wrap > img {
         position: relative;
@@ -224,6 +136,7 @@
         position: relative;
         display: inline-block;
         overflow: visible;
+        pointer-events: none;
       }
       .vehicle-sprite-stack .sprite-frame {
         position: absolute;
@@ -238,23 +151,21 @@
         opacity: 0;
         filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.3));
       }
-      /* 靜止時固定顯示第 1 格 */
       .vehicle-sprite-stack .sprite-frame-0 {
         position: relative;
         opacity: 1;
         z-index: 2;
       }
-      .vehicle-sprite-stack .sprite-frame-1 {
-        z-index: 3;
-      }
-      .vehicle-sprite-stack .sprite-frame-2 {
-        z-index: 4;
-      }
-      .vehicle-sprite-stack .sprite-frame-3 {
-        z-index: 5;
+      .vehicle-sprite-stack .sprite-frame-1 { z-index: 3; }
+      .vehicle-sprite-stack .sprite-frame-2 { z-index: 4; }
+      .vehicle-sprite-stack .sprite-frame-3 { z-index: 5; }
+
+      /* 舞獅黑底輕量處理：亮色本體保留、深黑底弱化 */
+      .vehicle-img-wrap[data-car="lion_dance"] .sprite-frame {
+        border-radius: 999px;
       }
 
-      /* 🎅 移動中啟動 3 格逐格奔跑輪播（馴鹿拉雪橇，每輪 0.36s） */
+      /* 🎅 3 格雪橇逐格輪播 */
       .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-0 {
         animation: spriteFrame0Run 0.36s steps(1, end) infinite;
       }
@@ -265,7 +176,7 @@
         animation: spriteFrame2Run 0.36s steps(1, end) infinite;
       }
 
-      /* 🦁 移動中啟動 4 格逐格搖頭擺動輪播（祥獅獻瑞 1→2→3→4，每輪 0.96s / 每格 0.24s） */
+      /* 🦁 4 格舞獅逐格搖頭輪播 (1 → 2 → 3 → 4) */
       .vehicle-img-wrap.is-moving[data-car="lion_dance"] .vehicle-sprite-stack .sprite-frame-0 {
         animation: lionFrame0Run 0.96s steps(1, end) infinite;
       }
@@ -300,7 +211,6 @@
         opacity: 1 !important;
       }
 
-      /* 3 格雪橇 Keyframes */
       @keyframes spriteFrame0Run {
         0%, 33.32%   { opacity: 1; }
         33.33%, 100% { opacity: 0; }
@@ -315,7 +225,6 @@
         66.66%, 100% { opacity: 1; }
       }
 
-      /* 4 格舞獅 Keyframes (1 → 2 → 3 → 4) */
       @keyframes lionFrame0Run {
         0%, 24.99%   { opacity: 1; }
         25%, 100%    { opacity: 0; }
@@ -369,33 +278,17 @@
         transform-origin: 100px 158px;
       }
       @keyframes sunnyBowRipple {
-        0% {
-          opacity: 0;
-          transform: translateY(-4px) scale(0.82);
-        }
-        25% {
-          opacity: 0.92;
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(18px) scale(1.22);
-        }
+        0% { opacity: 0; transform: translateY(-4px) scale(0.82); }
+        25% { opacity: 0.92; }
+        100% { opacity: 0; transform: translateY(18px) scale(1.22); }
       }
       @keyframes sunnySternWake {
-        0% {
-          opacity: 0;
-          transform: translateY(-6px) scaleX(0.75) scaleY(0.8);
-        }
-        30% {
-          opacity: 0.85;
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(24px) scaleX(1.32) scaleY(1.25);
-        }
+        0% { opacity: 0; transform: translateY(-6px) scaleX(0.75) scaleY(0.8); }
+        30% { opacity: 0.85; }
+        100% { opacity: 0; transform: translateY(24px) scaleX(1.32) scaleY(1.25); }
       }
 
-      /* 🚚💨 汽車車尾排氣動畫（四款車共用） */
+      /* 🚚💨 汽車車尾排氣動畫 */
       .car-exhaust-svg {
         position: absolute;
         top: 50%;
@@ -428,17 +321,9 @@
         transform-origin: center;
       }
       @keyframes exhaustPuffMove {
-        0% {
-          opacity: 0.85;
-          transform: translateY(-4px) scale(0.55);
-        }
-        55% {
-          opacity: 0.52;
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(22px) scale(1.45);
-        }
+        0% { opacity: 0.85; transform: translateY(-4px) scale(0.55); }
+        55% { opacity: 0.52; }
+        100% { opacity: 0; transform: translateY(22px) scale(1.45); }
       }
 
       /* 🐢 綠蠵龜後方划水尾波與氣泡 */
@@ -484,27 +369,14 @@
         transform-origin: center;
       }
       @keyframes turtleFlipperWave {
-        0% {
-          opacity: 0.95;
-          transform: translateY(-4px) scale(0.75);
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(24px) scale(1.32);
-        }
+        0% { opacity: 0.95; transform: translateY(-4px) scale(0.75); }
+        100% { opacity: 0; transform: translateY(24px) scale(1.32); }
       }
       @keyframes turtleBubbleTrail {
-        0% {
-          opacity: 0.95;
-          transform: translateY(-2px) scale(0.6);
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(26px) scale(1.25);
-        }
+        0% { opacity: 0.95; transform: translateY(-2px) scale(0.6); }
+        100% { opacity: 0; transform: translateY(26px) scale(1.25); }
       }
 
-      /* 選單預覽、雷達小車標、靜態與省電模式隱藏特效 */
       button .sunny-wake-svg,
       .car-option .sunny-wake-svg,
       [data-car-select] .sunny-wake-svg,
@@ -532,7 +404,6 @@
         display: none !important;
       }
 
-      /* 車隊雷達隊友小車標限制尺寸 */
       .fleet-car-svg-wrap .vehicle-puck-stage,
       .fleet-car-svg-wrap .vehicle-heading-rotator,
       .fleet-car-svg-wrap .vehicle-img-wrap {
@@ -547,7 +418,6 @@
         object-fit: contain !important;
       }
 
-      /* 換車選單卡片內縮圖限制 */
       button .vehicle-img-wrap img,
       .car-option .vehicle-img-wrap img,
       [data-car-select] .vehicle-img-wrap img,
@@ -557,19 +427,15 @@
         max-height: 72px !important;
       }
 
-      /* 🐢 烏龜俯視划動 */
       .vehicle-img-wrap.is-moving[data-car="turtle"] > img {
         animation: turtleWaddleTopDown 0.55s ease-in-out infinite alternate;
       }
-      /* ☀️ 千陽號俯視破浪 */
       .vehicle-img-wrap.is-moving[data-car="thousand_sunny"] > img {
         animation: sunnyBobTopDown 1.2s ease-in-out infinite;
       }
-      /* 🚚💨 一般車輛俯視行駛輕微震動 */
       .vehicle-img-wrap.is-moving:not([data-car="turtle"]):not([data-car="thousand_sunny"]):not([data-car="santa_sleigh"]):not([data-car="lion_dance"]) > img {
         animation: carDriveBounceTopDown 0.5s ease-in-out infinite;
       }
-      /* 靜態與省電模式移除動畫 */
       .vehicle-img-wrap:not(.is-moving) > img,
       body.power-saving .vehicle-img-wrap > img {
         animation: none !important;
@@ -590,24 +456,55 @@
     document.head.appendChild(style);
   }
 
+  function getSunnyWakeSvg() {
+    return `
+      <svg class="sunny-wake-svg" viewBox="0 0 200 240" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="sunnyWakeGrad" x1="100" y1="30" x2="100" y2="230" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#E0F2FE" stop-opacity="0.95" />
+            <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.7" />
+            <stop offset="100%" stop-color="#0284C7" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+        <path class="sunny-bow-wave-1" d="M52 74 Q100 22 148 74" stroke="url(#sunnyWakeGrad)" stroke-width="5.5" stroke-linecap="round" />
+        <path class="sunny-bow-wave-2" d="M42 90 Q100 30 158 90" stroke="#BAE6FD" stroke-width="3.5" stroke-linecap="round" />
+        <path class="sunny-stern-wake-1" d="M66 154 Q100 176 134 154 M56 172 Q100 198 144 172" stroke="url(#sunnyWakeGrad)" stroke-width="5" stroke-linecap="round" />
+        <path class="sunny-stern-wake-2" d="M60 186 Q100 214 140 186 M74 204 Q100 226 126 204" stroke="#E0F2FE" stroke-width="3.5" stroke-linecap="round" />
+      </svg>
+    `;
+  }
+
+  function getCarExhaustSvg() {
+    return `
+      <svg class="car-exhaust-svg" viewBox="0 0 140 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle class="exhaust-puff-1" cx="70" cy="116" r="7.5" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1.5" />
+        <circle class="exhaust-puff-2" cx="62" cy="128" r="9.5" fill="#E2E8F0" stroke="#CBD5E1" stroke-width="1.5" />
+        <circle class="exhaust-puff-3" cx="78" cy="134" r="10.5" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5" />
+      </svg>
+    `;
+  }
+
+  function getTurtleWakeSvg() {
+    return `
+      <svg class="turtle-wake-svg" viewBox="0 0 170 205" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path class="turtle-wave-left" d="M38 124 Q85 156 132 124" stroke="#059669" stroke-width="5.5" stroke-linecap="round" />
+        <path class="turtle-wave-right" d="M30 144 Q85 178 140 144" stroke="#10B981" stroke-width="4.5" stroke-linecap="round" />
+        <circle class="turtle-bubble-1" cx="85" cy="154" r="5" fill="#A7F3D0" stroke="#059669" stroke-width="1.5" />
+        <circle class="turtle-bubble-2" cx="68" cy="166" r="6" fill="#D1FAE5" stroke="#10B981" stroke-width="1.5" />
+        <circle class="turtle-bubble-3" cx="102" cy="168" r="5.5" fill="#6EE7B7" stroke="#059669" stroke-width="1.5" />
+      </svg>
+    `;
+  }
+
   function renderVehicleVisual(model) {
     if (Array.isArray(model.frames) && model.frames.length >= 3) {
-      const isLion = Boolean(model.removeBlackBg);
       const framesHtml = model.frames
         .map((frameSrc, idx) => {
-          const cachedSrc = isLion && transparentFrameCache.get(frameSrc);
-          const finalSrc = cachedSrc || frameSrc;
-          const lionAttr = isLion ? ` data-lion-frame="${idx}"` : '';
           const altText = idx === 0 ? model.name : '';
           const ariaHidden = idx === 0 ? '' : ' aria-hidden="true"';
-
-          return `<img class="sprite-frame sprite-frame-${idx}" src="${finalSrc}" alt="${altText}" width="${model.width}" height="${model.height}" loading="eager"${lionAttr}${ariaHidden} />`;
+          return `<img class="sprite-frame sprite-frame-${idx}" src="${frameSrc}" alt="${altText}" width="${model.width}" height="${model.height}" loading="eager"${ariaHidden} />`;
         })
         .join('');
-
-      if (isLion) {
-        queueMicrotask(hydrateLionBlackBgRemoval);
-      }
 
       return `
         <span class="vehicle-sprite-stack" style="width:${model.width}px;height:${model.height}px;">

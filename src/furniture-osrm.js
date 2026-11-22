@@ -769,6 +769,62 @@ function addFurniturePinToWorkspace(lng, lat, labelText = '', options = {}) {
     }
 }
 
+// 家具模式下點擊「🏢 社區大樓（橘色水滴）」：直接標註為收運點（不開啟社區編輯彈窗）
+function handleFurnitureBuildingPinClick(buildingPin) {
+    if (!isFurnitureModeActive || !buildingPin) return;
+    if (window.isFurnitureNavOrReplayActive) return;
+
+    const cleanLng = Number(Number(buildingPin.lng).toFixed(6));
+    const cleanLat = Number(Number(buildingPin.lat).toFixed(6));
+    if (isNaN(cleanLng) || isNaN(cleanLat)) return;
+
+    const buildingTitle = String(buildingPin.title || '社區大樓').trim();
+
+    if (!Array.isArray(furnitureActiveData.pins)) {
+        furnitureActiveData.pins = [];
+    }
+
+    // 檢查該社區水滴是否已被標註為收運點（座標 8m 內，或同名且 30m 內）
+    const existingIdx = furnitureActiveData.pins.findIndex(p => {
+        if (!p) return false;
+        const distM = getDistanceKm(Number(p.lng), Number(p.lat), cleanLng, cleanLat) * 1000;
+        if (distM <= 8) return true;
+        if (buildingTitle && p.label && p.label.trim() === buildingTitle && distM <= 30) return true;
+        return false;
+    });
+
+    // 若目前正處於「手動拉線串」模式
+    if (isFurnitureManualConnecting) {
+        if (existingIdx !== -1) {
+            handleManualConnectSnapToPin(existingIdx);
+            return;
+        }
+        closeFurniturePinPopup();
+        addFurniturePinToWorkspace(cleanLng, cleanLat, buildingTitle, {
+            note: buildingPin.note || ''
+        });
+        showFurnitureToast(`📍 已標註收運點 #${furnitureActiveData.pins.length}：${buildingTitle}`);
+        return;
+    }
+
+    if (existingIdx !== -1) {
+        vibrate(20);
+        showFurnitureToast(`ℹ️ 「${buildingTitle}」已標註為收運點（#${existingIdx + 1} 號針）`);
+        return;
+    }
+
+    closeFurniturePinPopup();
+    addFurniturePinToWorkspace(cleanLng, cleanLat, buildingTitle, {
+        note: buildingPin.note || ''
+    });
+    showFurnitureToast(`📍 已標註收運點 #${furnitureActiveData.pins.length}：${buildingTitle}`);
+
+    // 若目前已有串接好的路線，依既有串接模式自動連動更新 OSRM 路線
+    if (Array.isArray(furnitureActiveData.routeCoords) && furnitureActiveData.routeCoords.length >= 2 && !isFurnitureOsrmBusy) {
+        refreshFurnitureRouteAfterPinDragged();
+    }
+}
+
 // 家具模式下輕點地圖：取消單擊直接插針（防誤觸），僅在「手動拉線串」模式下保留點擊加點／吸附目標針
 function handleFurnitureMapClick(e) {
     if (!isFurnitureModeActive || !e?.lngLat) return;

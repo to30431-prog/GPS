@@ -923,12 +923,19 @@ function createSharedPinMarkerElement(pin) {
 
         const startBuildingHold = (clientX, clientY) => {
             cancelBuildingHold();
+            // 🛋️ 家具模式下點擊社區水滴改為標註收運點，停用長按開啟社區資訊／編輯視窗
+            if (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) {
+                return;
+            }
             holdStartX = clientX;
             holdStartY = clientY;
             wrapper.classList.add('is-pressing');
             holdTimer = setTimeout(() => {
                 holdTimer = null;
                 wrapper.classList.remove('is-pressing');
+                if (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) {
+                    return;
+                }
                 vibrate(35);
                 if (pinsLayerGroup[pin.id]?.data) {
                     openViewMapPinModal(pinsLayerGroup[pin.id].data);
@@ -975,6 +982,12 @@ function createSharedPinMarkerElement(pin) {
 
         wrapper.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) {
+                const targetPin = pinsLayerGroup[pin.id]?.data || pin;
+                if (typeof handleFurnitureBuildingPinClick === 'function') {
+                    handleFurnitureBuildingPinClick(targetPin);
+                }
+            }
         });
     } else {
         // ⚠️ 一般藍色髒亂點水滴保留即點即開

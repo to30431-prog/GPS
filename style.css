@@ -1187,3 +1187,284 @@ body.theme-christmas.power-saving #rightMapToolbar #mapLayerSwitchBtn,
 body.theme-christmas.power-saving #idleUI button {
     box-shadow: none !important;
 }
+
+/* ==========================================
+   📚 「鶯歌清運路線庫」與「車隊雲端路線庫」全頁面主題變數系統
+   支援：預設主題 / 🎄 聖誕主題 / 🌙 夜間暗色主題 / ⚡ 極致省電模式
+   ========================================== */
+:root {
+    --lib-page-bg: #f9fafb;
+    --lib-header-bg: #ffffff;
+    --lib-header-border: #f3f4f6;
+    --lib-header-text: #1f2937;
+    --lib-sub-text: #6b7280;
+    --lib-icon-btn-bg: #f3f4f6;
+    --lib-icon-btn-text: #2563eb;
+    --lib-icon-btn-border: transparent;
+    --lib-import-btn-bg: #f0fdf4;
+    --lib-import-btn-text: #16a34a;
+    --lib-import-btn-border: transparent;
+    --lib-search-bg: #ffffff;
+    --lib-search-border: #e5e7eb;
+    --lib-search-text: #1f2937;
+    --lib-search-placeholder: #9ca3af;
+    --lib-primary-btn-bg: #2563eb;
+    --lib-primary-btn-border: transparent;
+    --lib-primary-btn-text: #ffffff;
+    --lib-card-bg: #ffffff;
+    --lib-card-border: #f3f4f6;
+    --lib-card-text: #111827;
+    --lib-card-muted: #9ca3af;
+    --lib-ver-bg: #f3f4f6;
+    --lib-ver-text: #4b5563;
+    --lib-ver-border: transparent;
+    --lib-author-bg: #dbeafe;
+    --lib-author-text: #1d4ed8;
+    --lib-upload-bg: #eff6ff;
+    --lib-upload-text: #2563eb;
+    --lib-upload-border: #bfdbfe;
+    --lib-stat-dist: #2563eb;
+    --lib-stat-events: #16a34a;
+    --lib-stat-stops: #4f46e5;
+    --lib-handle-color: #d1d5db;
+    --lib-edit-color: #9ca3af;
+}
+
+/* 🎄 聖誕主題：路線庫與雲端路線庫（溫暖冬日紅綠金配色＋清晰對比） */
+body.theme-christmas,
+body[data-theme="christmas"] {
+    --lib-page-bg: #fef7f7;
+    --lib-header-bg: linear-gradient(135deg, #991b1b 0%, #b91c1c 60%, #14532d 100%);
+    --lib-header-border: #f59e0b;
+    --lib-header-text: #ffffff;
+    --lib-sub-text: #fde68a;
+    --lib-icon-btn-bg: rgba(255, 255, 255, 0.18);
+    --lib-icon-btn-text: #ffffff;
+    --lib-icon-btn-border: rgba(254, 240, 138, 0.65);
+    --lib-import-btn-bg: #15803d;
+    --lib-import-btn-text: #fef08a;
+    --lib-import-btn-border: #86efac;
+    --lib-search-bg: #ffffff;
+    --lib-search-border: #fca5a5;
+    --lib-search-text: #1f2937;
+    --lib-search-placeholder: #9ca3af;
+    --lib-primary-btn-bg: #15803d;
+    --lib-primary-btn-border: #86efac;
+    --lib-primary-btn-text: #ffffff;
+    --lib-card-bg: #ffffff;
+    --lib-card-border: #fecaca;
+    --lib-card-text: #1f2937;
+    --lib-card-muted: #6b7280;
+    --lib-ver-bg: #fef3c7;
+    --lib-ver-text: #92400e;
+    --lib-ver-border: #fcd34d;
+    --lib-author-bg: #dcfce7;
+    --lib-author-text: #166534;
+    --lib-upload-bg: #fef2f2;
+    --lib-upload-text: #b91c1c;
+    --lib-upload-border: #fca5a5;
+    --lib-stat-dist: #b91c1c;
+    --lib-stat-events: #15803d;
+    --lib-stat-stops: #b45309;
+    --lib-handle-color: #f87171;
+    --lib-edit-color: #b45309;
+}
+
+/* 🌙 夜間／暗色主題：全頁面深藍灰高對比樣式 */
+body.theme-night,
+body.theme-dark,
+body[data-theme="night"],
+body[data-theme="dark"] {
+    --lib-page-bg: #0f172a;
+    --lib-header-bg: #1e293b;
+    --lib-header-border: #334155;
+    --lib-header-text: #f8fafc;
+    --lib-sub-text: #94a3b8;
+    --lib-icon-btn-bg: #334155;
+    --lib-icon-btn-text: #93c5fd;
+    --lib-icon-btn-border: #475569;
+    --lib-import-btn-bg: #14532d;
+    --lib-import-btn-text: #86efac;
+    --lib-import-btn-border: #166534;
+    --lib-search-bg: #1e293b;
+    --lib-search-border: #475569;
+    --lib-search-text: #f8fafc;
+    --lib-search-placeholder: #94a3b8;
+    --lib-primary-btn-bg: #2563eb;
+    --lib-primary-btn-border: #60a5fa;
+    --lib-primary-btn-text: #ffffff;
+    --lib-card-bg: #1e293b;
+    --lib-card-border: #334155;
+    --lib-card-text: #f8fafc;
+    --lib-card-muted: #94a3b8;
+    --lib-ver-bg: #334155;
+    --lib-ver-text: #e2e8f0;
+    --lib-ver-border: #475569;
+    --lib-author-bg: #1e3a8a;
+    --lib-author-text: #bfdbfe;
+    --lib-upload-bg: #172554;
+    --lib-upload-text: #93c5fd;
+    --lib-upload-border: #3b82f6;
+    --lib-stat-dist: #60a5fa;
+    --lib-stat-events: #4ade80;
+    --lib-stat-stops: #a5b4fc;
+    --lib-handle-color: #64748b;
+    --lib-edit-color: #cbd5e1;
+}
+
+/* ⚡ 極致省電模式：純黑 OLED 高對比（覆寫所有主題確保極致省電與最高可讀性） */
+body.power-saving {
+    --lib-page-bg: #000000;
+    --lib-header-bg: #0a0a0a;
+    --lib-header-border: #3f3f46;
+    --lib-header-text: #ffffff;
+    --lib-sub-text: #d4d4d8;
+    --lib-icon-btn-bg: #18181b;
+    --lib-icon-btn-text: #ffffff;
+    --lib-icon-btn-border: #52525b;
+    --lib-import-btn-bg: #052e16;
+    --lib-import-btn-text: #4ade80;
+    --lib-import-btn-border: #22c55e;
+    --lib-search-bg: #0a0a0a;
+    --lib-search-border: #52525b;
+    --lib-search-text: #ffffff;
+    --lib-search-placeholder: #a1a1aa;
+    --lib-primary-btn-bg: #1d4ed8;
+    --lib-primary-btn-border: #93c5fd;
+    --lib-primary-btn-text: #ffffff;
+    --lib-card-bg: #0a0a0a;
+    --lib-card-border: #3f3f46;
+    --lib-card-text: #ffffff;
+    --lib-card-muted: #d4d4d8;
+    --lib-ver-bg: #27272a;
+    --lib-ver-text: #fde047;
+    --lib-ver-border: #eab308;
+    --lib-author-bg: #1e3a8a;
+    --lib-author-text: #ffffff;
+    --lib-upload-bg: #0c1929;
+    --lib-upload-text: #7dd3fc;
+    --lib-upload-border: #38bdf8;
+    --lib-stat-dist: #60a5fa;
+    --lib-stat-events: #4ade80;
+    --lib-stat-stops: #c4b5fd;
+    --lib-handle-color: #a1a1aa;
+    --lib-edit-color: #fde047;
+}
+
+/* 套用至「鶯歌清運路線庫 (#historyModal)」與「車隊雲端路線庫 (#cloudRoutesModal)」所有元素 */
+#historyModal.route-lib-page,
+#cloudRoutesModal .route-lib-page {
+    background: var(--lib-page-bg) !important;
+    border-color: var(--lib-header-border) !important;
+}
+#historyModal .route-lib-header,
+#cloudRoutesModal .route-lib-header {
+    background: var(--lib-header-bg) !important;
+    border-bottom: 1.5px solid var(--lib-header-border) !important;
+}
+#historyModal .route-lib-header-title,
+#cloudRoutesModal .route-lib-header-title {
+    color: var(--lib-header-text) !important;
+}
+#cloudRoutesModal .route-lib-sub-text {
+    color: var(--lib-sub-text) !important;
+}
+#historyModal .route-lib-icon-btn,
+#cloudRoutesModal .route-lib-icon-btn {
+    background: var(--lib-icon-btn-bg) !important;
+    color: var(--lib-icon-btn-text) !important;
+    border: 1.5px solid var(--lib-icon-btn-border) !important;
+}
+#historyModal .route-lib-import-btn {
+    background: var(--lib-import-btn-bg) !important;
+    color: var(--lib-import-btn-text) !important;
+    border: 1.5px solid var(--lib-import-btn-border) !important;
+}
+#historyModal .route-lib-search-box {
+    background: var(--lib-search-bg) !important;
+    border-color: var(--lib-search-border) !important;
+}
+#historyModal .route-lib-search-input {
+    color: var(--lib-search-text) !important;
+}
+#historyModal .route-lib-search-input::placeholder {
+    color: var(--lib-search-placeholder) !important;
+}
+#historyModal .route-lib-search-icon {
+    color: var(--lib-search-placeholder) !important;
+}
+#historyModal .route-lib-primary-btn {
+    background: var(--lib-primary-btn-bg) !important;
+    color: var(--lib-primary-btn-text) !important;
+    border: 1.5px solid var(--lib-primary-btn-border) !important;
+}
+#cloudRoutesModal .route-lib-tabbar {
+    background: var(--lib-header-bg) !important;
+    border-bottom-color: var(--lib-header-border) !important;
+}
+#historyList .route-lib-card,
+#cloudRoutesList .route-lib-card {
+    background: var(--lib-card-bg) !important;
+    border-color: var(--lib-card-border) !important;
+}
+#historyList .route-lib-card .route-lib-title,
+#cloudRoutesList .route-lib-card .route-lib-title {
+    color: var(--lib-card-text) !important;
+}
+#historyList .route-lib-card .route-lib-date,
+#cloudRoutesList .route-lib-card .route-lib-date {
+    color: var(--lib-card-muted) !important;
+}
+#historyList .route-lib-card .route-lib-ver-badge,
+#cloudRoutesList .route-lib-card .route-lib-ver-badge {
+    background: var(--lib-ver-bg) !important;
+    color: var(--lib-ver-text) !important;
+    border: 1px solid var(--lib-ver-border) !important;
+}
+#historyList .route-lib-card .route-lib-author-badge,
+#cloudRoutesList .route-lib-card .route-lib-author-badge {
+    background: var(--lib-author-bg) !important;
+    color: var(--lib-author-text) !important;
+}
+#historyList .route-lib-card .upload-cloud-btn {
+    background: var(--lib-upload-bg) !important;
+    color: var(--lib-upload-text) !important;
+    border-color: var(--lib-upload-border) !important;
+}
+#historyList .route-lib-card .route-lib-stat-dist,
+#cloudRoutesList .route-lib-card .route-lib-stat-dist {
+    color: var(--lib-stat-dist) !important;
+}
+#historyList .route-lib-card .route-lib-stat-events,
+#cloudRoutesList .route-lib-card .route-lib-stat-events {
+    color: var(--lib-stat-events) !important;
+}
+#cloudRoutesList .route-lib-card .route-lib-stat-stops {
+    color: var(--lib-stat-stops) !important;
+}
+#historyList .route-lib-card .drag-handle {
+    color: var(--lib-handle-color) !important;
+}
+#historyList .route-lib-card .edit-name-btn {
+    color: var(--lib-edit-color) !important;
+}
+body.power-saving #historyList .route-lib-card,
+body.power-saving #cloudRoutesList .route-lib-card,
+body.power-saving #historyModal .route-lib-header,
+body.power-saving #cloudRoutesModal .route-lib-header {
+    box-shadow: none !important;
+}
+
+/* 🌙 夜間暗色主題：主畫面頂部狀態列與工具列同步暗色高對比 */
+body.theme-night #topNavHeaderBar > div:first-child > div:first-child > div,
+body[data-theme="night"] #topNavHeaderBar > div:first-child > div:first-child > div {
+    background: rgba(15, 23, 42, 0.94) !important;
+    color: #f8fafc !important;
+    border: 1.5px solid #475569 !important;
+}
+body.theme-night #fleetUserBadgeBtn,
+body[data-theme="night"] #fleetUserBadgeBtn {
+    background: rgba(15, 23, 42, 0.94) !important;
+    color: #6ee7b7 !important;
+    border-color: #34d399 !important;
+}

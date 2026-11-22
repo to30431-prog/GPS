@@ -428,35 +428,35 @@ function renderHistoryList() {
 
         const card = document.createElement('div');
         card.className = updateInfo.hasUpdate
-            ? "bg-gradient-to-r from-white to-orange-50/50 p-2.5 rounded-2xl shadow-md border-2 border-orange-300 flex items-stretch gap-2 active:scale-[0.99] transition-transform"
-            : "bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
+            ? "route-lib-card route-lib-card-has-update bg-gradient-to-r from-white to-orange-50/50 p-2.5 rounded-2xl shadow-md border-2 border-orange-300 flex items-stretch gap-2 active:scale-[0.99] transition-transform"
+            : "route-lib-card bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
 
         const authorTag = r.author
-            ? `<span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>`
+            ? `<span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>`
             : '';
 
         const versionBadgeHtml = updateInfo.hasUpdate
             ? `<span class="bg-gradient-to-r from-orange-500 to-red-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black whitespace-nowrap shadow-sm animate-pulse">v${updateInfo.localVer} ➔ v${updateInfo.cloudVer} 有新版</span>`
-            : `<span class="bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${updateInfo.localVer}</span>`;
+            : `<span class="route-lib-ver-badge bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${updateInfo.localVer}</span>`;
 
         const cloudTimeHtml = updateInfo.hasUpdate
             ? `<div class="text-[11px] font-extrabold text-orange-600 mt-0.5">☁️ 最新版更新於：${updateInfo.updateTimeText}</div>`
-            : `<div class="text-xs text-gray-400 mt-0.5 mb-1">${r.date || ''}</div>`;
+            : `<div class="route-lib-date text-xs text-gray-400 mt-0.5 mb-1">${r.date || ''}</div>`;
 
         card.innerHTML = `
             <div class="drag-handle text-gray-300 w-7 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0" title="長按 0.5 秒解鎖拖曳排序">
                 <i class="fa-solid fa-grip-vertical text-xl"></i>
             </div>
             <div class="route-card-info flex-1 min-w-0 py-1 cursor-pointer">
-                <div class="font-black text-gray-900 text-base flex items-center gap-1.5 flex-wrap">
+                <div class="route-lib-title font-black text-gray-900 text-base flex items-center gap-1.5 flex-wrap">
                     <span class="truncate max-w-full">${r.name}</span>
                     ${versionBadgeHtml}
                     ${authorTag}
                 </div>
                 ${cloudTimeHtml}
-                <div class="flex gap-3 text-[11px] font-bold mt-1">
-                    <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
-                    <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
+                <div class="route-lib-stats flex gap-3 text-[11px] font-bold mt-1">
+                    <span class="route-lib-stat-dist text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
+                    <span class="route-lib-stat-events text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
                 </div>
             </div>
             <div class="flex flex-col justify-between items-end py-0.5 gap-1.5 flex-shrink-0">

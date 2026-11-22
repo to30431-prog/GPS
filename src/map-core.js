@@ -1428,9 +1428,15 @@ const VoiceQueue = {
                     window._activeSpeechUtterance = null;
                 }
                 this.isSpeaking = false;
+                if (this.queue.length === 0) {
+                    window.BgmPlayer?.setVoiceDucking(false);
+                }
                 this.processNext();
             };
 
+            u.onstart = () => {
+                window.BgmPlayer?.setVoiceDucking(true);
+            };
             u.onend = onComplete;
             u.onerror = onComplete;
 
@@ -1439,10 +1445,12 @@ const VoiceQueue = {
 
             // 將 SpeechSynthesisUtterance 實例保存於全域變數中，避免被瀏覽器垃圾回收機制中途切斷導致無聲
             window._activeSpeechUtterance = u;
+            window.BgmPlayer?.setVoiceDucking(true);
             window.speechSynthesis.speak(u);
         } catch (e) {
             window._activeSpeechUtterance = null;
             this.isSpeaking = false;
+            window.BgmPlayer?.setVoiceDucking(false);
             this.processNext();
         }
     },
@@ -1456,6 +1464,7 @@ const VoiceQueue = {
             this._watchdogTimer = null;
         }
         window._activeSpeechUtterance = null;
+        window.BgmPlayer?.setVoiceDucking(false);
         if ('speechSynthesis' in window) {
             try { window.speechSynthesis.cancel(); } catch (e) {}
         }

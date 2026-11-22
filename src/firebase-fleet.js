@@ -1043,21 +1043,21 @@ function renderCloudRoutesList() {
         const timeDisplay = formatRouteUpdateTimeText(cr);
 
         const card = document.createElement('div');
-        card.className = "bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-2";
+        card.className = "route-lib-card bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-2";
         card.innerHTML = `
             <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="font-black text-gray-900 text-sm truncate">${cr.name}</span>
-                    <span class="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${cloudVer}</span>
-                    <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
+                    <span class="route-lib-title font-black text-gray-900 text-sm truncate">${cr.name}</span>
+                    <span class="route-lib-ver-badge bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${cloudVer}</span>
+                    <span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
                         <i class="fa-solid fa-user-ninja mr-0.5"></i>${cr.author || '熱心隊員'}
                     </span>
                 </div>
-                <div class="text-[11px] text-gray-400 mt-0.5">更新/建立：${timeDisplay}</div>
-                <div class="flex items-center gap-3 text-[11px] font-bold mt-1">
-                    <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${cr.distance || '0.00'} km</span>
-                    <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${eventsCount} 處標記</span>
-                    ${stopsCount > 0 ? `<span class="text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
+                <div class="route-lib-date text-[11px] text-gray-400 mt-0.5">更新/建立：${timeDisplay}</div>
+                <div class="route-lib-stats flex items-center gap-3 text-[11px] font-bold mt-1">
+                    <span class="route-lib-stat-dist text-blue-600"><i class="fa-solid fa-route mr-1"></i>${cr.distance || '0.00'} km</span>
+                    <span class="route-lib-stat-events text-green-600"><i class="fa-solid fa-music mr-1"></i>${eventsCount} 處標記</span>
+                    ${stopsCount > 0 ? `<span class="route-lib-stat-stops text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
                 </div>
             </div>
             <div class="flex items-center gap-1.5 flex-shrink-0">

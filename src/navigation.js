@@ -307,6 +307,7 @@ async function enterBlackPowerSaveMode(fromUserGesture = true) {
     document.body?.classList.add('power-saving');
     window.syncCarMovingState?.(false);
     window.syncFestivalThemeSnowState?.();
+    window.BgmPlayer?.syncPlaybackState();
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.style.backgroundColor = '#000000';
@@ -342,6 +343,7 @@ function exitBlackPowerSaveMode(fromUserGesture = true) {
     document.body?.classList.remove('power-saving');
     window.syncCarMovingState?.(Boolean(isPlaying || (typeof lastRecordedSpeedKmh === 'number' && lastRecordedSpeedKmh > 1.8)));
     window.syncFestivalThemeSnowState?.();
+    window.BgmPlayer?.syncPlaybackState();
     if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
 
     blackOverlay.classList.add('hidden');
@@ -469,6 +471,7 @@ function updateTacticalDisplay() {
 
 document.getElementById('startFollowBtn').onclick = async () => {
     // 🔊 在使用者點擊「遵循路線」手勢當下同步喚醒瀏覽器 TTS 引擎，解除手機自動播放限制
+    window.BgmPlayer?.unlockAndSync();
     if (typeof unlockSpeechSynthesis === 'function') {
         unlockSpeechSynthesis();
     } else if ('speechSynthesis' in window) {

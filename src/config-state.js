@@ -76,6 +76,14 @@ const FESTIVAL_THEMES = {
         desc: '滿版飄雪＋聖誕按鈕裝飾',
         bodyClass: 'theme-christmas',
         hasSnow: true
+    },
+    night: {
+        id: 'night',
+        name: '夜間暗色主題',
+        icon: '🌙',
+        desc: '高對比深色介面＋舒緩音樂',
+        bodyClass: 'theme-night',
+        hasSnow: false
     }
 };
 
@@ -239,6 +247,7 @@ function toggleUserFestivalTheme() {
     } catch (e) {}
 
     applyFestivalThemeToRuntime();
+    window.BgmPlayer?.unlockAndSync();
     if (typeof renderMapLayerMenuOptions === 'function') {
         renderMapLayerMenuOptions();
     }
@@ -364,6 +373,7 @@ function syncFestivalThemeSnowState() {
 
 function applyFestivalThemeToRuntime() {
     const state = getEffectiveFestivalThemeState();
+    const activeThemeKey = state.isActive ? state.themeKey : 'default';
     if (document.body) {
         Object.values(FESTIVAL_THEMES).forEach(t => {
             if (t.bodyClass) document.body.classList.remove(t.bodyClass);
@@ -371,8 +381,10 @@ function applyFestivalThemeToRuntime() {
         if (state.isActive && state.themeMeta.bodyClass) {
             document.body.classList.add(state.themeMeta.bodyClass);
         }
+        document.body.setAttribute('data-theme', activeThemeKey);
     }
     syncFestivalThemeSnowState();
+    window.BgmPlayer?.setTheme(activeThemeKey);
 }
 
 window.getEffectiveFestivalThemeState = getEffectiveFestivalThemeState;

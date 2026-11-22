@@ -185,6 +185,11 @@
                 <i id="voiceIcon" class="fa-solid fa-volume-high text-base"></i>
                 <span id="voiceLabel" class="text-[9px] font-bold leading-none mt-0.5">語音開</span>
             </button>
+            <!-- 🎵 主題連動簡易背景音樂開關（Web Audio API 八音盒合成） -->
+            <button id="bgmToggleBtn" type="button" class="bg-white text-gray-500 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200" title="背景音樂已靜音（點擊開啟）">
+                <i id="bgmIcon" class="fa-solid fa-music text-base opacity-50"></i>
+                <span id="bgmLabel" class="text-[9px] font-bold leading-none mt-0.5">音樂關</span>
+            </button>
             <!-- 🗺️ 圖層切換按鈕（選單本體獨立置於外層 fixed，避免被右側工具列 overflow-y:auto 裁切） -->
             <div id="mapLayerSwitcherWrapper" class="relative">
                 <button id="mapLayerSwitchBtn" type="button" class="bg-white text-emerald-700 w-11 h-11 rounded-2xl shadow-lg border-2 border-emerald-500 flex flex-col items-center justify-center active:scale-95" title="切換地圖底圖圖層">
@@ -778,24 +783,24 @@
     </div>
 
     <!-- 歷史紀錄清單彈窗 -->
-    <div id="historyModal" class="hidden fixed inset-0 bg-gray-50 flex flex-col z-50 pointer-events-auto">
-       <div class="bg-white p-4 flex items-center justify-between shadow-sm mt-6">
-    <button id="closeHistory" class="w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
-    <h2 class="text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
-    <label class="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
+    <div id="historyModal" class="route-lib-page hidden fixed inset-0 bg-gray-50 flex flex-col z-50 pointer-events-auto">
+       <div class="route-lib-header bg-white p-4 flex items-center justify-between shadow-sm mt-6">
+    <button id="closeHistory" class="route-lib-icon-btn w-10 h-10 rounded-xl bg-gray-100 text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]"><i class="fa-solid fa-house"></i></button>
+    <h2 class="route-lib-header-title text-lg font-black text-gray-800">鶯歌清運路線庫</h2>
+    <label class="route-lib-import-btn w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center cursor-pointer shadow-sm active:scale-95" title="匯入路線">
         <i class="fa-solid fa-file-import"></i>
         <input type="file" id="importRouteInput" accept=".txt, .json, text/plain" class="hidden">
     </label>
 </div>
         <div class="px-4 pt-3 pb-1 flex items-center gap-2">
-            <div class="flex-1 bg-white rounded-2xl shadow-sm border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all min-w-0">
-                <i class="fa-solid fa-magnifying-glass text-gray-400 text-sm"></i>
-                <input type="text" id="routeSearchInput" placeholder="搜尋路線名稱或創作者..." class="flex-1 bg-transparent text-sm font-bold text-gray-800 placeholder-gray-400 outline-none min-w-0">
+            <div class="route-lib-search-box flex-1 bg-white rounded-2xl shadow-sm border border-gray-100 px-3.5 py-2.5 flex items-center gap-2.5 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition-all min-w-0">
+                <i class="route-lib-search-icon fa-solid fa-magnifying-glass text-gray-400 text-sm"></i>
+                <input type="text" id="routeSearchInput" placeholder="搜尋路線名稱或創作者..." class="route-lib-search-input flex-1 bg-transparent text-sm font-bold text-gray-800 placeholder-gray-400 outline-none min-w-0">
                 <button id="clearSearchBtn" type="button" class="hidden text-gray-300 hover:text-gray-500 active:scale-90 transition-all w-6 h-6 flex items-center justify-center rounded-full" title="清除搜尋">
                     <i class="fa-solid fa-circle-xmark text-base"></i>
                 </button>
             </div>
-            <button id="openCloudModalBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs px-3.5 py-2.5 rounded-2xl shadow-md flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap flex-shrink-0">
+            <button id="openCloudModalBtn" type="button" class="route-lib-primary-btn bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs px-3.5 py-2.5 rounded-2xl shadow-md flex items-center gap-1.5 active:scale-95 transition-all whitespace-nowrap flex-shrink-0">
                 <span>☁️</span><span>雲端路線庫</span>
             </button>
         </div>
@@ -821,27 +826,27 @@
 
     <!-- ☁️ 車隊雲端路線庫彈窗 -->
     <div id="cloudRoutesModal" class="hidden fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 pointer-events-auto">
-        <div class="bg-gray-50 w-full max-w-md max-h-[88vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
-            <div class="bg-white px-4 py-3.5 flex items-center justify-between border-b border-gray-100 gap-2">
+        <div class="route-lib-page route-lib-modal-shell bg-gray-50 w-full max-w-md max-h-[88vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
+            <div class="route-lib-header bg-white px-4 py-3.5 flex items-center justify-between border-b border-gray-100 gap-2">
                 <div class="flex items-center gap-2 min-w-0">
                     <span class="text-xl flex-shrink-0">☁️</span>
                     <div class="min-w-0">
-                        <h3 class="text-base font-black text-gray-800 leading-tight truncate">車隊雲端路線庫</h3>
-                        <p id="cloudStatusSub" class="text-[11px] font-bold text-gray-400 truncate">與隊員共享最新清運路線</p>
+                        <h3 class="route-lib-header-title text-base font-black text-gray-800 leading-tight truncate">車隊雲端路線庫</h3>
+                        <p id="cloudStatusSub" class="route-lib-sub-text text-[11px] font-bold text-gray-400 truncate">與隊員共享最新清運路線</p>
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 flex-shrink-0">
                     <button id="adminToggleBtn" type="button" class="hidden" title="裝置授權狀態"></button>
-                    <button id="refreshCloudBtn" type="button" class="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 transition-transform" title="重新整理">
+                    <button id="refreshCloudBtn" type="button" class="route-lib-icon-btn w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center active:scale-95 transition-transform" title="重新整理">
                         <i id="refreshCloudIcon" class="fa-solid fa-rotate-right text-sm"></i>
                     </button>
-                    <button id="closeCloudModalBtn" type="button" class="w-9 h-9 rounded-xl bg-gray-100 text-gray-500 flex items-center justify-center active:scale-95 transition-transform" title="關閉">
+                    <button id="closeCloudModalBtn" type="button" class="route-lib-icon-btn w-9 h-9 rounded-xl bg-gray-100 text-gray-500 flex items-center justify-center active:scale-95 transition-transform" title="關閉">
                         <i class="fa-solid fa-xmark text-base"></i>
                     </button>
                 </div>
             </div>
             <!-- 🔓 管理員專屬頁籤列（正式路線庫 ／ 待審核區） -->
-            <div id="cloudAdminTabBar" class="hidden bg-white px-4 py-2 border-b border-gray-100 flex gap-1.5">
+            <div id="cloudAdminTabBar" class="route-lib-tabbar hidden bg-white px-4 py-2 border-b border-gray-100 flex gap-1.5">
                 <button id="tabSharedRoutesBtn" type="button" class="flex-1 py-2 rounded-xl text-xs font-extrabold bg-blue-600 text-white shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1">
                     ☁️ 正式路線庫
                 </button>
@@ -851,7 +856,7 @@
                 </button>
             </div>
             <div class="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
-                <span id="cloudCountBadge" class="text-xs font-extrabold text-gray-500 px-1">讀取中...</span>
+                <span id="cloudCountBadge" class="route-lib-sub-text text-xs font-extrabold text-gray-500 px-1">讀取中...</span>
                 <button id="importAllCloudBtn" type="button" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-3.5 py-2 rounded-xl shadow-sm flex items-center gap-1.5 active:scale-95 transition-all">
                     <i class="fa-solid fa-cloud-arrow-down"></i> 一鍵全部匯入
                 </button>
@@ -1504,6 +1509,7 @@
                         <label for="adminFestivalThemeSelect" class="text-xs font-extrabold text-gray-800 whitespace-nowrap">選定節慶主題</label>
                         <select id="adminFestivalThemeSelect" class="bg-red-50/70 border border-red-300 focus:border-red-500 text-gray-900 text-xs font-black rounded-lg px-2.5 py-1.5 outline-none cursor-pointer">
                             <option value="christmas">🎄 耶誕節主題（滿版下雪＋按鈕裝飾）</option>
+                            <option value="night">🌙 夜間暗色主題（高對比深色＋舒緩音樂）</option>
                         </select>
                     </div>
                 </div>
@@ -1591,6 +1597,7 @@
     <script src="src/firebase-auth.js?v=3.32"></script>
     <script src="src/ai-settings.js?v=3.32"></script>
     <script src="src/furniture-osrm.js?v=3.32"></script>
+    <script src="src/bgm-player.js?v=3.34"></script>
     <script src="src/main.js?v=3.32"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.33';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.33';
+const CACHE_VERSION = 'v3.34';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.34';
 const CACHE_ASSETS = [
   './',
   './index.html',
@@ -14,6 +14,7 @@ const CACHE_ASSETS = [
   './src/firebase-auth.js',
   './src/ai-settings.js',
   './src/furniture-osrm.js',
+  './src/bgm-player.js',
   './src/main.js',
   './manifest.json',
   './icon-512.png',

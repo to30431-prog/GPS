@@ -1,90 +1,115 @@
 // ==========================================
 // [Module 11] src/bgm-player.js
-// 耶誕節主題專屬「水晶八音盒（Celesta / Music Box）」背景音樂播放器（純 Web Audio API 合成，0 外部音檔）
-// - 兩首完整曲目依序串接無限循環：
-//   1. 完整版《Jingle Bells》（主歌 + 副歌）
-//   2. 曲間留白約 1 秒後接續完整版《We Wish You a Merry Christmas》（主歌 + 副歌）
-// - 常態音量輕柔（0.05），語音導航播報時自動平滑壓低至 15%（Audio Ducking）
-// - 僅在「耶誕節主題」開啟時播放；關閉主題、極致省電模式 (body.power-saving) 或切至背景時自動停止／暫停
+// 耶誕節主題專屬「擬真鐵琴（Vibraphone）＋ 雙手交錯琶音和弦」合成器（純 Web Audio API，0 外部音檔）
+// - 毛氈琴槌敲擊與金屬共鳴頻譜：sine 主基頻 ＋ 12% 4倍頻 ＋ 3% 10倍頻（前 25ms 快速衰減）
+// - 經典鐵琴共鳴管微顫音（4.8Hz 柔和 LFO）＋ 輕量空間殘響（ConvolverNode）
+// - 左手和弦伴奏以 30ms 間隔交錯滾奏短琶音（音量為主旋律 42%）
+// - 兩首完整版聖誕曲目無限循環：《Jingle Bells》→ 留白 1 秒 →《We Wish You a Merry Christmas》
+// - 常態音量輕柔（0.05），語音播報自動平滑壓低至 15%（Audio Ducking），省電／背景自動暫停
 // ==========================================
 
-(function initChristmasCrystalBgmPlayer() {
+(function initChristmasVibraphoneBgmPlayer() {
     const STORAGE_KEY = 'yingge_bgm_enabled_v1';
     const NORMAL_VOLUME = 0.05; // 輕柔背景陪襯音量（0.04~0.06）
     const DUCK_RATIO = 0.15;    // 語音播報時平滑壓低至原音量 15%
+    const CHORD_VOL_RATIO = 0.42; // 左手琶音和弦為主旋律音量的 42%
+    const CHORD_ROLL_SEC = 0.030; // 雙手琴槌交錯滾奏間隔 30ms
 
-    // 高音域水晶八音盒音名頻率表（Hz）
+    // 完整音名對照頻率表（Hz，涵蓋左手伴奏低中音域與右手鐵琴主旋律）
     const NOTE_FREQ = {
-        G4: 392.00, A4: 440.00, B4: 493.88,
+        G2: 98.00, A2: 110.00, B2: 123.47,
+        C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, Fs3: 185.00, G3: 196.00, Gs3: 207.65, A3: 220.00, B3: 246.94,
+        C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, Fs4: 369.99, G4: 392.00, A4: 440.00, B4: 493.88,
         C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
         C6: 1046.50
     };
 
-    // 1. 完整版《Jingle Bells》（主歌 Dashing through the snow + 副歌 Jingle bells）
-    const JINGLE_BELLS_FULL = [
-        // 主歌 A：Dashing through the snow, in a one-horse open sleigh
+    // 左手伴奏和弦音階定義（溫暖鐵琴中低音排列）
+    const CHORDS = {
+        C:   ['C3', 'G3', 'C4', 'E4'],
+        F:   ['F3', 'C4', 'F4', 'A4'],
+        G:   ['G3', 'B3', 'D4', 'G4'],
+        G7:  ['G3', 'B3', 'D4', 'F4'],
+        Am:  ['A3', 'C4', 'E4', 'A4'],
+        Dm:  ['D3', 'A3', 'D4', 'F4'],
+        D7:  ['D3', 'Fs3', 'C4', 'D4'],
+        E7:  ['E3', 'Gs3', 'B3', 'D4']
+    };
+
+    // 1. 完整版《Jingle Bells》（主歌 + 副歌，含左手和弦節拍對應）
+    const JINGLE_BELLS_NOTES = [
+        // 主歌 A (0..31)
         'G4', 'E5', 'D5', 'C5', 'G4', '-', '-', '-',
         'G4', 'E5', 'D5', 'C5', 'A4', '-', '-', '-',
-        // O'er the fields we go, laughing all the way
         'A4', 'F5', 'E5', 'D5', 'B4', '-', '-', '-',
         'G5', 'G5', 'F5', 'D5', 'E5', '-', '-', '-',
-        // 主歌 B：Bells on bobtails ring, making spirits bright
+        // 主歌 B (32..63)
         'G4', 'E5', 'D5', 'C5', 'G4', '-', '-', '-',
         'G4', 'E5', 'D5', 'C5', 'A4', '-', '-', 'A4',
-        // What fun it is to ride and sing a sleighing song tonight, Oh!
         'A4', 'F5', 'E5', 'D5', 'G5', 'G5', 'G5', 'G5',
         'A5', 'G5', 'F5', 'D5', 'C5', '-', 'G5', '-',
-
-        // 副歌 1：Jingle bells, jingle bells, jingle all the way
+        // 副歌 1 (64..95)
         'E5', 'E5', 'E5', '-', 'E5', 'E5', 'E5', '-',
         'E5', 'G5', 'C5', 'D5', 'E5', '-', '-', '-',
-        // Oh what fun it is to ride in a one-horse open sleigh, hey!
         'F5', 'F5', 'F5', 'F5', 'F5', 'E5', 'E5', 'E5',
         'E5', 'D5', 'D5', 'E5', 'D5', '-', 'G5', '-',
-
-        // 副歌 2：Jingle bells, jingle bells, jingle all the way
+        // 副歌 2 (96..127)
         'E5', 'E5', 'E5', '-', 'E5', 'E5', 'E5', '-',
         'E5', 'G5', 'C5', 'D5', 'E5', '-', '-', '-',
-        // Oh what fun it is to ride in a one-horse open sleigh!
         'F5', 'F5', 'F5', 'F5', 'F5', 'E5', 'E5', 'E5',
         'G5', 'G5', 'F5', 'D5', 'C5', '-', '-', '-'
     ];
+    const JINGLE_BELLS_CHORDS = {
+        0: 'C', 8: 'C', 12: 'F', 16: 'Dm', 20: 'G7', 24: 'G7', 28: 'C',
+        32: 'C', 40: 'C', 44: 'F', 48: 'F', 52: 'G7', 56: 'G7', 60: 'C',
+        64: 'C', 72: 'C', 80: 'F', 84: 'C', 88: 'D7', 94: 'G7',
+        96: 'C', 104: 'C', 112: 'F', 116: 'C', 120: 'G7', 124: 'C'
+    };
 
-    // 2. 完整版《We Wish You a Merry Christmas》（副歌 + 主歌 Good tidings + 尾聲副歌）
-    const WE_WISH_YOU_FULL = [
-        // 副歌：We wish you a Merry Christmas x3, and a Happy New Year
+    // 2. 完整版《We Wish You a Merry Christmas》（副歌 + 主歌 + 尾聲副歌，含左手和弦對應）
+    const WE_WISH_YOU_NOTES = [
+        // 副歌 (0..49)
         'G4', '-', 'C5', '-', 'C5', 'D5', 'C5', 'B4', 'A4', '-', 'A4', '-', 'A4', '-',
         'D5', '-', 'D5', 'E5', 'D5', 'C5', 'B4', '-', 'G4', '-', 'G4', '-',
         'E5', '-', 'E5', 'F5', 'E5', 'D5', 'C5', '-', 'A4', '-', 'G4', 'G4',
         'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-',
-
-        // 主歌：Good tidings we bring to you and your kin; Good tidings for Christmas and a Happy New Year
+        // 主歌 Good tidings (48..95)
         'G4', '-', 'C5', '-', 'C5', '-', 'C5', '-', 'B4', '-', '-', '-',
         'B4', '-', 'C5', '-', 'B4', '-', 'A4', '-', 'G4', '-', '-', '-',
         'D5', '-', 'E5', '-', 'D5', '-', 'C5', '-', 'G5', '-', 'G4', 'G4',
         'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-',
-
-        // 尾聲副歌：We wish you a Merry Christmas x3, and a Happy New Year
+        // 尾聲副歌 (96..143)
         'G4', '-', 'C5', '-', 'C5', 'D5', 'C5', 'B4', 'A4', '-', 'A4', '-', 'A4', '-',
         'D5', '-', 'D5', 'E5', 'D5', 'C5', 'B4', '-', 'G4', '-', 'G4', '-',
         'E5', '-', 'E5', 'F5', 'E5', 'D5', 'C5', '-', 'A4', '-', 'G4', 'G4',
         'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-'
     ];
+    const WE_WISH_YOU_CHORDS = {
+        2: 'C', 8: 'F', 14: 'D7', 20: 'G', 26: 'E7', 32: 'Am', 38: 'F', 42: 'G7', 44: 'C',
+        50: 'C', 56: 'G', 62: 'Dm', 68: 'C', 72: 'G', 78: 'C', 84: 'F', 88: 'G7', 90: 'C',
+        98: 'C', 104: 'F', 110: 'D7', 116: 'G', 122: 'E7', 128: 'Am', 134: 'F', 138: 'G7', 140: 'C'
+    };
 
     const PLAYLIST = [
-        { name: 'Jingle Bells', stepMs: 245, notes: JINGLE_BELLS_FULL },
-        { name: 'We Wish You a Merry Christmas', stepMs: 240, notes: WE_WISH_YOU_FULL }
+        { name: 'Jingle Bells', stepMs: 255, notes: JINGLE_BELLS_NOTES, chords: JINGLE_BELLS_CHORDS },
+        { name: 'We Wish You a Merry Christmas', stepMs: 245, notes: WE_WISH_YOU_NOTES, chords: WE_WISH_YOU_CHORDS }
     ];
     const INTER_SONG_GAP_MS = 1000; // 曲間留白約 1 秒
 
     let audioCtx = null;
     let masterGain = null;
+    let vibBusGain = null;     // 共用鐵琴共鳴匯流排（經由 4.8Hz 微顫音 LFO 調變）
+    let tremoloLfo = null;
+    let tremoloDepth = null;
+    let reverbNode = null;
+    let reverbSendGain = null;
+
     let stepTimer = null;
     let gapTimer = null;
     let duckWatchTimer = null;
     let songIndex = 0;
     let stepIndex = 0;
-    let isBgmEnabled = true; // 預設開啟（使用者若手動關閉會記憶於 localStorage）
+    let isBgmEnabled = true; // 預設開啟（使用者手動關閉將記憶於 localStorage）
     let isVoiceDucking = false;
 
     try {
@@ -107,21 +132,74 @@
         return false;
     }
 
+    // 產生輕量柔和空間殘響脈衝響應（約 1.05 秒自然指數衰減，零外部音檔）
+    function createWarmReverbImpulse(ctx, durationSec = 1.05, decay = 2.6) {
+        const rate = ctx.sampleRate;
+        const length = Math.floor(rate * durationSec);
+        const impulse = ctx.createBuffer(2, length, rate);
+        for (let ch = 0; ch < 2; ch++) {
+            const data = impulse.getChannelData(ch);
+            let lp = 0;
+            for (let i = 0; i < length; i++) {
+                const env = Math.pow(1 - i / length, decay);
+                const white = (Math.random() * 2 - 1);
+                // 簡易低通濾波讓殘響更溫暖柔順不刺耳
+                lp = lp * 0.72 + white * 0.28;
+                data[i] = lp * env;
+            }
+        }
+        return impulse;
+    }
+
     function ensureAudioContext() {
         if (!audioCtx) {
             const Ctx = window.AudioContext || window.webkitAudioContext;
             if (!Ctx) return null;
             try {
                 audioCtx = new Ctx();
+
+                // 1. 總音量控制（支援 Audio Ducking）
                 masterGain = audioCtx.createGain();
                 masterGain.gain.setValueAtTime(
                     isVoiceDucking ? NORMAL_VOLUME * DUCK_RATIO : NORMAL_VOLUME,
                     audioCtx.currentTime
                 );
                 masterGain.connect(audioCtx.destination);
+
+                // 2. 鐵琴共鳴管經典微顫音匯流排（4.8Hz 極輕微振幅調變，模擬共鳴管葉片旋轉）
+                vibBusGain = audioCtx.createGain();
+                vibBusGain.gain.setValueAtTime(0.92, audioCtx.currentTime);
+
+                tremoloLfo = audioCtx.createOscillator();
+                tremoloLfo.type = 'sine';
+                tremoloLfo.frequency.setValueAtTime(4.8, audioCtx.currentTime);
+
+                tremoloDepth = audioCtx.createGain();
+                tremoloDepth.gain.setValueAtTime(0.08, audioCtx.currentTime); // 柔和微顫深度（0.84 ~ 1.00）
+
+                tremoloLfo.connect(tremoloDepth);
+                tremoloDepth.connect(vibBusGain.gain);
+                tremoloLfo.start();
+
+                // 乾聲直通主輸出
+                vibBusGain.connect(masterGain);
+
+                // 3. 輕量空間殘響（濕聲約 24%）
+                try {
+                    reverbNode = audioCtx.createConvolver();
+                    reverbNode.buffer = createWarmReverbImpulse(audioCtx, 1.05, 2.6);
+                    reverbSendGain = audioCtx.createGain();
+                    reverbSendGain.gain.setValueAtTime(0.24, audioCtx.currentTime);
+                    vibBusGain.connect(reverbSendGain);
+                    reverbSendGain.connect(reverbNode);
+                    reverbNode.connect(masterGain);
+                } catch (revErr) {
+                    reverbNode = null;
+                }
             } catch (e) {
                 audioCtx = null;
                 masterGain = null;
+                vibBusGain = null;
                 return null;
             }
         }
@@ -148,59 +226,76 @@
         } catch (e) {}
     }
 
-    // 清脆透亮「水晶八音盒（Celesta / Music Box）」合成音色：
-    // - 主音：高音域 sine（attack ~0.008s，release ~0.75s）
-    // - 高八度泛音敲擊瞬態：極輕量 2x sine + 3x 晶亮點綴（快速衰減，營造金屬琴鍵／水晶敲擊感）
-    function playCrystalNote(freq) {
-        if (!audioCtx || !masterGain || !freq) return;
-        const now = audioCtx.currentTime;
-        const attack = 0.008;
-        const release = 0.75;
+    // 擬真鐵琴（Vibraphone）單音合成：
+    // - 主基頻：溫暖清亮 sine（attack ~10ms，中長自然衰減 release 1.05~1.25s）
+    // - 4倍頻金屬共鳴泛音（~12%）：前 25ms 快速衰減後留極輕尾韻
+    // - 10倍頻毛氈敲擊金屬瞬態（~3%）：25ms 內極快衰減，呈現清脆敲擊感
+    function playVibraphoneTone(freq, startOffsetSec = 0, ampScale = 1.0, releaseSec = 1.15) {
+        if (!audioCtx || !vibBusGain || !freq) return;
+        const t0 = audioCtx.currentTime + Math.max(0, startOffsetSec);
+        const attack = 0.010;
 
-        // 1. 主正弦波（溫潤清澈延音）
-        const oscMain = audioCtx.createOscillator();
-        const envMain = audioCtx.createGain();
-        oscMain.type = 'sine';
-        oscMain.frequency.setValueAtTime(freq, now);
+        // 1. 主基頻 sine（溫暖圓潤共鳴尾韻）
+        const osc1 = audioCtx.createOscillator();
+        const env1 = audioCtx.createGain();
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(freq, t0);
 
-        envMain.gain.setValueAtTime(0.0001, now);
-        envMain.gain.linearRampToValueAtTime(0.82, now + attack);
-        envMain.gain.exponentialRampToValueAtTime(0.0001, now + attack + release);
+        env1.gain.setValueAtTime(0.0001, t0);
+        env1.gain.linearRampToValueAtTime(0.84 * ampScale, t0 + attack);
+        env1.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + releaseSec);
 
-        oscMain.connect(envMain);
-        envMain.connect(masterGain);
-        oscMain.start(now);
-        oscMain.stop(now + attack + release + 0.05);
+        osc1.connect(env1);
+        env1.connect(vibBusGain);
+        osc1.start(t0);
+        osc1.stop(t0 + attack + releaseSec + 0.05);
 
-        // 2. 高八度水晶泛音（清脆八音盒共鳴）
-        const oscOct = audioCtx.createOscillator();
-        const envOct = audioCtx.createGain();
-        oscOct.type = 'sine';
-        oscOct.frequency.setValueAtTime(freq * 2, now);
+        // 2. 4 倍頻金屬琴鍵泛音（約 12%，起音前 25ms 快速收斂並保留輕微共鳴）
+        const osc4 = audioCtx.createOscillator();
+        const env4 = audioCtx.createGain();
+        osc4.type = 'sine';
+        osc4.frequency.setValueAtTime(freq * 4, t0);
 
-        envOct.gain.setValueAtTime(0.0001, now);
-        envOct.gain.linearRampToValueAtTime(0.22, now + 0.005);
-        envOct.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+        env4.gain.setValueAtTime(0.0001, t0);
+        env4.gain.linearRampToValueAtTime(0.12 * ampScale, t0 + 0.004);
+        env4.gain.exponentialRampToValueAtTime(0.018 * ampScale, t0 + 0.029);
+        env4.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24);
 
-        oscOct.connect(envOct);
-        envOct.connect(masterGain);
-        oscOct.start(now);
-        oscOct.stop(now + 0.32);
+        osc4.connect(env4);
+        env4.connect(vibBusGain);
+        osc4.start(t0);
+        osc4.stop(t0 + 0.27);
 
-        // 3. 極輕量高頻敲擊瞬態（3 倍泛音，瞬間消散增加晶透感）
-        const oscSparkle = audioCtx.createOscillator();
-        const envSparkle = audioCtx.createGain();
-        oscSparkle.type = 'triangle';
-        oscSparkle.frequency.setValueAtTime(freq * 3, now);
+        // 3. 10 倍頻毛氈琴槌敲擊瞬間泛音（約 3%，25ms 內極速衰減）
+        const overtone10 = freq * 10;
+        if (overtone10 < (audioCtx.sampleRate * 0.45)) {
+            const osc10 = audioCtx.createOscillator();
+            const env10 = audioCtx.createGain();
+            osc10.type = 'sine';
+            osc10.frequency.setValueAtTime(overtone10, t0);
 
-        envSparkle.gain.setValueAtTime(0.0001, now);
-        envSparkle.gain.linearRampToValueAtTime(0.075, now + 0.003);
-        envSparkle.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+            env10.gain.setValueAtTime(0.0001, t0);
+            env10.gain.linearRampToValueAtTime(0.03 * ampScale, t0 + 0.002);
+            env10.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.027);
 
-        oscSparkle.connect(envSparkle);
-        envSparkle.connect(masterGain);
-        oscSparkle.start(now);
-        oscSparkle.stop(now + 0.14);
+            osc10.connect(env10);
+            env10.connect(vibBusGain);
+            osc10.start(t0);
+            osc10.stop(t0 + 0.035);
+        }
+    }
+
+    // 左手雙手琴槌交錯滾奏短琶音（和弦音間隔 30ms 依序敲擊，音量約為主旋律 42%）
+    function playRolledChord(chordName) {
+        const chordNotes = CHORDS[chordName];
+        if (!Array.isArray(chordNotes) || chordNotes.length === 0) return;
+        const perNoteAmp = CHORD_VOL_RATIO * 0.52; // 多音疊加後總和約為主旋律 42%
+        chordNotes.forEach((noteName, idx) => {
+            const freq = NOTE_FREQ[noteName];
+            if (freq) {
+                playVibraphoneTone(freq, idx * CHORD_ROLL_SEC, perNoteAmp, 1.25);
+            }
+        });
     }
 
     function stopTimers() {
@@ -237,7 +332,7 @@
             if (!audioCtx || audioCtx.state !== 'running') return;
 
             if (stepIndex >= song.notes.length) {
-                // 本曲播畢：留白約 1 秒後自動切換下一首並循環
+                // 本曲播畢：留白約 1 秒後自動切換下一首並無限循環
                 stopTimers();
                 songIndex = (songIndex + 1) % PLAYLIST.length;
                 stepIndex = 0;
@@ -250,19 +345,27 @@
                 return;
             }
 
-            const noteName = song.notes[stepIndex];
+            const curStep = stepIndex;
+            const noteName = song.notes[curStep];
+            const chordName = song.chords && song.chords[curStep];
             stepIndex += 1;
 
+            // 先觸發左手滾奏短琶音和弦托底
+            if (chordName) {
+                playRolledChord(chordName);
+            }
+
+            // 再敲擊右手鐵琴主旋律
             if (noteName && noteName !== '-') {
                 const freq = NOTE_FREQ[noteName];
-                if (freq) playCrystalNote(freq);
+                if (freq) playVibraphoneTone(freq, 0, 1.0, 1.15);
             }
         };
 
         tick();
         stepTimer = setInterval(tick, song.stepMs);
 
-        // 安全監看 speechSynthesis.speaking 狀態，確保語音播報必觸發 Audio Ducking
+        // 安全監看 speechSynthesis.speaking 狀態，確保任何語音播報必觸發 Audio Ducking
         duckWatchTimer = setInterval(() => {
             const speakingNow = Boolean(
                 (typeof VoiceQueue !== 'undefined' && VoiceQueue.isSpeaking) ||

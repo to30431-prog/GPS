@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.43';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.43';
+const CACHE_VERSION = 'v3.44';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.44';
 const CACHE_ASSETS = [
   './',
   './index.html',
@@ -27,7 +27,11 @@ const CACHE_ASSETS = [
   './assets/cars/sports_car.png',
   './assets/cars/santa_sleigh_1.png',
   './assets/cars/santa_sleigh_2.png',
-  './assets/cars/santa_sleigh_3.png'
+  './assets/cars/santa_sleigh_3.png',
+  './assets/cars/lion_dance_1.png',
+  './assets/cars/lion_dance_2.png',
+  './assets/cars/lion_dance_3.png',
+  './assets/cars/lion_dance_4.png'
 ];
 
 // 判斷是否為 MapLibre GL 向量圖磚 (*.pbf, *.mvt) 或地圖圖磚請求
@@ -135,4 +139,3 @@ self.addEventListener('fetch', function(event) {
             })
     );
 });
-

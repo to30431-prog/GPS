@@ -3110,44 +3110,29 @@ if (btnManualSave) {
     }
 
     let isManualMultiTouchGesture = false;
-    let lastTwoFingerMidX = null;
-    let lastTwoFingerMidY = null;
-
-    function getTwoFingerMidpoint(touches) {
-        if (!touches || touches.length < 2) return null;
-        return {
-            x: (touches[0].clientX + touches[1].clientX) / 2,
-            y: (touches[0].clientY + touches[1].clientY) / 2
-        };
-    }
 
     function resetManualMultiTouchState() {
         isManualMultiTouchGesture = false;
-        lastTwoFingerMidX = null;
-        lastTwoFingerMidY = null;
     }
 
-    function enterManualMultiTouchNav(touches) {
+    function enterManualMultiTouchNav() {
         isManualMultiTouchGesture = true;
         if (isManualFreehandStrokeActive) {
             cancelActiveManualFreehandStroke();
         }
         try { map.dragPan.enable(); } catch (err) {}
         try { map.touchZoomRotate.enable(); } catch (err) {}
-        const mid = getTwoFingerMidpoint(touches);
-        if (mid) {
-            lastTwoFingerMidX = mid.x;
-            lastTwoFingerMidY = mid.y;
-        }
     }
 
-    // 觸控：僅單指按住拖曳時停用 dragPan 畫橘色線；一旦偵測雙指／多指立即中止未完成單指筆畫並啟用雙指平移與縮放
+    // 觸控：僅單指（e.touches.length === 1）拖曳繪圖時呼叫 e.preventDefault() 與 map.dragPan.disable()；
+    // 一旦偵測雙指／多指（e.touches.length >= 2），絕不攔截事件、絕不呼叫 e.preventDefault() / stopPropagation() / map.panBy()，
+    // 讓 MapLibre 原生 touchZoomRotate 與 dragPan 同時流暢執行雙指捏合縮放與雙指平移！
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isManualDrawingMode) return;
         if (!e.touches || e.touches.length === 0) return;
 
         if (e.touches.length >= 2) {
-            enterManualMultiTouchNav(e.touches);
+            enterManualMultiTouchNav();
             return;
         }
 
@@ -3159,38 +3144,24 @@ if (btnManualSave) {
         const coord = clientXYToLngLat(touch.clientX, touch.clientY);
         if (!coord) return;
 
+        // 僅記錄起點，保持 dragPan 與 touchZoomRotate 啟用，直到單指實際滑動（touchmove）才鎖定 dragPan，避免干擾緊接著落下的第二指
         isManualFreehandStrokeActive = true;
         manualFreehandStrokeCoords = [coord];
-        try { map.dragPan.disable(); } catch (err) {}
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
         if (!isManualDrawingMode) return;
         if (!e.touches || e.touches.length === 0) return;
 
-        // 雙指／多指手勢：立即確保中止單指繪圖並啟用 dragPan + touchZoomRotate，並以雙指中心點位移補齊平移（防止首指曾短暫停用 dragPan 導致 MapLibre 漏接雙指平移）
         if (e.touches.length >= 2) {
-            if (!isManualMultiTouchGesture || isManualFreehandStrokeActive) {
-                enterManualMultiTouchNav(e.touches);
-                return;
-            }
-            const mid = getTwoFingerMidpoint(e.touches);
-            if (mid && lastTwoFingerMidX !== null && lastTwoFingerMidY !== null) {
-                const dx = mid.x - lastTwoFingerMidX;
-                const dy = mid.y - lastTwoFingerMidY;
-                const dragPanActive = Boolean(map.dragPan && typeof map.dragPan.isActive === 'function' && map.dragPan.isActive());
-                if (!dragPanActive && (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2)) {
-                    try { map.panBy([-dx, -dy], { animate: false }); } catch (err) {}
-                }
-            }
-            if (mid) {
-                lastTwoFingerMidX = mid.x;
-                lastTwoFingerMidY = mid.y;
-            }
+            enterManualMultiTouchNav();
             return;
         }
 
         if (isManualMultiTouchGesture || !isManualFreehandStrokeActive) return;
+
+        // 確認為單指自由繪圖：此刻才暫時停用 dragPan 並攔截單指事件，畫出橘色線條
+        try { map.dragPan.disable(); } catch (err) {}
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
 
@@ -3210,9 +3181,6 @@ if (btnManualSave) {
                 updateFreehandTempLayer([]);
                 try { map.dragPan.enable(); } catch (err) {}
                 try { map.touchZoomRotate.enable(); } catch (err) {}
-            } else if (remaining < 2) {
-                lastTwoFingerMidX = null;
-                lastTwoFingerMidY = null;
             }
             return;
         }

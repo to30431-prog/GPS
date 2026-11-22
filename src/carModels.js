@@ -207,33 +207,66 @@
         }
       }
 
-      /* 🐢 綠蠵龜移動殘影（Afterimage） */
-      .turtle-afterimage {
+      /* 🐢 綠蠵龜後方划水尾波與氣泡（僅修改烏龜） */
+      .turtle-wake-svg {
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        pointer-events: none;
+        top: 50%;
+        left: 50%;
+        width: 170px;
+        height: 205px;
+        transform: translate(-50%, -34%);
         z-index: 1;
+        pointer-events: none;
+        overflow: visible;
         opacity: 0;
-        filter: saturate(1.2) brightness(1.08) drop-shadow(0 0 4px rgba(52, 211, 153, 0.45));
+        transition: opacity 0.2s ease;
       }
-      .vehicle-img-wrap.is-moving[data-car="turtle"] .turtle-afterimage-1 {
-        animation: turtleTrailFade 0.85s ease-out infinite;
+      .vehicle-img-wrap.is-moving[data-car="turtle"] .turtle-wake-svg {
+        opacity: 1;
       }
-      .vehicle-img-wrap.is-moving[data-car="turtle"] .turtle-afterimage-2 {
-        animation: turtleTrailFade 0.85s ease-out 0.42s infinite;
+      .turtle-wave-left {
+        animation: turtleFlipperWave 0.95s ease-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
       }
-      @keyframes turtleTrailFade {
+      .turtle-wave-right {
+        animation: turtleFlipperWave 0.95s ease-out 0.47s infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .turtle-bubble-1 {
+        animation: turtleBubbleTrail 0.9s ease-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .turtle-bubble-2 {
+        animation: turtleBubbleTrail 0.9s ease-out 0.3s infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .turtle-bubble-3 {
+        animation: turtleBubbleTrail 0.9s ease-out 0.6s infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      @keyframes turtleFlipperWave {
         0% {
-          opacity: 0.48;
-          transform: translateY(4px) scale(0.96);
+          opacity: 0.95;
+          transform: translateY(-4px) scale(0.75);
         }
         100% {
           opacity: 0;
-          transform: translateY(22px) scale(0.86);
+          transform: translateY(24px) scale(1.32);
+        }
+      }
+      @keyframes turtleBubbleTrail {
+        0% {
+          opacity: 0.95;
+          transform: translateY(-2px) scale(0.6);
+        }
+        100% {
+          opacity: 0;
+          transform: translateY(26px) scale(1.25);
         }
       }
 
@@ -254,14 +287,14 @@
       .fleet-car-svg-wrap .car-exhaust-svg,
       .vehicle-img-wrap:not(.is-moving) .car-exhaust-svg,
       body.power-saving .car-exhaust-svg,
-      button .turtle-afterimage,
-      .car-option .turtle-afterimage,
-      [data-car-select] .turtle-afterimage,
-      .car-picker-item .turtle-afterimage,
-      .vehicle-card .turtle-afterimage,
-      .fleet-car-svg-wrap .turtle-afterimage,
-      .vehicle-img-wrap:not(.is-moving) .turtle-afterimage,
-      body.power-saving .turtle-afterimage {
+      button .turtle-wake-svg,
+      .car-option .turtle-wake-svg,
+      [data-car-select] .turtle-wake-svg,
+      .car-picker-item .turtle-wake-svg,
+      .vehicle-card .turtle-wake-svg,
+      .fleet-car-svg-wrap .turtle-wake-svg,
+      .vehicle-img-wrap:not(.is-moving) .turtle-wake-svg,
+      body.power-saving .turtle-wake-svg {
         display: none !important;
       }
 
@@ -291,8 +324,8 @@
       }
 
       /* 🐢 烏龜俯視划動 */
-      .vehicle-img-wrap.is-moving[data-car="turtle"] > img:not(.turtle-afterimage) {
-        animation: turtleWaddleTopDown 0.6s ease-in-out infinite alternate;
+      .vehicle-img-wrap.is-moving[data-car="turtle"] > img {
+        animation: turtleWaddleTopDown 0.55s ease-in-out infinite alternate;
       }
       /* ☀️ 千陽號俯視破浪 */
       .vehicle-img-wrap.is-moving[data-car="thousand_sunny"] > img {
@@ -308,8 +341,8 @@
         animation: none !important;
       }
       @keyframes turtleWaddleTopDown {
-        0%   { transform: rotate(-4deg); }
-        100% { transform: rotate(4deg); }
+        0%   { transform: rotate(-4.5deg); }
+        100% { transform: rotate(4.5deg); }
       }
       @keyframes sunnyBobTopDown {
         0%, 100% { transform: translateY(0px) rotate(-1.5deg); }
@@ -359,10 +392,19 @@
     `;
   }
 
-  function getTurtleAfterimageHtml(model) {
+  function getTurtleWakeSvg() {
     return `
-      <img class="turtle-afterimage turtle-afterimage-1" src="${model.src}" alt="" width="${model.width}" height="${model.height}" aria-hidden="true" />
-      <img class="turtle-afterimage turtle-afterimage-2" src="${model.src}" alt="" width="${model.width}" height="${model.height}" aria-hidden="true" />
+      <svg class="turtle-wake-svg" viewBox="0 0 170 205" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path class="turtle-wave-left"
+          d="M38 124 Q85 156 132 124"
+          stroke="#059669" stroke-width="5.5" stroke-linecap="round" />
+        <path class="turtle-wave-right"
+          d="M30 144 Q85 178 140 144"
+          stroke="#10B981" stroke-width="4.5" stroke-linecap="round" />
+        <circle class="turtle-bubble-1" cx="85" cy="154" r="5" fill="#A7F3D0" stroke="#059669" stroke-width="1.5" />
+        <circle class="turtle-bubble-2" cx="68" cy="166" r="6" fill="#D1FAE5" stroke="#10B981" stroke-width="1.5" />
+        <circle class="turtle-bubble-3" cx="102" cy="168" r="5.5" fill="#6EE7B7" stroke="#059669" stroke-width="1.5" />
+      </svg>
     `;
   }
 
@@ -416,7 +458,7 @@
     if (model.id === 'thousand_sunny') {
       effectHtml = getSunnyWakeSvg();
     } else if (model.id === 'turtle') {
-      effectHtml = getTurtleAfterimageHtml(model);
+      effectHtml = getTurtleWakeSvg();
     } else {
       effectHtml = getCarExhaustSvg();
     }

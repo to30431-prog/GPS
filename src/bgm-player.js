@@ -1,43 +1,51 @@
 // ==========================================
 // [Module 11] src/bgm-player.js
-// 耶誕節主題專屬「明亮金屬鍵鐵琴（Glockenspiel）＋ 豐富低音和弦伴奏」合成器（純 Web Audio API，0 外部音檔）
-// - 乾淨透亮金屬鍵鐵琴音色：清晰敲擊瞬態、自然短中延音（0.48s~0.62s）、無重度馬達顫音
-// - 豐富和弦進行（C / Em / Am / F / Dm / Dm7 / G / G7 / D7 / E7），低音域輕柔托底（約為主旋律 38%）不搶高音
+// 耶誕節主題專屬「高音亮晶晶鐵琴（Glockenspiel）＋ 中音域聽得見的和弦」合成器（純 Web Audio API，0 外部音檔）
+// 針對手機外放小喇叭調校（小喇叭約 300Hz 以下幾乎發不出聲，原本 E2~E4 的低音和弦會被吃掉）：
+// - 主旋律：整首移調上移完全四度（C 大調 → F 大調），落在清脆明亮的 C5～D6 高音域
+// - 和弦伴奏：以 C4～G4 為核心的中音域（少數和弦音延伸至 A3/B♭3 以保留完整三和弦色彩），
+//   使用帶奇次泛音的 triangle 清透短促分解和弦，音量約為主旋律 50%，手機外放也聽得見又不搶高音
+// - 金屬鍵敲擊感：起音前 12ms 疊加高八度（2x）與十二度（3x）泛音快速衰減，主音清亮 sine，延音 0.45s~0.65s
 // - 兩首完整版聖誕曲目無限循環：《Jingle Bells》→ 留白 1 秒 →《We Wish You a Merry Christmas》
-// - 常態音量輕柔（0.05），語音播報自動平滑壓低至 15%（Audio Ducking），省電／背景自動暫停
+// - 常態音量輕柔（0.06），語音播報自動平滑壓低至 15%（Audio Ducking），省電／背景自動暫停
 // ==========================================
 
 (function initChristmasGlockenspielBgmPlayer() {
     const STORAGE_KEY = 'yingge_bgm_enabled_v1';
-    const NORMAL_VOLUME = 0.05;  // 輕柔背景陪襯音量（0.04~0.06）
-    const DUCK_RATIO = 0.15;     // 語音播報時平滑壓低至原音量 15%
-    const CHORD_VOL_RATIO = 0.38; // 低音和弦伴奏為主旋律音量的 38%（35%~45%，不搶高音）
-    const CHORD_ROLL_SEC = 0.026; // 輕柔短琶音交錯間隔 26ms
+    const NORMAL_VOLUME = 0.06;   // 輕柔背景陪襯音量（0.05~0.07）
+    const DUCK_RATIO = 0.15;      // 語音播報時平滑壓低至原音量 15%
+    const CHORD_VOL_RATIO = 0.50; // 中音域分解和弦約為主旋律音量 50%
+    const CHORD_ROLL_SEC = 0.022; // 清透短促分解和弦交錯間隔 22ms
+    const MELODY_TRANSPOSE = 5;   // 主旋律上移完全四度（+5 半音）：G4~A5 → C5~D6
 
-    // 完整音名頻率表（Hz）
-    const NOTE_FREQ = {
-        E2: 82.41, F2: 87.31, G2: 98.00, A2: 110.00, B2: 123.47,
-        C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, Fs3: 185.00, G3: 196.00, Gs3: 207.65, A3: 220.00, B3: 246.94,
-        C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, Fs4: 369.99, G4: 392.00, A4: 440.00, B4: 493.88,
-        C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
-        C6: 1046.50
+    // 以 MIDI 公式計算音名頻率（支援 Cs4 / Bb3 這類升降記號），避免手打頻率表出錯
+    const NOTE_INDEX = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+    function noteToFreq(name, transpose = 0) {
+        const m = /^([A-G])(s|b)?(\d)$/.exec(name);
+        if (!m) return 0;
+        let semi = NOTE_INDEX[m[1]];
+        if (m[2] === 's') semi += 1;
+        if (m[2] === 'b') semi -= 1;
+        const midi = (Number(m[3]) + 1) * 12 + semi + transpose;
+        return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+
+    // 中音域分解和弦配置（以譜面原 C 大調和弦功能標記，實際發聲為移調後 F 大調和弦）
+    // 標記 → 實際和弦：C→F、Em→Am、Am→Dm、F→B♭、Dm→Gm、Dm7→Gm7、G→C、G7→C7、D7→G7、E7→A7
+    const CHORD_VOICINGS = {
+        C:   ['A3', 'C4', 'F4'],   // F
+        Em:  ['A3', 'C4', 'E4'],   // Am
+        Am:  ['A3', 'D4', 'F4'],   // Dm
+        F:   ['Bb3', 'D4', 'F4'],  // B♭
+        Dm:  ['Bb3', 'D4', 'G4'],  // Gm
+        Dm7: ['Bb3', 'F4', 'G4'],  // Gm7
+        G:   ['C4', 'E4', 'G4'],   // C
+        G7:  ['Bb3', 'C4', 'E4'],  // C7（E–B♭ 三全音保留屬七張力）
+        D7:  ['B3', 'D4', 'F4'],   // G7
+        E7:  ['Cs4', 'E4', 'G4']   // A7
     };
 
-    // 低中音域乾淨和弦排列（嚴格置於 C3~E4，與 G4~C6 主旋律清楚分層不混濁）
-    const CHORDS = {
-        C:   ['C3', 'G3', 'C4', 'E4'],
-        Em:  ['E3', 'B3', 'E4'],
-        Am:  ['A2', 'E3', 'A3', 'C4'],
-        F:   ['F2', 'C3', 'F3', 'A3'],
-        Dm:  ['D3', 'A3', 'D4'],
-        Dm7: ['D3', 'A3', 'C4', 'F4'],
-        G:   ['G2', 'D3', 'G3', 'B3'],
-        G7:  ['G2', 'D3', 'F3', 'B3'],
-        D7:  ['D3', 'Fs3', 'A3', 'C4'],
-        E7:  ['E2', 'B2', 'D3', 'Gs3']
-    };
-
-    // 1. 完整版《Jingle Bells》（主歌 + 副歌 1 & 2，搭配豐富和弦色彩進行）
+    // 1. 完整版《Jingle Bells》（主歌 + 副歌 1 & 2；譜面以 C 大調記譜，播放時移調 +5）
     const JINGLE_BELLS_NOTES = [
         // 主歌 A (0..31)
         'G4', 'E5', 'D5', 'C5', 'G4', '-', '-', '-',
@@ -61,17 +69,13 @@
         'G5', 'G5', 'F5', 'D5', 'C5', '-', '-', '-'
     ];
     const JINGLE_BELLS_CHORDS = {
-        // 主歌 A：C -> Em -> C -> F -> Dm -> G7 -> G7 -> C
         0: 'C', 4: 'Em', 8: 'C', 12: 'F', 16: 'Dm', 20: 'G7', 24: 'G7', 28: 'C',
-        // 主歌 B：C -> Am -> C -> F -> Dm7 -> G -> G7 -> C -> G7
         32: 'C', 36: 'Am', 40: 'C', 44: 'F', 48: 'Dm7', 52: 'G', 56: 'G7', 60: 'C', 62: 'G7',
-        // 副歌 1：C -> Em -> C -> Am -> F -> C -> Dm -> D7 -> G -> G7
         64: 'C', 68: 'Em', 72: 'C', 76: 'Am', 80: 'F', 84: 'C', 88: 'Dm', 90: 'D7', 92: 'G', 94: 'G7',
-        // 副歌 2：C -> Em -> C -> Am -> F -> C -> Dm -> G7 -> C
         96: 'C', 100: 'Em', 104: 'C', 108: 'Am', 112: 'F', 116: 'C', 120: 'Dm', 122: 'G7', 124: 'C'
     };
 
-    // 2. 完整版《We Wish You a Merry Christmas》（副歌 + 主歌 + 尾聲副歌，搭配完整和弦色彩）
+    // 2. 完整版《We Wish You a Merry Christmas》（副歌 + 主歌 + 尾聲副歌；C 大調記譜，播放時移調 +5）
     const WE_WISH_YOU_NOTES = [
         // 副歌 (0..47)
         'G4', '-', 'C5', '-', 'C5', 'D5', 'C5', 'B4', 'A4', '-', 'A4', '-', 'A4', '-',
@@ -90,11 +94,8 @@
         'A4', '-', 'D5', '-', 'B4', '-', 'C5', '-', '-', '-'
     ];
     const WE_WISH_YOU_CHORDS = {
-        // 副歌：C -> F -> Dm -> D7 -> G -> E7 -> Am -> F -> Dm -> G7 -> C
         2: 'C', 8: 'F', 12: 'Dm', 14: 'D7', 20: 'G', 26: 'E7', 32: 'Am', 38: 'F', 40: 'Dm', 42: 'G7', 44: 'C',
-        // 主歌：C -> Em -> G -> Am -> Dm -> C -> G -> Em -> Am -> F -> G7 -> C
         50: 'C', 54: 'Em', 56: 'G', 60: 'Am', 64: 'Dm', 68: 'C', 72: 'G', 76: 'Em', 80: 'Am', 84: 'F', 88: 'G7', 90: 'C',
-        // 尾聲副歌：C -> F -> Dm -> D7 -> G -> E7 -> Am -> F -> G7 -> C
         98: 'C', 104: 'F', 108: 'Dm', 110: 'D7', 116: 'G', 122: 'E7', 128: 'Am', 134: 'F', 138: 'G7', 140: 'C'
     };
 
@@ -106,7 +107,6 @@
 
     let audioCtx = null;
     let masterGain = null;
-    let reverbNode = null;
     let reverbSendGain = null;
 
     let stepTimer = null;
@@ -137,8 +137,8 @@
         return false;
     }
 
-    // 輕量乾淨空間殘響（約 0.65 秒短自然尾韻，不拖泥帶水）
-    function createCleanRoomImpulse(ctx, durationSec = 0.65, decay = 3.2) {
+    // 輕量乾淨空間殘響（約 0.55 秒短尾韻，維持顆粒分明）
+    function createCleanRoomImpulse(ctx, durationSec = 0.55, decay = 3.4) {
         const rate = ctx.sampleRate;
         const length = Math.floor(rate * durationSec);
         const impulse = ctx.createBuffer(2, length, rate);
@@ -147,8 +147,7 @@
             let lp = 0;
             for (let i = 0; i < length; i++) {
                 const env = Math.pow(1 - i / length, decay);
-                const white = (Math.random() * 2 - 1);
-                lp = lp * 0.65 + white * 0.35;
+                lp = lp * 0.6 + (Math.random() * 2 - 1) * 0.4;
                 data[i] = lp * env;
             }
         }
@@ -169,16 +168,14 @@
                 );
                 masterGain.connect(audioCtx.destination);
 
-                // 輕量空間殘響（濕聲約 16%，讓金屬鍵音色更清透立體）
                 try {
-                    reverbNode = audioCtx.createConvolver();
-                    reverbNode.buffer = createCleanRoomImpulse(audioCtx, 0.65, 3.2);
+                    const reverbNode = audioCtx.createConvolver();
+                    reverbNode.buffer = createCleanRoomImpulse(audioCtx);
                     reverbSendGain = audioCtx.createGain();
-                    reverbSendGain.gain.setValueAtTime(0.16, audioCtx.currentTime);
+                    reverbSendGain.gain.setValueAtTime(0.14, audioCtx.currentTime);
                     reverbSendGain.connect(reverbNode);
                     reverbNode.connect(masterGain);
                 } catch (revErr) {
-                    reverbNode = null;
                     reverbSendGain = null;
                 }
             } catch (e) {
@@ -204,125 +201,67 @@
             if (immediate) {
                 masterGain.gain.setValueAtTime(target, now);
             } else {
-                const timeConst = isVoiceDucking ? 0.06 : 0.16;
-                masterGain.gain.setTargetAtTime(target, now, timeConst);
+                masterGain.gain.setTargetAtTime(target, now, isVoiceDucking ? 0.06 : 0.16);
             }
         } catch (e) {}
     }
 
-    function routeToOutput(node) {
+    function routeToOutput(node, withReverb = true) {
         node.connect(masterGain);
-        if (reverbSendGain) {
-            node.connect(reverbSendGain);
-        }
+        if (withReverb && reverbSendGain) node.connect(reverbSendGain);
     }
 
-    // 明亮清脆「金屬鍵鐵琴（Glockenspiel）」主旋律單音：
-    // - 乾淨透亮、敲擊點清楚（attack 4ms）、自然短中延音（0.52s~0.60s）、無重度馬達顫音
-    function playGlockenspielMelody(freq, releaseSec = 0.56) {
-        if (!audioCtx || !masterGain || !freq) return;
-        const t0 = audioCtx.currentTime;
-        const attack = 0.004;
-
-        // 1. 清亮主基頻 sine
-        const osc1 = audioCtx.createOscillator();
-        const env1 = audioCtx.createGain();
-        osc1.type = 'sine';
-        osc1.frequency.setValueAtTime(freq, t0);
-
-        env1.gain.setValueAtTime(0.0001, t0);
-        env1.gain.linearRampToValueAtTime(0.88, t0 + attack);
-        env1.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + releaseSec);
-
-        osc1.connect(env1);
-        routeToOutput(env1);
-        osc1.start(t0);
-        osc1.stop(t0 + attack + releaseSec + 0.04);
-
-        // 2. 金屬鍵鐵琴特有的清脆高頻敲擊泛音（2.76 倍頻，模擬鐘琴金屬條第二振動模態）
-        const overtoneBar = freq * 2.76;
-        if (overtoneBar < audioCtx.sampleRate * 0.45) {
-            const oscBar = audioCtx.createOscillator();
-            const envBar = audioCtx.createGain();
-            oscBar.type = 'sine';
-            oscBar.frequency.setValueAtTime(overtoneBar, t0);
-
-            envBar.gain.setValueAtTime(0.0001, t0);
-            envBar.gain.linearRampToValueAtTime(0.15, t0 + 0.002);
-            envBar.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
-
-            oscBar.connect(envBar);
-            routeToOutput(envBar);
-            oscBar.start(t0);
-            oscBar.stop(t0 + 0.17);
-        }
-
-        // 3. 極微亮點瞬態（4 倍頻，25ms 快速消散，讓每個音符敲擊顆粒分明）
-        const overtone4 = freq * 4;
-        if (overtone4 < audioCtx.sampleRate * 0.45) {
-            const osc4 = audioCtx.createOscillator();
-            const env4 = audioCtx.createGain();
-            osc4.type = 'sine';
-            osc4.frequency.setValueAtTime(overtone4, t0);
-
-            env4.gain.setValueAtTime(0.0001, t0);
-            env4.gain.linearRampToValueAtTime(0.06, t0 + 0.002);
-            env4.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.032);
-
-            osc4.connect(env4);
-            env4.connect(masterGain);
-            osc4.start(t0);
-            osc4.stop(t0 + 0.045);
-        }
-    }
-
-    // 輕柔低音域和弦伴奏單音（乾淨柔和 sine，極少高頻泛音，絕不搶高音或混濁）
-    function playSoftChordTone(freq, startOffsetSec = 0, ampScale = 0.2, releaseSec = 0.64) {
-        if (!audioCtx || !masterGain || !freq) return;
-        const t0 = audioCtx.currentTime + Math.max(0, startOffsetSec);
-        const attack = 0.012;
-
+    // 建立單一振盪器 + 包絡（共用工具）
+    function scheduleOsc(type, freq, t0, peak, attack, decayEnd, withReverb = true) {
+        if (!freq || freq >= audioCtx.sampleRate * 0.45) return;
         const osc = audioCtx.createOscillator();
         const env = audioCtx.createGain();
-        osc.type = 'sine';
+        osc.type = type;
         osc.frequency.setValueAtTime(freq, t0);
-
         env.gain.setValueAtTime(0.0001, t0);
-        env.gain.linearRampToValueAtTime(ampScale, t0 + attack);
-        env.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + releaseSec);
-
+        env.gain.linearRampToValueAtTime(peak, t0 + attack);
+        env.gain.exponentialRampToValueAtTime(0.0001, t0 + decayEnd);
         osc.connect(env);
-        routeToOutput(env);
+        routeToOutput(env, withReverb);
         osc.start(t0);
-        osc.stop(t0 + attack + releaseSec + 0.04);
+        osc.stop(t0 + decayEnd + 0.03);
     }
 
-    // 輕柔低音和弦短琶音（音量約為主旋律 38%，低音域托底不搶高音）
-    function playAccompanimentChord(chordName) {
-        const chordNotes = CHORDS[chordName];
-        if (!Array.isArray(chordNotes) || chordNotes.length === 0) return;
-        const perNoteAmp = (CHORD_VOL_RATIO / Math.sqrt(chordNotes.length)) * 0.85;
-        chordNotes.forEach((noteName, idx) => {
-            const freq = NOTE_FREQ[noteName];
-            if (freq) {
-                playSoftChordTone(freq, idx * CHORD_ROLL_SEC, perNoteAmp, 0.64);
-            }
+    // 高音亮晶晶金屬鍵鐵琴（Glockenspiel）主旋律單音：
+    // - 主音：清亮 sine，起音 3ms，自然延音約 0.55s
+    // - 起音前 12ms：高八度（2x）＋ 十二度（3x）金屬敲擊泛音快速衰減 → 「叮」的亮點
+    // - 鐘琴金屬條特有 2.76x 非諧波泛音短暫閃現，增添金屬質感
+    function playGlockenspielMelody(freq, releaseSec = 0.55) {
+        if (!audioCtx || !masterGain || !freq) return;
+        const t0 = audioCtx.currentTime;
+        scheduleOsc('sine', freq, t0, 0.80, 0.003, 0.003 + releaseSec);          // 主音
+        scheduleOsc('sine', freq * 2, t0, 0.30, 0.0015, 0.012, false);            // 高八度敲擊（12ms 內消散）
+        scheduleOsc('sine', freq * 3, t0, 0.16, 0.0015, 0.012, false);            // 十二度敲擊（12ms 內消散）
+        scheduleOsc('sine', freq * 2.76, t0, 0.10, 0.002, 0.11);                  // 金屬條非諧波泛音
+    }
+
+    // 中音域清透短促和弦單音：triangle 帶奇次泛音（3x、5x），手機小喇叭也能發出聲音
+    function playMidChordTone(freq, startOffsetSec, peak) {
+        if (!audioCtx || !masterGain || !freq) return;
+        const t0 = audioCtx.currentTime + Math.max(0, startOffsetSec);
+        scheduleOsc('triangle', freq, t0, peak, 0.006, 0.40);
+        scheduleOsc('sine', freq * 2, t0, peak * 0.22, 0.004, 0.14, false);       // 輕微高八度增加穿透力
+    }
+
+    // 清透短促分解和弦（2~3 音，約為主旋律 50% 音量）
+    function playMidRangeChord(chordName) {
+        const voicing = CHORD_VOICINGS[chordName];
+        if (!Array.isArray(voicing) || voicing.length === 0) return;
+        const perNotePeak = (0.80 * CHORD_VOL_RATIO) / Math.sqrt(voicing.length);
+        voicing.forEach((noteName, idx) => {
+            playMidChordTone(noteToFreq(noteName), idx * CHORD_ROLL_SEC, perNotePeak);
         });
     }
 
     function stopTimers() {
-        if (stepTimer !== null) {
-            clearInterval(stepTimer);
-            stepTimer = null;
-        }
-        if (gapTimer !== null) {
-            clearTimeout(gapTimer);
-            gapTimer = null;
-        }
-        if (duckWatchTimer !== null) {
-            clearInterval(duckWatchTimer);
-            duckWatchTimer = null;
-        }
+        if (stepTimer !== null) { clearInterval(stepTimer); stepTimer = null; }
+        if (gapTimer !== null) { clearTimeout(gapTimer); gapTimer = null; }
+        if (duckWatchTimer !== null) { clearInterval(duckWatchTimer); duckWatchTimer = null; }
     }
 
     function startCurrentSongLoop() {
@@ -350,9 +289,7 @@
                 stepIndex = 0;
                 gapTimer = setTimeout(() => {
                     gapTimer = null;
-                    if (isBgmEnabled && !isPausedBySystemState()) {
-                        startCurrentSongLoop();
-                    }
+                    if (isBgmEnabled && !isPausedBySystemState()) startCurrentSongLoop();
                 }, INTER_SONG_GAP_MS);
                 return;
             }
@@ -362,13 +299,10 @@
             const chordName = song.chords && song.chords[curStep];
             stepIndex += 1;
 
-            if (chordName) {
-                playAccompanimentChord(chordName);
-            }
+            if (chordName) playMidRangeChord(chordName);
 
             if (noteName && noteName !== '-') {
-                const freq = NOTE_FREQ[noteName];
-                if (freq) playGlockenspielMelody(freq, 0.56);
+                playGlockenspielMelody(noteToFreq(noteName, MELODY_TRANSPOSE), 0.55);
             }
         };
 
@@ -381,9 +315,7 @@
                 (typeof VoiceQueue !== 'undefined' && VoiceQueue.isSpeaking) ||
                 ('speechSynthesis' in window && window.speechSynthesis && window.speechSynthesis.speaking)
             );
-            if (speakingNow !== isVoiceDucking) {
-                setVoiceDucking(speakingNow);
-            }
+            if (speakingNow !== isVoiceDucking) setVoiceDucking(speakingNow);
         }, 180);
     }
 
@@ -468,9 +400,7 @@
 
     // 行動裝置首次互動解鎖 AudioContext（僅當聖誕主題與音樂皆為開啟時）
     const onFirstUserGesture = () => {
-        if (isBgmEnabled && !isPausedBySystemState()) {
-            unlockAndSync();
-        }
+        if (isBgmEnabled && !isPausedBySystemState()) unlockAndSync();
     };
     ['pointerdown', 'touchstart', 'click'].forEach(evt => {
         document.addEventListener(evt, onFirstUserGesture, { passive: true });

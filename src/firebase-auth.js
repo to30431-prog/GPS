@@ -635,6 +635,10 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
     const createdAtVal = Number(raw.createdAt || base.createdAt || lastSeenVal || 0);
     const updatedAtVal = Number(raw.updatedAt || raw.updatedByAdminAt || base.updatedAt || lastSeenVal || 0);
 
+    const hiddenFromRadarVal = raw.hiddenFromRadar !== undefined
+        ? Boolean(raw.hiddenFromRadar)
+        : Boolean(base.hiddenFromRadar);
+
     return {
         deviceId: devId,
         displayName: displayNameVal,
@@ -647,6 +651,7 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
         canManageRoute: canManageRouteVal,
         canEditCommunity: canEditVal,
         canManageBuildings: canEditVal,
+        hiddenFromRadar: hiddenFromRadarVal,
         lastSeen: lastSeenVal,
         lastActiveAt: lastSeenVal,
         createdAt: createdAtVal,
@@ -709,15 +714,16 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         return;
     }
 
-    // 頂部極簡表頭：左側「成員」，右側對齊「准許」、「路線」、「社區」
+    // 頂部極簡表頭：左側「成員」，右側單行對齊「准許」、「路線」、「社區」、「隱藏」
     const headerRow = document.createElement('div');
-    headerRow.className = 'flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] font-black text-slate-500 border-b border-slate-200 select-none';
+    headerRow.className = 'flex items-center justify-between gap-1.5 px-2 py-1 text-[10px] font-black text-slate-500 border-b border-slate-200 select-none';
     headerRow.innerHTML = `
         <div class="min-w-0 flex-1">成員</div>
-        <div class="flex items-center gap-1.5 flex-shrink-0">
-            <span class="w-[42px] text-center">准許</span>
-            <span class="w-[42px] text-center">路線</span>
-            <span class="w-[42px] text-center">社區</span>
+        <div class="flex items-center gap-1 flex-shrink-0">
+            <span class="w-[34px] text-center">准許</span>
+            <span class="w-[34px] text-center">路線</span>
+            <span class="w-[34px] text-center">社區</span>
+            <span class="w-[34px] text-center text-indigo-600">隱藏</span>
         </div>
     `;
     listContainer.appendChild(headerRow);
@@ -725,7 +731,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     userList.forEach(user => {
         const targetDeviceId = user.deviceId;
         const isSelf = (targetDeviceId === fleetDeviceId);
-        // 統一讀取與寫入完全相同的欄位（approved / blocked / canManageRoute / canEditCommunity / realName）
+        // 統一讀取與寫入完全相同的欄位（approved / blocked / canManageRoute / canEditCommunity / hiddenFromRadar / realName）
         const isBlocked = Boolean(user.blocked !== undefined ? user.blocked : user.isBlocked);
         const isApproved = !isBlocked && (user.approved !== undefined ? Boolean(user.approved) : Boolean(user.isApproved));
         const isPending = !isApproved && !isBlocked;
@@ -733,6 +739,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         const canEditCommunity = !isBlocked && Boolean(
             user.canEditCommunity !== undefined ? user.canEditCommunity : user.canManageBuildings
         );
+        const isHiddenFromRadar = Boolean(user.hiddenFromRadar);
         const annotatedRealName = String(user.realName || user.originalName || '').trim();
         const displayNickname = String(user.displayName || '隊員').trim();
 
@@ -777,6 +784,9 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         const selfBadgeHtml = isSelf
             ? `<span class="px-1 py-0 rounded text-[9px] font-black bg-indigo-100 text-indigo-700 leading-tight flex-shrink-0">本機</span>`
             : '';
+        const hiddenBadgeHtml = isHiddenFromRadar
+            ? `<span class="px-1 py-0 rounded text-[9px] font-black bg-slate-200 text-slate-700 leading-tight flex-shrink-0" title="已對其他隊員隱藏雷達位置">👻</span>`
+            : '';
 
         const line1 = document.createElement('div');
         line1.className = 'flex items-center gap-1 min-w-0 leading-tight';
@@ -785,6 +795,7 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             <span class="text-xs font-black text-slate-900 truncate">${escapeHtmlSafe(primaryName)}</span>
             ${nicknameSuffixHtml}
             ${selfBadgeHtml}
+            ${hiddenBadgeHtml}
         `;
 
         const line2 = document.createElement('div');
@@ -823,20 +834,20 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         leftCol.appendChild(line1);
         leftCol.appendChild(line2);
 
-        // 右側：3 顆迷你切換開關橫向並排（對應表頭「准許」、「路線」、「社區」）
+        // 右側：4 顆迷你切換開關單行並排（對應表頭「准許」、「路線」、「社區」、「隱藏」）
         const rightToggles = document.createElement('div');
-        rightToggles.className = 'flex items-center gap-1.5 flex-shrink-0';
+        rightToggles.className = 'flex items-center gap-1 flex-shrink-0';
 
         // 開關 1：「准許（准許使用／封鎖）」(控制 approved，同步 blocked: !approved)
         const accessCell = document.createElement('div');
-        accessCell.className = 'w-[42px] flex items-center justify-center';
+        accessCell.className = 'w-[34px] flex items-center justify-center';
         const accessSwitchBtn = document.createElement('button');
         accessSwitchBtn.type = 'button';
         accessSwitchBtn.title = '准許使用／封鎖';
         accessSwitchBtn.setAttribute('role', 'switch');
         accessSwitchBtn.setAttribute('aria-checked', isApproved ? 'true' : 'false');
         accessSwitchBtn.className = `admin-user-toggle-switch ${isApproved ? 'is-on' : 'is-off'}`;
-        accessSwitchBtn.style.transform = 'scale(0.76)';
+        accessSwitchBtn.style.transform = 'scale(0.68)';
         accessSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleApprovedAccess = async (e) => {
@@ -880,14 +891,14 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
         // 開關 2：「路線（路線管理含社區）」(控制 canManageRoute)
         const routeCell = document.createElement('div');
-        routeCell.className = 'w-[42px] flex items-center justify-center';
+        routeCell.className = 'w-[34px] flex items-center justify-center';
         const routeSwitchBtn = document.createElement('button');
         routeSwitchBtn.type = 'button';
         routeSwitchBtn.title = '路線管理（含社區）';
         routeSwitchBtn.setAttribute('role', 'switch');
         routeSwitchBtn.setAttribute('aria-checked', canManageRoute ? 'true' : 'false');
         routeSwitchBtn.className = `admin-user-toggle-switch ${canManageRoute ? 'is-on' : 'is-off'}`;
-        routeSwitchBtn.style.transform = 'scale(0.76)';
+        routeSwitchBtn.style.transform = 'scale(0.68)';
         routeSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleRouteManagerAuth = async (e) => {
@@ -924,14 +935,14 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
         // 開關 3：「社區（僅社區標註）」(控制 canEditCommunity)
         const bldgCell = document.createElement('div');
-        bldgCell.className = 'w-[42px] flex items-center justify-center';
+        bldgCell.className = 'w-[34px] flex items-center justify-center';
         const toggleSwitchBtn = document.createElement('button');
         toggleSwitchBtn.type = 'button';
         toggleSwitchBtn.title = '僅社區標註';
         toggleSwitchBtn.setAttribute('role', 'switch');
         toggleSwitchBtn.setAttribute('aria-checked', canEditCommunity ? 'true' : 'false');
         toggleSwitchBtn.className = `admin-user-toggle-switch ${canEditCommunity ? 'is-on' : 'is-off'}`;
-        toggleSwitchBtn.style.transform = 'scale(0.76)';
+        toggleSwitchBtn.style.transform = 'scale(0.68)';
         toggleSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleCommunityAuth = async (e) => {
@@ -967,9 +978,45 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         toggleSwitchBtn.addEventListener('click', handleToggleCommunityAuth);
         bldgCell.appendChild(toggleSwitchBtn);
 
+        // 開關 4：「隱藏（隱身雷達）」(控制 hiddenFromRadar，對他人完全隱藏車標與在線統計，自身操作與管理員列表不受影響)
+        const hiddenCell = document.createElement('div');
+        hiddenCell.className = 'w-[34px] flex items-center justify-center';
+        const hiddenSwitchBtn = document.createElement('button');
+        hiddenSwitchBtn.type = 'button';
+        hiddenSwitchBtn.title = '隱身雷達（對其他隊員隱藏車標與上線狀態）';
+        hiddenSwitchBtn.setAttribute('role', 'switch');
+        hiddenSwitchBtn.setAttribute('aria-checked', isHiddenFromRadar ? 'true' : 'false');
+        hiddenSwitchBtn.className = `admin-user-toggle-switch ${isHiddenFromRadar ? 'is-on' : 'is-off'}`;
+        hiddenSwitchBtn.style.transform = 'scale(0.68)';
+        hiddenSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
+
+        const handleToggleHiddenFromRadar = async (e) => {
+            e.stopPropagation();
+            if (hiddenSwitchBtn.disabled) return;
+            hiddenSwitchBtn.disabled = true;
+            try { navigator.vibrate?.(25); } catch (err) {}
+
+            const nextHidden = !isHiddenFromRadar;
+            const ok = await updateCloudFleetUserFields(targetDeviceId, {
+                hiddenFromRadar: Boolean(nextHidden),
+                updatedAt: Date.now()
+            });
+            if (ok) {
+                showAdminUserActionToast(
+                    nextHidden
+                        ? `👻 已開啟「${annotatedRealName || user.displayName}」雷達隱身（對他人不可見）`
+                        : `👁️ 已關閉「${annotatedRealName || user.displayName}」雷達隱身（恢復顯示）`,
+                    nextHidden ? 'info' : 'success'
+                );
+            }
+        };
+        hiddenSwitchBtn.addEventListener('click', handleToggleHiddenFromRadar);
+        hiddenCell.appendChild(hiddenSwitchBtn);
+
         rightToggles.appendChild(accessCell);
         rightToggles.appendChild(routeCell);
         rightToggles.appendChild(bldgCell);
+        rightToggles.appendChild(hiddenCell);
 
         mainRow.appendChild(leftCol);
         mainRow.appendChild(rightToggles);
@@ -1207,6 +1254,9 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         const val = Boolean(patchFields.blocked !== undefined ? patchFields.blocked : patchFields.isBlocked);
         syncedPatch.blocked = val;
         syncedPatch.isBlocked = val;
+    }
+    if (patchFields.hiddenFromRadar !== undefined) {
+        syncedPatch.hiddenFromRadar = Boolean(patchFields.hiddenFromRadar);
     }
 
     // 1. 先更新前端 UI 狀態讓滑動開關流暢切換

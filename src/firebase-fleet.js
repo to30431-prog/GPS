@@ -1572,6 +1572,9 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
         speedKmh: currentSpeedRounded,
         speed: currentSpeedRounded,
         carType: (typeof getMyCarType === 'function') ? getMyCarType() : 'garbage_yellow',
+        ...(myCloudUserProfile && myCloudUserProfile.hiddenFromRadar !== undefined
+            ? { hiddenFromRadar: Boolean(myCloudUserProfile.hiddenFromRadar) }
+            : {}),
         updatedAt: now
     };
 
@@ -1835,6 +1838,10 @@ async function fetchAndRenderFleetRadar() {
         if (data && typeof data === 'object') {
             Object.entries(data).forEach(([devId, info]) => {
                 if (!info || devId === fleetDeviceId) return; // 排除自己
+                // 👻 雷達隱身過濾：hiddenFromRadar === true 者對所有其他使用者完全不可見（不顯示車標、不列在線名單、不計入在線人數）
+                if (info.hiddenFromRadar === true || (typeof allCloudFleetUsersMap === 'object' && allCloudFleetUsersMap && allCloudFleetUsersMap[devId]?.hiddenFromRadar === true)) {
+                    return;
+                }
                 const lat = Number(info.lat);
                 const lng = Number(info.lng);
                 const updatedAt = typeof info.updatedAt === 'number'

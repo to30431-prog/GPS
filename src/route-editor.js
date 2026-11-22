@@ -2831,6 +2831,7 @@ function cancelActiveManualFreehandStroke() {
     manualFreehandStrokeCoords = [];
     updateFreehandTempLayer([]);
     try { map.dragPan.enable(); } catch (e) {}
+    try { map.touchZoomRotate.enable(); } catch (e) {}
 }
 
 function commitManualFreehandStroke() {
@@ -3108,13 +3109,50 @@ if (btnManualSave) {
         }
     }
 
-    // 觸控：單指按住自由畫橘色線，雙指自動取消筆畫並允許縮放／平移地圖
+    let isManualMultiTouchGesture = false;
+    let lastTwoFingerMidX = null;
+    let lastTwoFingerMidY = null;
+
+    function getTwoFingerMidpoint(touches) {
+        if (!touches || touches.length < 2) return null;
+        return {
+            x: (touches[0].clientX + touches[1].clientX) / 2,
+            y: (touches[0].clientY + touches[1].clientY) / 2
+        };
+    }
+
+    function resetManualMultiTouchState() {
+        isManualMultiTouchGesture = false;
+        lastTwoFingerMidX = null;
+        lastTwoFingerMidY = null;
+    }
+
+    function enterManualMultiTouchNav(touches) {
+        isManualMultiTouchGesture = true;
+        if (isManualFreehandStrokeActive) {
+            cancelActiveManualFreehandStroke();
+        }
+        try { map.dragPan.enable(); } catch (err) {}
+        try { map.touchZoomRotate.enable(); } catch (err) {}
+        const mid = getTwoFingerMidpoint(touches);
+        if (mid) {
+            lastTwoFingerMidX = mid.x;
+            lastTwoFingerMidY = mid.y;
+        }
+    }
+
+    // 觸控：僅單指按住拖曳時停用 dragPan 畫橘色線；一旦偵測雙指／多指立即中止未完成單指筆畫並啟用雙指平移與縮放
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isManualDrawingMode) return;
-        if (!e.touches || e.touches.length !== 1) {
-            if (isManualFreehandStrokeActive) cancelActiveManualFreehandStroke();
+        if (!e.touches || e.touches.length === 0) return;
+
+        if (e.touches.length >= 2) {
+            enterManualMultiTouchNav(e.touches);
             return;
         }
+
+        // 若剛從雙指抬起一指，等待所有手指離開螢幕再允許下一筆單指繪圖
+        if (isManualMultiTouchGesture) return;
         if (isIgnoredDrawTarget(e.target)) return;
 
         const touch = e.touches[0];
@@ -3124,15 +3162,35 @@ if (btnManualSave) {
         isManualFreehandStrokeActive = true;
         manualFreehandStrokeCoords = [coord];
         try { map.dragPan.disable(); } catch (err) {}
-        updateFreehandTempLayer(manualFreehandStrokeCoords);
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
-        if (!isManualDrawingMode || !isManualFreehandStrokeActive) return;
-        if (!e.touches || e.touches.length !== 1) {
-            cancelActiveManualFreehandStroke();
+        if (!isManualDrawingMode) return;
+        if (!e.touches || e.touches.length === 0) return;
+
+        // 雙指／多指手勢：立即確保中止單指繪圖並啟用 dragPan + touchZoomRotate，並以雙指中心點位移補齊平移（防止首指曾短暫停用 dragPan 導致 MapLibre 漏接雙指平移）
+        if (e.touches.length >= 2) {
+            if (!isManualMultiTouchGesture || isManualFreehandStrokeActive) {
+                enterManualMultiTouchNav(e.touches);
+                return;
+            }
+            const mid = getTwoFingerMidpoint(e.touches);
+            if (mid && lastTwoFingerMidX !== null && lastTwoFingerMidY !== null) {
+                const dx = mid.x - lastTwoFingerMidX;
+                const dy = mid.y - lastTwoFingerMidY;
+                const dragPanActive = Boolean(map.dragPan && typeof map.dragPan.isActive === 'function' && map.dragPan.isActive());
+                if (!dragPanActive && (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2)) {
+                    try { map.panBy([-dx, -dy], { animate: false }); } catch (err) {}
+                }
+            }
+            if (mid) {
+                lastTwoFingerMidX = mid.x;
+                lastTwoFingerMidY = mid.y;
+            }
             return;
         }
+
+        if (isManualMultiTouchGesture || !isManualFreehandStrokeActive) return;
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
 
@@ -3140,14 +3198,42 @@ if (btnManualSave) {
         pushStrokePoint(clientXYToLngLat(touch.clientX, touch.clientY));
     }, { passive: false });
 
-    canvasContainer.addEventListener('touchend', () => {
-        if (!isManualDrawingMode || !isManualFreehandStrokeActive) return;
-        commitManualFreehandStroke();
+    canvasContainer.addEventListener('touchend', (e) => {
+        if (!isManualDrawingMode) return;
+        const remaining = e.touches ? e.touches.length : 0;
+
+        if (isManualMultiTouchGesture) {
+            if (remaining === 0) {
+                resetManualMultiTouchState();
+                isManualFreehandStrokeActive = false;
+                manualFreehandStrokeCoords = [];
+                updateFreehandTempLayer([]);
+                try { map.dragPan.enable(); } catch (err) {}
+                try { map.touchZoomRotate.enable(); } catch (err) {}
+            } else if (remaining < 2) {
+                lastTwoFingerMidX = null;
+                lastTwoFingerMidY = null;
+            }
+            return;
+        }
+
+        if (remaining === 0 && isManualFreehandStrokeActive) {
+            commitManualFreehandStroke();
+        }
     }, { passive: true });
 
-    canvasContainer.addEventListener('touchcancel', () => {
-        if (!isManualDrawingMode || !isManualFreehandStrokeActive) return;
-        cancelActiveManualFreehandStroke();
+    canvasContainer.addEventListener('touchcancel', (e) => {
+        if (!isManualDrawingMode) return;
+        const remaining = e.touches ? e.touches.length : 0;
+        if (remaining === 0) {
+            resetManualMultiTouchState();
+        }
+        if (isManualFreehandStrokeActive) {
+            cancelActiveManualFreehandStroke();
+        } else {
+            try { map.dragPan.enable(); } catch (err) {}
+            try { map.touchZoomRotate.enable(); } catch (err) {}
+        }
     }, { passive: true });
 
     // 滑鼠左鍵：按住拖曳自由畫橘色線，放開即轉為軌跡並恢復 dragPan

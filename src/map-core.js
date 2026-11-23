@@ -1356,6 +1356,7 @@ map.on('rotate', () => {
         ? vehicleVisualHeading
         : currentHeading;
     window.syncCarHeading?.(activeHeading, map.getBearing());
+    window.syncAllFleetMarkersHeading?.(true);
 });
 
 map.on('style.load', () => {

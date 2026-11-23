@@ -1378,6 +1378,7 @@ let currentFleetLat = null;
 let currentFleetLng = null;
 let lastUploadedFleetLat = null;
 let lastUploadedFleetLng = null;
+let lastUploadedFleetHeading = null;
 let lastFleetUploadTime = 0;
 let fleetRadarStarted = false;
 let fleetPollTimer = null;
@@ -1580,6 +1581,30 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
     lastFleetUploadTime = now;
     isUploadingFleetLocation = true;
 
+    // 計算並補齊有效航向角（Heading）：位移超過 3 公尺時優先以上一筆有效座標計算實際方位角，否則沿用 GPS 航向或上次有效角度
+    let resolvedHeading = lastUploadedFleetHeading;
+    if (prevLat !== null && prevLng !== null && typeof getDistanceKm === 'function' && typeof getBearing === 'function') {
+        const movedMeters = getDistanceKm(prevLng, prevLat, lng, lat) * 1000;
+        if (movedMeters > 3) {
+            const calcH = getBearing(prevLng, prevLat, lng, lat);
+            if (typeof calcH === 'number' && isFinite(calcH)) {
+                resolvedHeading = calcH;
+            }
+        }
+    }
+    if (typeof resolvedHeading !== 'number' || !isFinite(resolvedHeading)) {
+        if (typeof lastRealGpsHeading === 'number' && isFinite(lastRealGpsHeading)) {
+            resolvedHeading = lastRealGpsHeading;
+        } else if (typeof currentHeading === 'number' && isFinite(currentHeading)) {
+            resolvedHeading = currentHeading;
+        }
+    }
+    let normalizedHeading = null;
+    if (typeof resolvedHeading === 'number' && isFinite(resolvedHeading)) {
+        normalizedHeading = Number((((resolvedHeading % 360) + 360) % 360).toFixed(1));
+        lastUploadedFleetHeading = normalizedHeading;
+    }
+
     const currentSpeedRounded = Math.round(Math.max(0, lastRecordedSpeedKmh || 0));
     const payload = {
         name: fleetUserName,
@@ -1587,6 +1612,7 @@ async function uploadMyFleetLocation(lat, lng, forceUpload = false) {
         lng: Number(lng.toFixed(6)),
         speedKmh: currentSpeedRounded,
         speed: currentSpeedRounded,
+        ...(normalizedHeading !== null ? { heading: normalizedHeading } : {}),
         carType: (typeof getMyCarType === 'function') ? getMyCarType() : 'garbage_yellow',
         ...(myCloudUserProfile && myCloudUserProfile.hiddenFromRadar !== undefined
             ? { hiddenFromRadar: Boolean(myCloudUserProfile.hiddenFromRadar) }
@@ -1729,7 +1755,46 @@ function getFleetStaleStatus(updatedAt, now = Date.now()) {
     return { isStale, isOver30s, isExceededMaxMinutes, staleMinutes, staleText, elapsedMs };
 }
 
-function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now(), peerCarType = null, peerIsMoving = false) {
+// 🧭 依隊友實際移動方位角減去地圖旋轉角 (map.getBearing()) 與車模基準角，平滑旋轉隊友車標
+function applyFleetMarkerHeadingRotation(el, worldHeadingDeg, peerCarType = 'garbage_yellow', immediate = false) {
+    if (!el || typeof worldHeadingDeg !== 'number' || !isFinite(worldHeadingDeg)) return;
+    const rotatorEl = el.querySelector('.vehicle-heading-rotator');
+    if (!rotatorEl) return;
+
+    const mapBearing = (typeof map !== 'undefined' && map && typeof map.getBearing === 'function')
+        ? (Number(map.getBearing()) || 0)
+        : 0;
+    const model = (window.CAR_MODELS && peerCarType && window.CAR_MODELS[peerCarType])
+        ? window.CAR_MODELS[peerCarType]
+        : null;
+    const baseAngle = (model && typeof model.baseAngle === 'number') ? model.baseAngle : 0;
+    const targetDeg = worldHeadingDeg - mapBearing - baseAngle;
+
+    const prevRaw = el.dataset.appliedRotationDeg;
+    let nextApplied;
+    if (prevRaw === undefined || prevRaw === '' || isNaN(Number(prevRaw))) {
+        nextApplied = ((targetDeg % 360) + 360) % 360;
+        if (nextApplied > 180) nextApplied -= 360;
+    } else {
+        const prevApplied = Number(prevRaw);
+        const delta = ((targetDeg - prevApplied + 540) % 360) - 180;
+        nextApplied = prevApplied + delta;
+    }
+    el.dataset.appliedRotationDeg = String(nextApplied);
+    rotatorEl.style.transition = immediate ? 'none' : 'transform 0.35s ease-out';
+    rotatorEl.style.transform = `rotate(${nextApplied.toFixed(1)}deg)`;
+}
+
+window.syncAllFleetMarkersHeading = function(immediate = true) {
+    if (typeof fleetLayerGroup !== 'object' || !fleetLayerGroup) return;
+    Object.values(fleetLayerGroup).forEach(entry => {
+        if (entry && entry.el && typeof entry.heading === 'number' && isFinite(entry.heading)) {
+            applyFleetMarkerHeadingRotation(entry.el, entry.heading, entry.carType, immediate);
+        }
+    });
+};
+
+function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.now(), peerCarType = null, peerIsMoving = false, peerHeadingDeg = null) {
     if (!el) return;
     const cleanName = (memberName || '隊員').trim();
     const { isStale, staleText } = getFleetStaleStatus(updatedAt, now);
@@ -1749,7 +1814,8 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
             ? peerCarType
             : (el.dataset.carType || 'garbage_yellow');
         const effectiveMoving = !isStale && Boolean(peerIsMoving) && !document.body.classList.contains('power-saving');
-        if (el.dataset.carType !== effectiveCarType || !carWrap.firstElementChild) {
+        const rebuilt = (el.dataset.carType !== effectiveCarType || !carWrap.firstElementChild);
+        if (rebuilt) {
             el.dataset.carType = effectiveCarType;
             carWrap.innerHTML = getCarSvg(effectiveCarType, effectiveMoving);
             const stageEl = carWrap.querySelector('.vehicle-puck-stage');
@@ -1761,7 +1827,6 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
             if (rotatorEl) {
                 rotatorEl.style.width = '48px';
                 rotatorEl.style.height = '48px';
-                rotatorEl.style.transform = 'rotate(0deg)';
             }
             const svgEl = carWrap.querySelector('svg');
             if (svgEl) {
@@ -1783,6 +1848,9 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
             animEls.forEach((animEl) => {
                 animEl.classList.toggle('is-moving', effectiveMoving);
             });
+        }
+        if (typeof peerHeadingDeg === 'number' && isFinite(peerHeadingDeg)) {
+            applyFleetMarkerHeadingRotation(el, peerHeadingDeg, effectiveCarType, rebuilt);
         }
         carWrap.querySelectorAll('.turtle-anim-el').forEach((anim) => {
             try {
@@ -1874,7 +1942,7 @@ function renderOnlineFleetListUI() {
     }
 }
 
-function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerCarType = 'garbage_yellow', peerIsMoving = false) {
+function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerCarType = 'garbage_yellow', peerIsMoving = false, peerHeadingDeg = 0) {
     const wrapper = document.createElement('div');
     wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
     wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
@@ -1884,7 +1952,7 @@ function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerC
         </div>
         <div class="fleet-car-svg-wrap w-12 h-12 flex items-center justify-center"></div>
     `;
-    updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt, Date.now(), peerCarType, peerIsMoving);
+    updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt, Date.now(), peerCarType, peerIsMoving, peerHeadingDeg);
     return wrapper;
 }
 
@@ -1954,6 +2022,25 @@ async function fetchAndRenderFleetRadar() {
                     : 'garbage_yellow';
                 const peerIsMoving = !isStaleMember && memberSpeedKmh > 1.8;
 
+                // 計算隊友實際行進方位角：位移超過 3 公尺優先以「上一筆座標 -> 最新座標」計算；靜止時維持上次有效朝向不歸零
+                const rawCloudHeading = (typeof info.heading === 'number' && isFinite(info.heading)) ? info.heading : null;
+                let peerHeading = (existingEntry && typeof existingEntry.heading === 'number' && isFinite(existingEntry.heading))
+                    ? existingEntry.heading
+                    : (rawCloudHeading !== null ? rawCloudHeading : 0);
+
+                if (existingEntry && typeof existingEntry.lastLat === 'number' && typeof existingEntry.lastLng === 'number') {
+                    const movedMeters = getDistanceKm(existingEntry.lastLng, existingEntry.lastLat, lng, lat) * 1000;
+                    if (movedMeters > 3 && typeof getBearing === 'function') {
+                        const calcBearing = getBearing(existingEntry.lastLng, existingEntry.lastLat, lng, lat);
+                        if (typeof calcBearing === 'number' && isFinite(calcBearing)) {
+                            peerHeading = calcBearing;
+                        }
+                    } else if (!isStaleMember && memberSpeedKmh > 1.8 && rawCloudHeading !== null) {
+                        peerHeading = rawCloudHeading;
+                    }
+                }
+                peerHeading = (((peerHeading % 360) + 360) % 360);
+
                 if (existingEntry) {
                     existingEntry.marker.setLngLat([lng, lat]);
                     existingEntry.name = memberName;
@@ -1962,9 +2049,10 @@ async function fetchAndRenderFleetRadar() {
                     existingEntry.lastUpdatedAt = updatedAt;
                     existingEntry.speedKmh = memberSpeedKmh;
                     existingEntry.carType = peerCarType;
-                    updateFleetTruckMarkerAppearance(existingEntry.el, memberName, updatedAt, now, peerCarType, peerIsMoving);
+                    existingEntry.heading = peerHeading;
+                    updateFleetTruckMarkerAppearance(existingEntry.el, memberName, updatedAt, now, peerCarType, peerIsMoving, peerHeading);
                 } else {
-                    const el = createFleetTruckMarkerElement(memberName, updatedAt, peerCarType, peerIsMoving);
+                    const el = createFleetTruckMarkerElement(memberName, updatedAt, peerCarType, peerIsMoving, peerHeading);
                     const marker = new maplibregl.Marker({
                         element: el,
                         anchor: 'bottom',
@@ -1981,7 +2069,8 @@ async function fetchAndRenderFleetRadar() {
                         lastLng: lng,
                         lastUpdatedAt: updatedAt,
                         speedKmh: memberSpeedKmh,
-                        carType: peerCarType
+                        carType: peerCarType,
+                        heading: peerHeading
                     };
                 }
 

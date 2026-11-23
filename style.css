@@ -958,22 +958,46 @@ input, textarea {
 }
 
 /* ==========================================
-   🔒 鶯歌清運路線庫列表：長按 0.5 秒防誤拉鎖定與解鎖高亮回饋 (v3.27)
+   🔒 鶯歌清運路線庫列表：觸碰拖曳排序滑順化與佔位／浮動樣式
    ========================================== */
 .drag-handle {
-    touch-action: pan-y;
+    touch-action: none !important;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+#historyList.is-sorting-routes {
+    touch-action: none !important;
+    overscroll-behavior: contain;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .route-card-drag-unlocked {
-    transform: scale(1.025) translateY(-2px);
-    box-shadow: 0 16px 32px rgba(37, 99, 235, 0.26), 0 0 0 2.5px #3b82f6 !important;
+    box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22), 0 0 0 2px #3b82f6 !important;
     border-color: #3b82f6 !important;
-    background-color: #eff6ff !important;
     z-index: 30;
-    transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1.2), box-shadow 0.15s ease;
+}
+
+.route-card-drag-ghost {
+    opacity: 0.32 !important;
+    border: 2px dashed #3b82f6 !important;
+    background: rgba(219, 234, 254, 0.55) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+.route-card-drag-fallback {
+    opacity: 0.96 !important;
+    box-shadow: 0 18px 36px rgba(37, 99, 235, 0.28), 0 0 0 2px #3b82f6 !important;
+    border-color: #3b82f6 !important;
+    will-change: transform;
+    pointer-events: none !important;
+    z-index: 9999 !important;
+    transition: none !important;
 }
 
 /* ==========================================
@@ -1368,6 +1392,22 @@ body.power-saving {
 }
 #cloudRoutesModal .route-lib-sub-text {
     color: var(--lib-sub-text) !important;
+}
+#cloudRoutesModal .route-lib-count-badge {
+    color: #1e293b !important;
+}
+body.theme-christmas #cloudRoutesModal .route-lib-count-badge,
+body[data-theme="christmas"] #cloudRoutesModal .route-lib-count-badge {
+    color: #7f1d1d !important;
+}
+body.theme-night #cloudRoutesModal .route-lib-count-badge,
+body.theme-dark #cloudRoutesModal .route-lib-count-badge,
+body[data-theme="night"] #cloudRoutesModal .route-lib-count-badge,
+body[data-theme="dark"] #cloudRoutesModal .route-lib-count-badge {
+    color: #e2e8f0 !important;
+}
+body.power-saving #cloudRoutesModal .route-lib-count-badge {
+    color: #ffffff !important;
 }
 #historyModal .route-lib-icon-btn,
 #cloudRoutesModal .route-lib-icon-btn {

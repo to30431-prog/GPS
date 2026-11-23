@@ -379,9 +379,79 @@ if (clearSearchBtn) {
     };
 }
 
+let historyDragAutoScrollRaf = null;
+let historyDragPointerY = null;
+let historyDragTouchMoveHandler = null;
+let historyDragPointerMoveHandler = null;
+
+function stopHistoryDragAutoScroll(listEl) {
+    if (historyDragAutoScrollRaf !== null) {
+        cancelAnimationFrame(historyDragAutoScrollRaf);
+        historyDragAutoScrollRaf = null;
+    }
+    historyDragPointerY = null;
+    if (historyDragTouchMoveHandler) {
+        window.removeEventListener('touchmove', historyDragTouchMoveHandler, { passive: false });
+        historyDragTouchMoveHandler = null;
+    }
+    if (historyDragPointerMoveHandler) {
+        window.removeEventListener('pointermove', historyDragPointerMoveHandler);
+        historyDragPointerMoveHandler = null;
+    }
+    if (listEl) {
+        listEl.classList.remove('is-sorting-routes');
+    }
+}
+
+function startHistoryDragAutoScroll(listEl) {
+    stopHistoryDragAutoScroll(listEl);
+    if (!listEl) return;
+    listEl.classList.add('is-sorting-routes');
+
+    historyDragTouchMoveHandler = (e) => {
+        if (e.touches && e.touches.length > 0) {
+            historyDragPointerY = e.touches[0].clientY;
+        }
+        // 拖曳排序時鎖定背景清單原生捲動，避免手指移動與捲動衝突導致卡頓或跳頁
+        if (e.cancelable) {
+            e.preventDefault();
+        }
+    };
+    historyDragPointerMoveHandler = (e) => {
+        if (typeof e.clientY === 'number') {
+            historyDragPointerY = e.clientY;
+        }
+    };
+    window.addEventListener('touchmove', historyDragTouchMoveHandler, { passive: false });
+    window.addEventListener('pointermove', historyDragPointerMoveHandler, { passive: true });
+
+    const edgeZonePx = 68;
+    const maxStepPx = 14;
+    const tick = () => {
+        if (historyDragPointerY !== null && listEl.isConnected) {
+            const rect = listEl.getBoundingClientRect();
+            const distTop = historyDragPointerY - rect.top;
+            const distBottom = rect.bottom - historyDragPointerY;
+            if (distTop < edgeZonePx && listEl.scrollTop > 0) {
+                const ratio = Math.min(1, Math.max(0, (edgeZonePx - distTop) / edgeZonePx));
+                listEl.scrollTop = Math.max(0, listEl.scrollTop - Math.max(2, Math.round(ratio * maxStepPx)));
+            } else if (distBottom < edgeZonePx) {
+                const maxScrollTop = listEl.scrollHeight - listEl.clientHeight;
+                if (listEl.scrollTop < maxScrollTop) {
+                    const ratio = Math.min(1, Math.max(0, (edgeZonePx - distBottom) / edgeZonePx));
+                    listEl.scrollTop = Math.min(maxScrollTop, listEl.scrollTop + Math.max(2, Math.round(ratio * maxStepPx)));
+                }
+            }
+        }
+        historyDragAutoScrollRaf = requestAnimationFrame(tick);
+    };
+    historyDragAutoScrollRaf = requestAnimationFrame(tick);
+}
+
 function renderHistoryList() {
     const list = document.getElementById('historyList');
     if (!list) return;
+    stopHistoryDragAutoScroll(list);
     list.innerHTML = '';
 
     // 每次讀取並渲染「鶯歌清運路線庫」本機清單時，自動執行去重過濾並寫回儲存空間清除重複殘留
@@ -427,9 +497,10 @@ function renderHistoryList() {
             : { hasUpdate: false, localVer: getRouteVersion(r) };
 
         const card = document.createElement('div');
+        card.dataset.routeIdx = String(originalIdx);
         card.className = updateInfo.hasUpdate
-            ? "route-lib-card route-lib-card-has-update bg-gradient-to-r from-white to-orange-50/50 p-2.5 rounded-2xl shadow-md border-2 border-orange-300 flex items-stretch gap-2 active:scale-[0.99] transition-transform"
-            : "route-lib-card bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-2 active:scale-[0.99] transition-transform";
+            ? "route-lib-card route-lib-card-has-update bg-gradient-to-r from-white to-orange-50/50 p-2.5 rounded-2xl shadow-md border-2 border-orange-300 flex items-stretch gap-1.5 transition-transform"
+            : "route-lib-card bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-1.5 transition-transform";
 
         const authorTag = r.author
             ? `<span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>`
@@ -444,8 +515,8 @@ function renderHistoryList() {
             : `<div class="route-lib-date text-xs text-gray-400 mt-0.5 mb-1">${r.date || ''}</div>`;
 
         card.innerHTML = `
-            <div class="drag-handle text-gray-300 w-7 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0" title="長按 0.5 秒解鎖拖曳排序">
-                <i class="fa-solid fa-grip-vertical text-xl"></i>
+            <div class="drag-handle text-gray-300 w-11 min-h-[44px] -ml-1.5 -my-1.5 px-2 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0 rounded-l-2xl" title="按住拖曳排序">
+                <i class="fa-solid fa-grip-vertical text-xl pointer-events-none"></i>
             </div>
             <div class="route-card-info flex-1 min-w-0 py-1 cursor-pointer">
                 <div class="route-lib-title font-black text-gray-900 text-base flex items-center gap-1.5 flex-wrap">
@@ -477,16 +548,22 @@ function renderHistoryList() {
             </div>
         `;
 
-        card.querySelector('.route-card-info').onclick = () => window.openRouteDetail(originalIdx);
+        card.querySelector('.route-card-info').onclick = () => {
+            const idx = Number(card.dataset.routeIdx);
+            if (!isNaN(idx)) window.openRouteDetail(idx);
+        };
         const editNameBtn = card.querySelector('.edit-name-btn');
         if (editNameBtn) {
             editNameBtn.onclick = (e) => {
                 e.stopPropagation();
                 if (typeof canCurrentUserManageRoutes === 'function' && !canCurrentUserManageRoutes()) return;
-                const newName = prompt('請輸入新的路線名稱：', r.name);
+                const idx = Number(card.dataset.routeIdx);
+                const targetRoute = savedRoutes[idx];
+                if (!targetRoute) return;
+                const newName = prompt('請輸入新的路線名稱：', targetRoute.name);
                 if (newName && newName.trim() !== '') {
-                    savedRoutes[originalIdx].name = newName.trim();
-                    savedRoutes[originalIdx].updatedAt = Date.now();
+                    targetRoute.name = newName.trim();
+                    targetRoute.updatedAt = Date.now();
                     localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
                 }
             };
@@ -495,13 +572,15 @@ function renderHistoryList() {
         if (updateCloudBtn && updateInfo.hasUpdate && updateInfo.cloudRoute) {
             updateCloudBtn.onclick = (e) => {
                 e.stopPropagation();
-                applySingleCloudRouteUpdate(originalIdx, updateInfo.cloudRoute);
+                const idx = Number(card.dataset.routeIdx);
+                if (!isNaN(idx)) applySingleCloudRouteUpdate(idx, updateInfo.cloudRoute);
             };
         }
         const uploadBtn = card.querySelector('.upload-cloud-btn');
         uploadBtn.onclick = (e) => {
             e.stopPropagation();
-            uploadRouteToCloud(originalIdx, uploadBtn);
+            const idx = Number(card.dataset.routeIdx);
+            if (!isNaN(idx)) uploadRouteToCloud(idx, uploadBtn);
         };
         list.appendChild(card);
     });
@@ -509,28 +588,61 @@ function renderHistoryList() {
     if (window.sortableInstance) window.sortableInstance.destroy();
     window.sortableInstance = new Sortable(list, {
         handle: '.drag-handle',
-        delay: 500, // 必須按住左側 ⋮⋮ 六點抓手滿 0.5 秒才正式解除鎖定進入拖曳排序
-        delayOnTouchOnly: false,
-        touchStartThreshold: 8, // 期間手指上下移動超過 8px 立即取消計時並改為正常捲動列表
+        forceFallback: true,
+        fallbackOnBody: true,
+        fallbackTolerance: 3,
+        delay: 120,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 6,
         animation: 200,
-        ghostClass: 'opacity-50',
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        scroll: false,
+        ghostClass: 'route-card-drag-ghost',
         chosenClass: 'route-card-drag-unlocked',
+        dragClass: 'route-card-drag-fallback',
+        fallbackClass: 'route-card-drag-fallback',
         onChoose: function (evt) {
-            try { vibrate(35); } catch (e) {}
+            try { vibrate(25); } catch (e) {}
             if (evt.item) evt.item.classList.add('route-card-drag-unlocked');
+        },
+        onStart: function (evt) {
+            if (evt.originalEvent) {
+                const orig = evt.originalEvent;
+                if (orig.touches && orig.touches.length > 0) {
+                    historyDragPointerY = orig.touches[0].clientY;
+                } else if (typeof orig.clientY === 'number') {
+                    historyDragPointerY = orig.clientY;
+                }
+            }
+            startHistoryDragAutoScroll(list);
         },
         onUnchoose: function (evt) {
             if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
+            stopHistoryDragAutoScroll(list);
         },
         onEnd: function (evt) {
             if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
+            stopHistoryDragAutoScroll(list);
             if (evt.oldIndex === evt.newIndex) return;
             const fromIdx = filteredRoutes[evt.oldIndex]?.originalIdx;
             const toIdx = filteredRoutes[evt.newIndex]?.originalIdx;
             if (fromIdx === undefined || toIdx === undefined) return;
             const movedItem = savedRoutes.splice(fromIdx, 1)[0];
             savedRoutes.splice(toIdx, 0, movedItem);
-            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).then(() => renderHistoryList());
+            const [movedFiltered] = filteredRoutes.splice(evt.oldIndex, 1);
+            filteredRoutes.splice(evt.newIndex, 0, movedFiltered);
+
+            // 原地同步每張卡片對應的 savedRoutes 索引，避免放開後整份清單重繪閃跳或捲動跳頁
+            const cardEls = Array.from(list.children);
+            filteredRoutes.forEach((entry, i) => {
+                const syncedIdx = savedRoutes.indexOf(entry.route);
+                entry.originalIdx = syncedIdx;
+                if (cardEls[i]) {
+                    cardEls[i].dataset.routeIdx = String(syncedIdx);
+                }
+            });
+
+            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
         }
     });
 }

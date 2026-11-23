@@ -942,6 +942,22 @@ async function deleteSharedCloudRoute(sharedIdx, btnEl) {
     }
 }
 
+function formatCompactCloudRouteTime(routeObj) {
+    const ts = typeof getRouteUpdatedAt === 'function' ? getRouteUpdatedAt(routeObj) : 0;
+    if (ts && !isNaN(ts)) {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) {
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const min = String(d.getMinutes()).padStart(2, '0');
+            return `${mm}/${dd} ${hh}:${min}`;
+        }
+    }
+    const rawText = String(routeObj?.uploadedAtText || routeObj?.date || '').trim();
+    return rawText ? rawText.replace(/\s+/g, ' ') : '未知';
+}
+
 function renderCloudRoutesList() {
     cloudRoutesList.innerHTML = '';
     if (pendingCountPill) pendingCountPill.innerText = cachedPendingRoutes.length;
@@ -963,7 +979,7 @@ function renderCloudRoutesList() {
         cachedPendingRoutes.forEach((pr, idx) => {
             const stopsCount = (pr.points || []).filter(p => p.is_stop).length;
             const eventsCount = (pr.events || []).length;
-            const timeDisplay = pr.uploadedAtText || pr.date || '未知時間';
+            const timeDisplay = formatCompactCloudRouteTime(pr);
             const cleanName = (pr.name || '').replace(/^\[待審預覽\]\s*/, '').trim();
             const matchingOfficial = cachedCloudRoutes.find(item =>
                 (pr.routeId && item.routeId && item.routeId === pr.routeId) ||
@@ -972,38 +988,36 @@ function renderCloudRoutesList() {
             );
             const isOverwrite = Boolean(matchingOfficial || pr.uploadAction === 'overwrite');
             const actionBadge = isOverwrite
-                ? `<span class="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🔄 覆蓋升版${matchingOfficial ? ` (v${getRouteVersion(matchingOfficial)}➔v${getRouteVersion(matchingOfficial) + 1})` : ''}</span>`
-                : `<span class="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold">🆕 新增路線 (v1)</span>`;
+                ? `<span class="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">🔄 升版${matchingOfficial ? ` v${getRouteVersion(matchingOfficial)}➔v${getRouteVersion(matchingOfficial) + 1}` : ''}</span>`
+                : `<span class="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">🆕 新增 v1</span>`;
 
             const card = document.createElement('div');
-            card.className = "bg-white p-3.5 rounded-2xl shadow-sm border-2 border-amber-200 flex flex-col gap-2.5";
+            card.className = "bg-white px-3 py-2.5 rounded-2xl shadow-sm border-2 border-amber-200 flex flex-col gap-2";
             card.innerHTML = `
-                <div class="flex items-start justify-between gap-2">
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-1.5 flex-wrap">
-                            <span class="font-black text-gray-900 text-sm truncate">${cleanName}</span>
-                            <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
-                                <i class="fa-solid fa-user-ninja mr-0.5"></i>${pr.author || '熱心隊員'}
-                            </span>
-                            ${actionBadge}
-                        </div>
-                        <div class="text-[11px] text-gray-400 mt-1">投稿時間：${timeDisplay}</div>
-                        <div class="flex items-center gap-3 text-[11px] font-bold mt-1">
-                            <span class="text-blue-600"><i class="fa-solid fa-route mr-1"></i>${pr.distance || '0.00'} km</span>
-                            <span class="text-green-600"><i class="fa-solid fa-music mr-1"></i>${eventsCount} 處標記</span>
-                            ${stopsCount > 0 ? `<span class="text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
-                        </div>
+                <div class="min-w-0 flex flex-col gap-1">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="font-black text-gray-900 text-[14px] leading-snug break-words">${cleanName}</span>
+                        ${actionBadge}
+                        <span class="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold whitespace-nowrap">
+                            <i class="fa-solid fa-user-ninja mr-0.5"></i>${pr.author || '熱心隊員'}
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-2.5 flex-wrap text-[11px] font-bold">
+                        <span class="text-blue-600 whitespace-nowrap"><i class="fa-solid fa-route mr-0.5"></i>${pr.distance || '0.00'} km</span>
+                        <span class="text-green-600 whitespace-nowrap"><i class="fa-solid fa-music mr-0.5"></i>${eventsCount} 處</span>
+                        ${stopsCount > 0 ? `<span class="text-indigo-600 whitespace-nowrap"><i class="fa-regular fa-clock mr-0.5"></i>${stopsCount} 站</span>` : ''}
+                        <span class="text-gray-400 font-semibold whitespace-nowrap ml-auto">${timeDisplay}</span>
                     </div>
                 </div>
-                <div class="flex items-center gap-1.5 pt-1 border-t border-gray-100">
-                    <button type="button" class="preview-pending-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-2.5 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
+                <div class="flex items-center gap-1.5 pt-1.5 border-t border-gray-100">
+                    <button type="button" class="preview-pending-btn flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-1.5 px-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
                         🔍 審核預覽／微調
                     </button>
-                    <button type="button" class="approve-pending-btn bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-2 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
+                    <button type="button" class="approve-pending-btn bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-2.5 py-1.5 rounded-xl text-xs shadow-sm active:scale-95 transition-all whitespace-nowrap">
                         ✅ 直接核准
                     </button>
-                    <button type="button" class="reject-pending-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold px-2.5 py-2 rounded-xl text-xs active:scale-95 transition-all whitespace-nowrap">
-                        🗑️ 駁回刪除
+                    <button type="button" class="reject-pending-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-extrabold px-2 py-1.5 rounded-xl text-xs active:scale-95 transition-all whitespace-nowrap">
+                        🗑️ 駁回
                     </button>
                 </div>
             `;
@@ -1040,38 +1054,40 @@ function renderCloudRoutesList() {
         const cloudVer = getRouteVersion(cr);
         const stopsCount = (cr.points || []).filter(p => p.is_stop).length;
         const eventsCount = (cr.events || []).length;
-        const timeDisplay = formatRouteUpdateTimeText(cr);
+        const timeDisplay = formatCompactCloudRouteTime(cr);
 
         const card = document.createElement('div');
-        card.className = "route-lib-card bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between gap-2";
+        card.className = "route-lib-card bg-white px-3 py-2 rounded-2xl shadow-sm border border-gray-100 flex flex-col gap-1.5";
         card.innerHTML = `
-            <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="route-lib-title font-black text-gray-900 text-sm truncate">${cr.name}</span>
-                    <span class="route-lib-ver-badge bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${cloudVer}</span>
-                    <span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap">
+            <div class="flex items-start justify-between gap-2 min-w-0">
+                <div class="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
+                    <span class="route-lib-title font-black text-gray-900 text-[14px] leading-snug break-words">${cr.name}</span>
+                    <span class="route-lib-ver-badge bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap flex-shrink-0">v${cloudVer}</span>
+                    <span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold whitespace-nowrap flex-shrink-0">
                         <i class="fa-solid fa-user-ninja mr-0.5"></i>${cr.author || '熱心隊員'}
                     </span>
                 </div>
-                <div class="route-lib-date text-[11px] text-gray-400 mt-0.5">更新/建立：${timeDisplay}</div>
-                <div class="route-lib-stats flex items-center gap-3 text-[11px] font-bold mt-1">
-                    <span class="route-lib-stat-dist text-blue-600"><i class="fa-solid fa-route mr-1"></i>${cr.distance || '0.00'} km</span>
-                    <span class="route-lib-stat-events text-green-600"><i class="fa-solid fa-music mr-1"></i>${eventsCount} 處標記</span>
-                    ${stopsCount > 0 ? `<span class="route-lib-stat-stops text-indigo-600"><i class="fa-regular fa-clock mr-1"></i>${stopsCount} 站牌</span>` : ''}
-                </div>
+                <span class="route-lib-date text-[10px] font-bold text-gray-400 whitespace-nowrap flex-shrink-0 pt-0.5">${timeDisplay}</span>
             </div>
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-                <button type="button" class="single-cloud-import-btn px-3 py-2 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
-                    alreadyLocal
-                        ? 'bg-gray-100 text-gray-400 border border-gray-200'
-                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
-                }">
-                    ${alreadyLocal ? '✅ 已是最新' : '⬇️ 匯入/更新'}
-                </button>
-                ${isAdminUnlocked ? `
-                <button type="button" class="admin-delete-shared-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2.5 py-2 rounded-xl text-xs font-extrabold active:scale-95 transition-all" title="管理員刪除此雲端路線">
-                    🗑️ 刪除
-                </button>` : ''}
+            <div class="flex items-center justify-between gap-2">
+                <div class="route-lib-stats flex items-center gap-2.5 flex-wrap text-[11px] font-bold min-w-0">
+                    <span class="route-lib-stat-dist text-blue-600 whitespace-nowrap"><i class="fa-solid fa-route mr-0.5"></i>${cr.distance || '0.00'} km</span>
+                    <span class="route-lib-stat-events text-green-600 whitespace-nowrap"><i class="fa-solid fa-music mr-0.5"></i>${eventsCount} 處</span>
+                    ${stopsCount > 0 ? `<span class="route-lib-stat-stops text-indigo-600 whitespace-nowrap"><i class="fa-regular fa-clock mr-0.5"></i>${stopsCount} 站</span>` : ''}
+                </div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <button type="button" class="single-cloud-import-btn px-2.5 py-1.5 rounded-xl text-[11px] font-extrabold transition-all active:scale-95 whitespace-nowrap ${
+                        alreadyLocal
+                            ? 'bg-gray-100 text-gray-500 border border-gray-200'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                    }">
+                        ${alreadyLocal ? '✅ 已是最新' : '⬇️ 匯入/更新'}
+                    </button>
+                    ${isAdminUnlocked ? `
+                    <button type="button" class="admin-delete-shared-btn bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2 py-1.5 rounded-xl text-[11px] font-extrabold active:scale-95 transition-all whitespace-nowrap" title="管理員刪除此雲端路線">
+                        🗑️
+                    </button>` : ''}
+                </div>
             </div>
         `;
 

@@ -767,6 +767,8 @@ let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [],
 let editStep = 0, editStartIndex = -1, tempMarkerA = null;
 let editSubMode = 'path', pathEditMarkers = [];
 let selectedEditNodeIdx = -1;
+let activeDraggingEditNodeIdx = -1;
+let lastEditNodeDragEndTime = 0;
 
 // 📌 引線備忘框（Callout Annotation）暫存狀態
 let pendingCalloutAnchorLngLat = null;
@@ -1233,35 +1235,54 @@ function clearPathEditMarkers() {
 }
 
 function ensureFreehandTempLayer() {
-    if (!map || !map.isStyleLoaded()) return false;
-    if (!map.getSource('freehand-temp-source')) {
-        map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
+    if (!map) return false;
+    try {
+        if (!map.getStyle()) return false;
+    } catch (e) {
+        return false;
     }
-    if (!map.getLayer('freehand-temp-layer')) {
-        map.addLayer({
-            id: 'freehand-temp-layer',
-            type: 'line',
-            source: 'freehand-temp-source',
-            layout: { 'line-join': 'round', 'line-cap': 'round' },
-            paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 }
-        });
+    try {
+        if (!map.getSource('freehand-temp-source')) {
+            map.addSource('freehand-temp-source', { type: 'geojson', data: emptyGeoJSON() });
+        }
+        if (!map.getLayer('freehand-temp-layer')) {
+            map.addLayer({
+                id: 'freehand-temp-layer',
+                type: 'line',
+                source: 'freehand-temp-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#f97316', 'line-width': 6, 'line-dasharray': [2, 1.5], 'line-opacity': 0.95 }
+            });
+        }
+        return true;
+    } catch (e) {
+        return false;
     }
-    return true;
 }
 
 function updateFreehandTempLayer(coords) {
-    if (!ensureFreehandTempLayer()) return;
-    if (!Array.isArray(coords) || coords.length < 2) {
-        map.getSource('freehand-temp-source')?.setData(emptyGeoJSON());
+    if (!map) return;
+    const isClearing = (!Array.isArray(coords) || coords.length < 2);
+    if (isClearing) {
+        try {
+            const src = map.getSource('freehand-temp-source');
+            if (src) {
+                src.setData(emptyGeoJSON());
+                if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+            }
+        } catch (e) {}
         return;
     }
-    map.getSource('freehand-temp-source')?.setData({
-        type: 'FeatureCollection',
-        features: [{
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: coords }
-        }]
-    });
+    if (!ensureFreehandTempLayer()) return;
+    try {
+        map.getSource('freehand-temp-source')?.setData({
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                geometry: { type: 'LineString', coordinates: coords }
+            }]
+        });
+    } catch (e) {}
 }
 
 function cancelActiveFreehandStroke(clearSpliceDraft = false) {
@@ -1273,7 +1294,11 @@ function cancelActiveFreehandStroke(clearSpliceDraft = false) {
         freehandDraftCoords = [];
     }
     updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
-    try { map.dragPan.enable(); } catch (e) {}
+    if (isEditingMode && editSubMode === 'freehand') {
+        try { map.dragPan.disable(); } catch (e) {}
+    } else {
+        try { map.dragPan.enable(); } catch (e) {}
+    }
     ensureEditorMapZoomEnabled();
 }
 
@@ -1777,27 +1802,84 @@ function renderPathEditNodes(route) {
         let dragOrigNodeLng = pt.lng;
         let dragOrigNodeLat = pt.lat;
         let dragLocalWindowOrig = null;
+        let dragAffectedMinIdx = prevKeyIdx;
+        let dragAffectedMaxIdx = nextKeyIdx;
+        let dragPrev1Dense = false;
+        let dragPrev2Dense = false;
+        let dragNext1Dense = false;
+        let dragNext2Dense = false;
 
         m.on('dragstart', () => {
+            // 嚴格鎖定單一拖曳頂點：若已有另一顆頂點正在拖曳中，禁止中途切換或搶走焦點
+            if (activeDraggingEditNodeIdx !== -1 && activeDraggingEditNodeIdx !== ptIdx) return;
+            activeDraggingEditNodeIdx = ptIdx;
             pushEditUndoSnapshot(route);
             selectedEditNodeIdx = ptIdx;
             dragOrigNodeLng = pt.lng;
             dragOrigNodeLat = pt.lat;
-            // 僅記錄被拖曳節點與直接相鄰前後區段的原始座標，採用平滑位移權重避免把原本彎道拉成死直線
+
+            // 暫時停用其餘鄰近節點的 pointer-events，避免手指滑過相鄰節點（如 #680/#681/#682）時誤搶焦點
+            pathEditMarkers.forEach(otherM => {
+                if (otherM !== m) {
+                    try {
+                        const otherEl = otherM.getElement();
+                        if (otherEl) otherEl.style.pointerEvents = 'none';
+                    } catch (err) {}
+                }
+            });
+
+            // 記錄受影響局部範圍原始座標（含前後關鍵區段與相鄰 1～2 個頂點）
+            dragAffectedMinIdx = Math.max(0, Math.min(prevKeyIdx, ptIdx - 2));
+            dragAffectedMaxIdx = Math.min(pts.length - 1, Math.max(nextKeyIdx, ptIdx + 2));
             dragLocalWindowOrig = new Map();
-            for (let k = prevKeyIdx; k <= nextKeyIdx; k++) {
+            for (let k = dragAffectedMinIdx; k <= dragAffectedMaxIdx; k++) {
                 if (pts[k]) {
                     dragLocalWindowOrig.set(k, { lng: pts[k].lng, lat: pts[k].lat });
                 }
             }
+
+            // 判斷前後 1～2 個相鄰頂點是否屬於「相鄰點距 < 15 公尺」的密集軌跡段
+            // （僅密集段啟用鄰點微幅平滑防 V 字折角；點距 >= 15m 的手繪轉折點保持原折角不強行拉圓）
+            const DENSE_NEIGHBOR_MAX_METERS = 15;
+            dragPrev1Dense = false;
+            dragPrev2Dense = false;
+            dragNext1Dense = false;
+            dragNext2Dense = false;
+
+            if (ptIdx - 1 > 0 && pts[ptIdx - 1] && !pts[ptIdx - 1].is_stop) {
+                const dPrev1 = getDistanceKm(pt.lng, pt.lat, pts[ptIdx - 1].lng, pts[ptIdx - 1].lat) * 1000;
+                if (dPrev1 < DENSE_NEIGHBOR_MAX_METERS) {
+                    dragPrev1Dense = true;
+                    if (ptIdx - 2 > 0 && pts[ptIdx - 2] && !pts[ptIdx - 2].is_stop) {
+                        const dPrev2 = getDistanceKm(pts[ptIdx - 1].lng, pts[ptIdx - 1].lat, pts[ptIdx - 2].lng, pts[ptIdx - 2].lat) * 1000;
+                        if (dPrev2 < DENSE_NEIGHBOR_MAX_METERS) {
+                            dragPrev2Dense = true;
+                        }
+                    }
+                }
+            }
+            if (ptIdx + 1 < pts.length - 1 && pts[ptIdx + 1] && !pts[ptIdx + 1].is_stop) {
+                const dNext1 = getDistanceKm(pt.lng, pt.lat, pts[ptIdx + 1].lng, pts[ptIdx + 1].lat) * 1000;
+                if (dNext1 < DENSE_NEIGHBOR_MAX_METERS) {
+                    dragNext1Dense = true;
+                    if (ptIdx + 2 < pts.length - 1 && pts[ptIdx + 2] && !pts[ptIdx + 2].is_stop) {
+                        const dNext2 = getDistanceKm(pts[ptIdx + 1].lng, pts[ptIdx + 1].lat, pts[ptIdx + 2].lng, pts[ptIdx + 2].lat) * 1000;
+                        if (dNext2 < DENSE_NEIGHBOR_MAX_METERS) {
+                            dragNext2Dense = true;
+                        }
+                    }
+                }
+            }
+
             // 拖曳時自動收起回迷你小膠囊，確保拖曳微調時視野零遮擋
             isNodeTrimDrawerExpanded = false;
             updateNodeTrimPanelUI(route);
         });
 
         m.on('drag', () => {
+            if (activeDraggingEditNodeIdx !== ptIdx) return;
             const lngLat = m.getLngLat();
-            // 扣除視覺平行偏移量，確保實際寫入 route.points 的座標維持真實道路座標
+            // 扣除視覺平行偏移量，確保實際寫入 route.points 的座標維持真實道路座標且不跳位
             const newLng = Number((lngLat.lng - initDLng).toFixed(6));
             const newLat = Number((lngLat.lat - initDLat).toFixed(6));
             const deltaLng = newLng - dragOrigNodeLng;
@@ -1807,26 +1889,28 @@ function renderPathEditNodes(route) {
             pt.lat = newLat;
             pt.isKeyNode = true;
 
-            // 僅對直接相鄰的前後區段依比例施加局部平滑位移（其餘整條路線座標與線條樣式完全不動）
+            // 局部平滑位移：合併關鍵區段線性權重與密集段（< 15m）前後 1～2 鄰點防 V 字折角平滑權重
             if (dragLocalWindowOrig) {
-                if (ptIdx > prevKeyIdx + 1) {
-                    const span = ptIdx - prevKeyIdx;
-                    for (let s = 1; s < span; s++) {
-                        const idx = prevKeyIdx + s;
-                        const orig = dragLocalWindowOrig.get(idx);
-                        if (!orig) continue;
-                        const weight = s / span;
-                        pts[idx].lng = Number((orig.lng + deltaLng * weight).toFixed(6));
-                        pts[idx].lat = Number((orig.lat + deltaLat * weight).toFixed(6));
+                for (let idx = dragAffectedMinIdx; idx <= dragAffectedMaxIdx; idx++) {
+                    if (idx === ptIdx) continue;
+                    const orig = dragLocalWindowOrig.get(idx);
+                    if (!orig || !pts[idx]) continue;
+
+                    let spanWeight = 0;
+                    if (idx > prevKeyIdx && idx < ptIdx && ptIdx > prevKeyIdx + 1) {
+                        spanWeight = (idx - prevKeyIdx) / (ptIdx - prevKeyIdx);
+                    } else if (idx > ptIdx && idx < nextKeyIdx && nextKeyIdx > ptIdx + 1) {
+                        spanWeight = (nextKeyIdx - idx) / (nextKeyIdx - ptIdx);
                     }
-                }
-                if (nextKeyIdx > ptIdx + 1) {
-                    const span = nextKeyIdx - ptIdx;
-                    for (let s = 1; s < span; s++) {
-                        const idx = ptIdx + s;
-                        const orig = dragLocalWindowOrig.get(idx);
-                        if (!orig) continue;
-                        const weight = (span - s) / span;
+
+                    let denseWeight = 0;
+                    if (idx === ptIdx - 1 && dragPrev1Dense) denseWeight = 0.55;
+                    else if (idx === ptIdx - 2 && dragPrev2Dense) denseWeight = 0.25;
+                    else if (idx === ptIdx + 1 && dragNext1Dense) denseWeight = 0.55;
+                    else if (idx === ptIdx + 2 && dragNext2Dense) denseWeight = 0.25;
+
+                    const weight = Math.max(spanWeight, denseWeight);
+                    if (weight > 0) {
                         pts[idx].lng = Number((orig.lng + deltaLng * weight).toFixed(6));
                         pts[idx].lat = Number((orig.lat + deltaLat * weight).toFixed(6));
                     }
@@ -1844,11 +1928,14 @@ function renderPathEditNodes(route) {
         });
 
         m.on('dragend', () => {
+            if (activeDraggingEditNodeIdx !== ptIdx) return;
+            activeDraggingEditNodeIdx = -1;
+            lastEditNodeDragEndTime = Date.now();
             dragLocalWindowOrig = null;
             isNodeTrimDrawerExpanded = false;
-            // 僅執行局部距離與方位角微調，嚴禁呼叫整條重算或重洗樣式
-            updateLocalRouteAfterNodeDrag(route, prevKeyIdx, nextKeyIdx);
-            updateRouteLayers(route.points);
+            // 僅執行局部距離與方位角更新，嚴禁二次回彈或重算整條路線
+            updateLocalRouteAfterNodeDrag(route, dragAffectedMinIdx, dragAffectedMaxIdx);
+            updateRouteLayers(route.points, 0);
             renderPathEditNodes(route);
             updateNodeTrimPanelUI(route);
             const promptEl = document.getElementById('editPromptText');
@@ -1859,6 +1946,7 @@ function renderPathEditNodes(route) {
 
         el.addEventListener('click', (ev) => {
             ev.stopPropagation();
+            if (activeDraggingEditNodeIdx !== -1 || (Date.now() - lastEditNodeDragEndTime < 220)) return;
             selectedEditNodeIdx = ptIdx;
             isNodeTrimDrawerExpanded = false; // 點選節點時預設收合為 ✂️ #N ▸ 迷你小膠囊
             vibrate(20);
@@ -1956,21 +2044,24 @@ function handleFreehandNodeClick(route, clickedIdx) {
     }
 }
 
-// 執行兩舊節點之間的剪接替換（將 idxA 與 idxB 之間的多餘舊路徑剪除，無縫替換為新畫的路徑）
+// 執行兩舊節點之間的剪接替換（將 minIdx 與 maxIdx 之間的多餘舊路徑真正刪除並替換為橘色手繪新座標，強制重繪綠線並清空草稿圖層）
 function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
-    if (!route || !Array.isArray(route.points) || rawCoords.length < 2) return;
+    if (!route || !Array.isArray(route.points) || !Array.isArray(rawCoords) || rawCoords.length < 2) return;
     const pts = route.points;
+    if (startIdx < 0 || endIdx < 0 || startIdx >= pts.length || endIdx >= pts.length || startIdx === endIdx) return;
+
     const preservedStops = pts
         .filter(p => p.is_stop)
         .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
 
     pushEditUndoSnapshot(route);
 
+    // 正確比較起點索引 startIdx 與終點索引 endIdx（若反向選取則自動反轉手繪草稿順向對齊）
     const isForward = (startIdx <= endIdx);
     const idxStart = Math.min(startIdx, endIdx);
     const idxEnd = Math.max(startIdx, endIdx);
 
-    const orderedCoords = isForward ? [...rawCoords] : [...rawCoords].reverse();
+    const orderedCoords = isForward ? rawCoords.map(c => [Number(c[0]), Number(c[1])]) : rawCoords.map(c => [Number(c[0]), Number(c[1])]).reverse();
     orderedCoords[0] = [Number(pts[idxStart].lng.toFixed(6)), Number(pts[idxStart].lat.toFixed(6))];
     const endSnapCoord = [Number(pts[idxEnd].lng.toFixed(6)), Number(pts[idxEnd].lat.toFixed(6))];
     const lastDrawn = orderedCoords[orderedCoords.length - 1];
@@ -1983,8 +2074,8 @@ function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
     const densified = densifyRoadCoordinates(orderedCoords, 5);
     const inheritedMusic = Boolean(pts[idxStart]?.musicActive);
     const newSegmentPoints = densified.map(([lng, lat], i) => ({
-        lng,
-        lat,
+        lng: Number(lng),
+        lat: Number(lat),
         time: Date.now(),
         musicActive: inheritedMusic,
         music: inheritedMusic,
@@ -1992,12 +2083,40 @@ function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
         isKeyNode: (i === 0 || i === densified.length - 1)
     }));
 
+    // 真正刪除主路線座標陣列中 idxStart..idxEnd 的舊節點，替換為新的手繪草稿座標點
     pts.splice(idxStart, idxEnd - idxStart + 1, ...newSegmentPoints);
+    route.points = pts;
+
+    // 立即重置所有手繪剪修草稿狀態並清空橘色虛線圖層（避免橘色虛線與暫存起終點殘留）
+    isFreehandDrawing = false;
+    freehandStartIndex = -1;
+    freehandStrokeCoords = [];
+    freehandSpliceStartIdx = -1;
+    freehandDraftCoords = [];
+    updateFreehandTempLayer([]);
+
+    // 重新計算總距離、方位角與標記點索引
     syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, true);
     vibrate([40, 30, 40]);
-    updateRouteLayers(route.points);
+
+    // 強制非節流重繪主路線（綠線／藍線／灰線）與清除草稿來源，確保地圖立刻貼合新形狀
+    updateRouteLayers(route.points, 0);
+    try {
+        map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON || emptyGeoJSON());
+        map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
+        map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
+        map.getSource('freehand-temp-source')?.setData(emptyGeoJSON());
+        if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    } catch (e) {}
+
     renderEditableRouteMarkers(route);
     renderFreehandSpliceNodes(route);
+
+    // 確保手繪模式維持「單指畫線、雙指縮放平移」手勢狀態
+    if (isEditingMode && editSubMode === 'freehand') {
+        try { map.dragPan.disable(); } catch (e) {}
+    }
+    ensureEditorMapZoomEnabled();
 
     const promptEl = document.getElementById('editPromptText');
     if (promptEl) {
@@ -2193,8 +2312,14 @@ if (btnTrimAfterNode) btnTrimAfterNode.onclick = executeTrimAfterSelectedNode;
 
 function setEditSubMode(mode) {
     editSubMode = mode;
+    activeDraggingEditNodeIdx = -1;
     ensureEditorMapZoomEnabled();
-    try { map.dragPan.enable(); } catch (e) {}
+    if (mode === 'freehand') {
+        // 啟用「✍️ 手繪」模式：預設單指畫線、雙指平移／縮放（停用單指 dragPan，保留 touchZoomRotate）
+        try { map.dragPan.disable(); } catch (e) {}
+    } else {
+        try { map.dragPan.enable(); } catch (e) {}
+    }
 
     const inactiveClass = "text-gray-600 hover:bg-white/70 font-black text-[11px] px-1 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
     if (modePathBtn) modePathBtn.className = (mode === 'path')
@@ -2287,15 +2412,28 @@ if (btnUndoFreehand) {
     };
 }
 
-// 綁定地圖容器的手繪延伸／剪接事件（嚴格遵守：絕不鎖定 touchZoomRotate 與 scrollZoom，僅在 e.touches.length === 1 單指觸控時畫線，偵測到 e.touches.length >= 2 雙指觸控時立刻中斷畫線並交還地圖縮放平移）
+// 綁定地圖容器的手繪延伸／剪接事件：
+// - 手繪模式預設單指畫線（dragPan 停用）、雙指平移／縮放（touchZoomRotate 啟用）
+// - 偵測到 >= 2 指立即取消未完成筆畫與暫存起點（防兩指時間差長出尖角）並交還地圖縮放平移；放開後完整重置狀態防卡死
+// - 最小有效筆畫門檻 8 公尺（< 8m 視為誤觸自動取消）
 (function setupFreehandSplineDrawing() {
     const canvasContainer = map.getCanvasContainer();
+    const EDITOR_FREEHAND_MIN_STROKE_METERS = 8;
 
     function getLngLatFromClientXY(clientX, clientY) {
         const rect = canvasContainer.getBoundingClientRect();
         const x = clientX - rect.left;
         const y = clientY - rect.top;
         return map.unproject([x, y]);
+    }
+
+    function restoreFreehandModeMapGestures() {
+        if (isEditingMode && editSubMode === 'freehand') {
+            try { map.dragPan.disable(); } catch (e) {}
+        } else {
+            try { map.dragPan.enable(); } catch (e) {}
+        }
+        ensureEditorMapZoomEnabled();
     }
 
     function handleStrokeStart(clientX, clientY, rawEvent) {
@@ -2312,12 +2450,16 @@ if (btnUndoFreehand) {
 
         const lngLat = getLngLatFromClientXY(clientX, clientY);
         const pts = route.points;
+        const visualPts = computeVisualRightOffsetCoords(pts);
 
-        // 計算與當前編輯路線所有節點的最近距離
+        // 計算與當前編輯路線所有節點的最近距離（同時比對真實座標與視覺偏移座標）
         let minStartDistM = Infinity;
         let closestStartIdx = -1;
         for (let i = 0; i < pts.length; i++) {
-            const dM = getDistanceKm(lngLat.lng, lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
+            const dRaw = getDistanceKm(lngLat.lng, lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
+            const vPt = visualPts[i] || pts[i];
+            const dVis = getDistanceKm(lngLat.lng, lngLat.lat, vPt.lng, vPt.lat) * 1000;
+            const dM = Math.min(dRaw, dVis);
             if (dM < minStartDistM) {
                 minStartDistM = dM;
                 closestStartIdx = i;
@@ -2331,12 +2473,10 @@ if (btnUndoFreehand) {
         } else if (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length) {
             activeStartIdx = freehandSpliceStartIdx;
         } else {
-            // 若在遠離路線的空白處單指滑動，保留地圖拖曳平移能力，不強行鎖死地圖
-            try { map.dragPan.enable(); } catch (e) {}
             return;
         }
 
-        // 單指開始在路線上畫線時，暫時停用單指 dragPan 避免畫面跟著單指跑，但保持 touchZoomRotate 與 scrollZoom 開啟
+        // 停用單指 dragPan 避免畫面跟著單指跑，同時保留 touchZoomRotate 與 scrollZoom 開啟
         try { map.dragPan.disable(); } catch (e) {}
         ensureEditorMapZoomEnabled();
 
@@ -2349,16 +2489,7 @@ if (btnUndoFreehand) {
         } else {
             freehandStrokeCoords = [[Number(snapPt.lng.toFixed(6)), Number(snapPt.lat.toFixed(6))]];
         }
-
-        if (getDistanceKm(snapPt.lng, snapPt.lat, lngLat.lng, lngLat.lat) * 1000 >= 3.5) {
-            freehandStrokeCoords.push([Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]);
-        }
-        updateFreehandTempLayer(freehandStrokeCoords);
-
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl) {
-            promptEl.innerText = "✍️ 正在手繪新路徑... 連回另一舊節點可剪除中間舊路，或向頭尾外拉延伸";
-        }
+        // 不在 touchstart 當下立刻畫線，待實際單指移動（handleStrokeMove）才渲染橘色草稿，避免雙指落點時間差閃出尖角
     }
 
     function handleStrokeMove(clientX, clientY) {
@@ -2391,8 +2522,7 @@ if (btnUndoFreehand) {
     function handleStrokeEnd() {
         if (!isFreehandDrawing) return;
         isFreehandDrawing = false;
-        try { map.dragPan.enable(); } catch (e) {}
-        ensureEditorMapZoomEnabled();
+        restoreFreehandModeMapGestures();
 
         const route = getActiveWorkingRoute();
         const promptEl = document.getElementById('editPromptText');
@@ -2414,19 +2544,23 @@ if (btnUndoFreehand) {
                 freehandStrokeCoords[i][0], freehandStrokeCoords[i][1]
             ) * 1000;
         }
-        // 若滑動距離極短 (< 6m)，視為單純點選節點而非畫線
-        if (strokeLenM < 6) {
+        // 最小有效筆畫門檻：移動距離小於 8 公尺視為誤觸自動取消，不修改路線
+        if (strokeLenM < EDITOR_FREEHAND_MIN_STROKE_METERS) {
             updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
             freehandStrokeCoords = [];
             freehandStartIndex = -1;
             return;
         }
 
-        // 計算手繪終點與原路線所有節點的最近距離
+        // 計算手繪終點與原路線所有節點的最近距離（同時比對真實座標與視覺偏移座標）
+        const visualPts = computeVisualRightOffsetCoords(pts);
         let minEndDistM = Infinity;
         let closestEndIdx = -1;
         for (let i = 0; i < pts.length; i++) {
-            const dM = getDistanceKm(endLng, endLat, pts[i].lng, pts[i].lat) * 1000;
+            const dRaw = getDistanceKm(endLng, endLat, pts[i].lng, pts[i].lat) * 1000;
+            const vPt = visualPts[i] || pts[i];
+            const dVis = getDistanceKm(endLng, endLat, vPt.lng, vPt.lat) * 1000;
+            const dM = Math.min(dRaw, dVis);
             if (dM < minEndDistM) {
                 minEndDistM = dM;
                 closestEndIdx = i;
@@ -2435,15 +2569,20 @@ if (btnUndoFreehand) {
 
         // 情境 A（剪接替換）：終點連回原路線上另一個舊節點（距離 < 45 公尺且非同一點）➔ 自動剪除兩舊節點之間的多餘舊路徑並無縫替換
         if (minEndDistM < 45 && closestEndIdx !== -1 && closestEndIdx !== startIndex) {
-            applySpliceBetweenNodes(route, startIndex, closestEndIdx, freehandStrokeCoords);
-            freehandSpliceStartIdx = -1;
-            freehandDraftCoords = [];
-            updateFreehandTempLayer([]);
+            const committedStroke = freehandStrokeCoords.slice();
+            freehandStrokeCoords = [];
+            freehandStartIndex = -1;
+            applySpliceBetweenNodes(route, startIndex, closestEndIdx, committedStroke);
+            return;
         }
         // 情境 B（頭尾延伸）：從路線頭尾端點附近（前後 6 點內）向外畫線延伸
         else if (startIndex <= 5 || startIndex >= pts.length - 6) {
-            applyExtendFromEndpoint(route, startIndex, freehandStrokeCoords);
+            const committedStroke = freehandStrokeCoords.slice();
+            freehandStrokeCoords = [];
+            freehandStartIndex = -1;
+            applyExtendFromEndpoint(route, startIndex, committedStroke);
             updateFreehandTempLayer([]);
+            return;
         }
         // 情境 C（分段剪接草稿）：從路線中段某個舊節點畫出新路徑但尚未連回另一舊節點，保留草稿讓使用者可雙指縮放平移後再點選目標舊節點完成剪接
         else {
@@ -2462,19 +2601,26 @@ if (btnUndoFreehand) {
 
     let isMultiTouchGestureActive = false;
 
+    function abortStrokeForMultiTouch() {
+        isMultiTouchGestureActive = true;
+        // 立即取消／清除尚未完成的當前手繪筆畫與暫存起點（避免兩指落點時間差長出尖角）
+        isFreehandDrawing = false;
+        freehandStartIndex = -1;
+        freehandStrokeCoords = [];
+        updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
+        // 雙指手勢期間交還控制權給地圖執行正常縮放平移
+        try { map.dragPan.enable(); } catch (err) {}
+        ensureEditorMapZoomEnabled();
+    }
+
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isEditingMode || editSubMode !== 'freehand') return;
         ensureEditorMapZoomEnabled();
         if (!e.touches) return;
 
-        // 只要偵測到雙指觸控 (e.touches.length >= 2)，立刻中斷當前單指畫線判定，將控制權 100% 交還給地圖執行雙指平移與縮放！
+        // 只要螢幕上同時有 2 根以上手指（touches.length >= 2），立即取消未完成手繪並交還地圖縮放平移
         if (e.touches.length >= 2) {
-            isMultiTouchGestureActive = true;
-            if (isFreehandDrawing) {
-                cancelActiveFreehandStroke(false);
-            }
-            try { map.dragPan.enable(); } catch (err) {}
-            ensureEditorMapZoomEnabled();
+            abortStrokeForMultiTouch();
             return;
         }
 
@@ -2490,20 +2636,13 @@ if (btnUndoFreehand) {
         if (!isEditingMode || editSubMode !== 'freehand') return;
         if (!e.touches) return;
 
-        // 雙指觸控時立刻中斷單指畫線，絕不攔截事件、絕不呼叫 map.panBy，讓 MapLibre 原生 touchZoomRotate 順暢執行雙指縮放與平移
         if (e.touches.length >= 2) {
-            isMultiTouchGestureActive = true;
-            if (isFreehandDrawing) {
-                cancelActiveFreehandStroke(false);
-            }
-            try { map.dragPan.enable(); } catch (err) {}
-            ensureEditorMapZoomEnabled();
+            abortStrokeForMultiTouch();
             return;
         }
 
         if (isMultiTouchGestureActive || !isFreehandDrawing) return;
 
-        // 僅在單指觸控 (e.touches.length === 1) 且正在畫線時執行畫線
         if (e.touches.length === 1) {
             if (e.cancelable) e.preventDefault();
             const touch = e.touches[0];
@@ -2512,35 +2651,44 @@ if (btnUndoFreehand) {
     }, { passive: false });
 
     canvasContainer.addEventListener('touchend', (e) => {
+        const remaining = e.touches ? e.touches.length : 0;
         if (!isEditingMode || editSubMode !== 'freehand') {
-            if (!e.touches || e.touches.length === 0) {
+            if (remaining === 0) {
                 isMultiTouchGestureActive = false;
+                isFreehandDrawing = false;
+                freehandStartIndex = -1;
+                freehandStrokeCoords = [];
             }
             return;
         }
 
         if (isMultiTouchGestureActive) {
-            if (isFreehandDrawing) cancelActiveFreehandStroke(false);
-            if (!e.touches || e.touches.length === 0) {
+            isFreehandDrawing = false;
+            freehandStartIndex = -1;
+            freehandStrokeCoords = [];
+            if (remaining === 0) {
+                // 雙指結束放開：完整重置手繪狀態旗標與地圖手勢鎖定狀態，防卡住滑不動或畫不出線
                 isMultiTouchGestureActive = false;
-                try { map.dragPan.enable(); } catch (err) {}
-                ensureEditorMapZoomEnabled();
+                restoreFreehandModeMapGestures();
             }
             return;
         }
 
-        if (!e.touches || e.touches.length === 0) {
+        if (remaining === 0) {
             handleStrokeEnd();
         }
     }, { passive: true });
 
     canvasContainer.addEventListener('touchcancel', (e) => {
-        if (isFreehandDrawing) cancelActiveFreehandStroke(false);
-        if (!e.touches || e.touches.length === 0) {
+        const remaining = e.touches ? e.touches.length : 0;
+        isFreehandDrawing = false;
+        freehandStartIndex = -1;
+        freehandStrokeCoords = [];
+        updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
+        if (remaining === 0) {
             isMultiTouchGestureActive = false;
+            restoreFreehandModeMapGestures();
         }
-        try { map.dragPan.enable(); } catch (err) {}
-        ensureEditorMapZoomEnabled();
     }, { passive: true });
 
     // 滑鼠單擊拖曳畫線（滾輪縮放 map.scrollZoom 全程保持啟用）
@@ -3940,6 +4088,7 @@ map.on('click', (e) => {
             updateRouteLayers(route.points); renderEditableRouteMarkers(route);
         }
     } else if (editSubMode === 'path') {
+        if (activeDraggingEditNodeIdx !== -1 || (Date.now() - lastEditNodeDragEndTime < 220)) return;
         // 點擊軌跡線條時：自動選取最近的節點（同時比對真實座標與右側平行偏移後的視覺座標）並顯示預設收合的迷你小膠囊抽屜鈕
         const visualPts = computeVisualRightOffsetCoords(route.points);
         let minDistToNode = Infinity;
@@ -4072,6 +4221,7 @@ window.handleRouteAction = function(action) {
 document.getElementById('saveEditBtn').onclick = () => {
     isEditingMode = false;
     selectedEditNodeIdx = -1;
+    activeDraggingEditNodeIdx = -1;
     clearPathEditMarkers();
     clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
@@ -4120,6 +4270,7 @@ document.getElementById('saveEditBtn').onclick = () => {
 document.getElementById('cancelEditBtn').onclick = () => {
     isEditingMode = false;
     selectedEditNodeIdx = -1;
+    activeDraggingEditNodeIdx = -1;
     clearPathEditMarkers();
     clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
@@ -4212,6 +4363,7 @@ function backToMain() {
     if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
     document.getElementById('editRouteBar')?.classList.add('hidden');
     selectedEditNodeIdx = -1;
+    activeDraggingEditNodeIdx = -1;
     clearPathEditMarkers();
     cancelActiveFreehandStroke(true);
     freehandUndoStack = [];

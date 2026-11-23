@@ -232,9 +232,12 @@ function applySystemConfigToRuntime(newCfg) {
     evaluateAndRenderAccessGateOverlay();
     syncAdminGateStatusBadgeUI(normalized.requireUserApproval);
 
-    // 1.5 左上角車隊雷達在線名單與地圖友車標記休眠狀態即時同步套用
+    // 1.5 左上角車隊雷達在線名單與地圖友車標記休眠／逾時移除狀態即時同步套用
     if (typeof fleetLayerGroup === 'object' && fleetLayerGroup) {
         const now = Date.now();
+        if (typeof pruneOfflineFleetMarkers === 'function') {
+            pruneOfflineFleetMarkers(now);
+        }
         Object.values(fleetLayerGroup).forEach(entry => {
             if (entry && entry.el && entry.lastUpdatedAt) {
                 updateFleetTruckMarkerAppearance(entry.el, entry.name, entry.lastUpdatedAt, now);
@@ -668,8 +671,10 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
     // 確保所有在 Firebase 使用者節點下的紀錄（不論權限開關為 true 或 false）皆完整顯示，絕不過濾隱藏
     const userList = Object.values(mergedMap || {}).filter(u => u && u.deviceId);
 
-    // 60 秒內有心跳顯示 🟢 上線中，超過顯示 ⚪ 離線
-    const ONLINE_HEARTBEAT_MS = 60 * 1000;
+    // 與車隊雷達圖層共用同一套心跳逾時判定（isFleetHeartbeatOnline / getFleetOnlineTimeoutMs）
+    const fallbackOnlineMs = (typeof getFleetOnlineTimeoutMs === 'function')
+        ? getFleetOnlineTimeoutMs()
+        : (3 * 60 * 1000);
     let onlineCount = 0;
     let pendingCount = 0;
 
@@ -677,7 +682,9 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         const blocked = Boolean(u.blocked !== undefined ? u.blocked : u.isBlocked);
         const approved = (u.approved !== undefined ? Boolean(u.approved) : Boolean(u.isApproved));
         const lastTs = Number(u.lastSeen || u.lastActiveAt || 0);
-        u.isOnline = !blocked && lastTs > 0 && (now - lastTs <= ONLINE_HEARTBEAT_MS);
+        u.isOnline = (typeof isFleetHeartbeatOnline === 'function')
+            ? isFleetHeartbeatOnline(lastTs, now, blocked)
+            : (!blocked && lastTs > 0 && (now - lastTs <= fallbackOnlineMs));
         if (u.isOnline) onlineCount++;
         if (!approved && !blocked) pendingCount++;
     });
@@ -1088,6 +1095,12 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
             try {
                 delete allCloudFleetUsersMap[targetDeviceId];
                 renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+                if (typeof pruneOfflineFleetMarkers === 'function') {
+                    pruneOfflineFleetMarkers(Date.now());
+                }
+                if (typeof renderOnlineFleetListUI === 'function') {
+                    renderOnlineFleetListUI();
+                }
                 await Promise.all([
                     fetchWithTimeout(`${FLEET_USERS_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {}),
                     fetchWithTimeout(`${LIVE_FLEET_BASE_URL}/${encodeURIComponent(targetDeviceId)}.json`, { method: 'DELETE' }, 4500).catch(() => {})
@@ -1268,6 +1281,12 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         evaluateAndRenderAccessGateOverlay();
     }
     renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+    if (typeof pruneOfflineFleetMarkers === 'function') {
+        pruneOfflineFleetMarkers(now);
+    }
+    if (typeof renderOnlineFleetListUI === 'function') {
+        renderOnlineFleetListUI();
+    }
 
     // 2. 實際呼叫 Firebase PATCH (update) 寫入資料庫 system_config/users/{uid}
     try {
@@ -1325,6 +1344,12 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
             evaluateAndRenderAccessGateOverlay();
         }
         renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
+        if (typeof pruneOfflineFleetMarkers === 'function') {
+            pruneOfflineFleetMarkers(Date.now());
+        }
+        if (typeof renderOnlineFleetListUI === 'function') {
+            renderOnlineFleetListUI();
+        }
 
         const errMsg = e?.message || '網路異常或權限遭拒';
         showAdminUserActionToast(`⚠️ Firebase 寫入失敗 (${errMsg})，已自動還原開關狀態！`, 'danger');

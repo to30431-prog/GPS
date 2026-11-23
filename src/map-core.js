@@ -793,6 +793,9 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
         if (typeof furnitureDomMarkers !== 'undefined') reconnectMarkerList(furnitureDomMarkers);
 
         if (typeof fleetLayerGroup === 'object' && fleetLayerGroup) {
+            if (typeof pruneOfflineFleetMarkers === 'function') {
+                pruneOfflineFleetMarkers(Date.now());
+            }
             Object.values(fleetLayerGroup).forEach(entry => {
                 const m = entry?.marker;
                 if (m && typeof m.getElement === 'function') {

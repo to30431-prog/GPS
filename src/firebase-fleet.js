@@ -1644,21 +1644,68 @@ window.broadcastRadarNow = function() {
 // ==========================================
 let onlineFleetMembersList = [];
 let isOnlineFleetListExpanded = false;
-const FLEET_STALE_SLEEP_THRESHOLD_MS = 30 * 1000; // 超過 30 秒未更新視為手機休眠／過期座標
-const FLEET_MAX_RETENTION_MS = 15 * 60 * 1000;    // 保留 15 分鐘內的隊員位置以顯示（X分前・休眠）防誤判
+const FLEET_STALE_SLEEP_THRESHOLD_MS = 30 * 1000;        // 超過 30 秒未更新視為手機休眠／過期座標
+const FLEET_ONLINE_HEARTBEAT_FALLBACK_MS = 3 * 60 * 1000; // 預設 3 分鐘在線心跳逾時門檻（與管理使用者／上線人數共用）
+
+// 共用在線心跳逾時門檻：優先採用系統設定 fleetSleepMaxMinutes（預設 3 分鐘），設為 0 時退回預設 3 分鐘避免幽靈車標殘留
+function getFleetOnlineTimeoutMs() {
+    const rawMaxMin = Number(systemNavConfig?.fleetSleepMaxMinutes);
+    if (!isNaN(rawMaxMin) && rawMaxMin > 0) {
+        return rawMaxMin * 60 * 1000;
+    }
+    return FLEET_ONLINE_HEARTBEAT_FALLBACK_MS;
+}
+
+// 車隊雷達圖層與「管理使用者／上線人數」共用同一套在線心跳逾時判定
+function isFleetHeartbeatOnline(lastTimestamp, now = Date.now(), isBlocked = false) {
+    if (isBlocked) return false;
+    const ts = typeof lastTimestamp === 'number'
+        ? lastTimestamp
+        : new Date(lastTimestamp || 0).getTime();
+    if (!ts || isNaN(ts)) return false;
+    return (now - ts) <= getFleetOnlineTimeoutMs();
+}
+
+// 立即清除地圖上已逾時離線、被封鎖或設為隱身的友車標記與名牌，並同步更新在線名單
+function pruneOfflineFleetMarkers(now = Date.now()) {
+    let removedAny = false;
+    Object.keys(fleetLayerGroup).forEach(devId => {
+        const entry = fleetLayerGroup[devId];
+        const cloudUserRecord = (typeof allCloudFleetUsersMap === 'object' && allCloudFleetUsersMap) ? allCloudFleetUsersMap[devId] : null;
+        const isBlocked = Boolean(entry?.blocked === true || cloudUserRecord?.blocked === true || cloudUserRecord?.isBlocked === true);
+        const isHidden = Boolean(cloudUserRecord?.hiddenFromRadar === true);
+        if (!entry || isHidden || !isFleetHeartbeatOnline(entry.lastUpdatedAt, now, isBlocked)) {
+            try { entry?.marker?.remove(); } catch (e) {}
+            delete fleetLayerGroup[devId];
+            removedAny = true;
+        }
+    });
+    if (Array.isArray(onlineFleetMembersList) && onlineFleetMembersList.length > 0) {
+        const filtered = onlineFleetMembersList.filter(member => {
+            if (!member || !member.devId) return false;
+            const cloudUserRecord = (typeof allCloudFleetUsersMap === 'object' && allCloudFleetUsersMap) ? allCloudFleetUsersMap[member.devId] : null;
+            const isBlocked = Boolean(cloudUserRecord?.blocked === true || cloudUserRecord?.isBlocked === true);
+            const isHidden = Boolean(cloudUserRecord?.hiddenFromRadar === true);
+            return !isHidden && isFleetHeartbeatOnline(member.updatedAt, now, isBlocked);
+        });
+        if (filtered.length !== onlineFleetMembersList.length) {
+            onlineFleetMembersList = filtered;
+            removedAny = true;
+        }
+    }
+    return removedAny;
+}
 
 function getFleetStaleStatus(updatedAt, now = Date.now()) {
     const elapsedMs = Math.max(0, now - Number(updatedAt || 0));
     const isOver30s = elapsedMs > FLEET_STALE_SLEEP_THRESHOLD_MS;
     const rawStaleMinutes = isOver30s ? Math.max(1, Math.floor(elapsedMs / 60000)) : 0;
 
-    // 開發者模式設定：休眠提示開關（預設開啟）與超過設定分鐘數自動屏蔽（預設 3 分鐘，設為 0 代表不屏蔽）
+    // 開發者模式設定：休眠提示開關（預設開啟）與在線心跳逾時上限（預設 3 分鐘）
     const showSleepEnabled = systemNavConfig.showFleetSleepStatus !== false;
-    const rawMaxMin = Number(systemNavConfig.fleetSleepMaxMinutes);
-    const maxMinutes = isNaN(rawMaxMin) ? DEFAULT_SYSTEM_CONFIG.fleetSleepMaxMinutes : Math.max(0, rawMaxMin);
-    const isExceededMaxMinutes = maxMinutes > 0 && elapsedMs > (maxMinutes * 60 * 1000);
+    const isExceededMaxMinutes = !isFleetHeartbeatOnline(updatedAt, now, false);
 
-    // 僅當「休眠提示開關為開啟」且「超過 30 秒」且「未超過設定上限分鐘數」時，才顯示（X分前・休眠）與半透明休眠樣式
+    // 僅當「休眠提示開關為開啟」且「超過 30 秒」且「仍在線心跳門檻內」時，才顯示（X分前・休眠）與半透明休眠樣式
     const isStale = Boolean(showSleepEnabled && isOver30s && !isExceededMaxMinutes);
     const staleMinutes = isStale ? rawStaleMinutes : 0;
     const staleText = isStale ? `（${staleMinutes}分前・休眠）` : '';
@@ -1734,6 +1781,10 @@ function renderOnlineFleetListUI() {
     const container = document.getElementById('onlineFleetListContainer');
     if (!container) return;
 
+    const now = Date.now();
+    // 渲染前先套用共用在線心跳逾時判定，確保離線或被封鎖成員不殘留於在線名單與地圖上
+    pruneOfflineFleetMarkers(now);
+
     // 若管理員關閉「顯示左上角車隊在線名單」或目前無其他同事在線，自動隱藏不佔空間
     if (!systemNavConfig.showOnlineFleetList || !Array.isArray(onlineFleetMembersList) || onlineFleetMembersList.length === 0) {
         container.innerHTML = '';
@@ -1744,7 +1795,6 @@ function renderOnlineFleetListUI() {
     container.classList.remove('hidden');
     container.innerHTML = '';
 
-    const now = Date.now();
     const totalOnline = onlineFleetMembersList.length;
     const maxVisible = 3;
     const shouldCollapse = totalOnline > maxVisible && !isOnlineFleetListExpanded;
@@ -1838,10 +1888,17 @@ async function fetchAndRenderFleetRadar() {
         if (data && typeof data === 'object') {
             Object.entries(data).forEach(([devId, info]) => {
                 if (!info || devId === fleetDeviceId) return; // 排除自己
+                const cloudUserRecord = (typeof allCloudFleetUsersMap === 'object' && allCloudFleetUsersMap) ? allCloudFleetUsersMap[devId] : null;
                 // 👻 雷達隱身過濾：hiddenFromRadar === true 者對所有其他使用者完全不可見（不顯示車標、不列在線名單、不計入在線人數）
-                if (info.hiddenFromRadar === true || (typeof allCloudFleetUsersMap === 'object' && allCloudFleetUsersMap && allCloudFleetUsersMap[devId]?.hiddenFromRadar === true)) {
+                if (info.hiddenFromRadar === true || cloudUserRecord?.hiddenFromRadar === true) {
                     return;
                 }
+                const isMemberBlocked = Boolean(
+                    info.blocked === true ||
+                    info.isBlocked === true ||
+                    cloudUserRecord?.blocked === true ||
+                    cloudUserRecord?.isBlocked === true
+                );
                 const lat = Number(info.lat);
                 const lng = Number(info.lng);
                 const updatedAt = typeof info.updatedAt === 'number'
@@ -1849,8 +1906,8 @@ async function fetchAndRenderFleetRadar() {
                     : new Date(info.updatedAt || 0).getTime();
 
                 if (isNaN(lat) || isNaN(lng) || !updatedAt) return;
-                // 保留 15 分鐘內有紀錄的友車：30 秒內顯示鮮明即時色彩，超過 30 秒自動轉為半透明灰階並標註（X分前・休眠）
-                if (now - updatedAt > FLEET_MAX_RETENTION_MS) return;
+                // 與「管理使用者／在線人數」共用同一套心跳逾時與在線判定：逾時或非在線狀態立即不繪製並由下方移除幽靈車標與名牌
+                if (!isFleetHeartbeatOnline(updatedAt, now, isMemberBlocked)) return;
 
                 activeIds.add(devId);
                 const memberName = (info.name || '隊員').trim();
@@ -1924,10 +1981,10 @@ async function fetchAndRenderFleetRadar() {
             });
         }
 
-        // 移除超過 15 分鐘未更新或已離線的友車標記
+        // 移除已逾時離線、被封鎖、隱身或非在線狀態的友車標記與名牌
         Object.keys(fleetLayerGroup).forEach(devId => {
             if (!activeIds.has(devId)) {
-                fleetLayerGroup[devId].marker.remove();
+                try { fleetLayerGroup[devId].marker.remove(); } catch (e) {}
                 delete fleetLayerGroup[devId];
             }
         });
@@ -1940,8 +1997,9 @@ async function fetchAndRenderFleetRadar() {
         onlineFleetMembersList = nextOnlineMembers;
         renderOnlineFleetListUI();
     } catch (err) {
-        // 巷弄斷網或 5 秒逾時靜默略過，不干擾導航，同時以本地時間即時刷新既有標記的休眠狀態
+        // 巷弄斷網或 5 秒逾時靜默略過，不干擾導航，同時以共用在線心跳門檻即時清除已逾時離線的幽靈車標並刷新休眠狀態
         const now = Date.now();
+        pruneOfflineFleetMarkers(now);
         Object.values(fleetLayerGroup).forEach(entry => {
             if (entry && entry.el && entry.lastUpdatedAt) {
                 updateFleetTruckMarkerAppearance(entry.el, entry.name, entry.lastUpdatedAt, now);

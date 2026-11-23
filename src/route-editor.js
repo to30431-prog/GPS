@@ -499,51 +499,55 @@ function renderHistoryList() {
         const card = document.createElement('div');
         card.dataset.routeIdx = String(originalIdx);
         card.className = updateInfo.hasUpdate
-            ? "route-lib-card route-lib-card-has-update bg-gradient-to-r from-white to-orange-50/50 p-2.5 rounded-2xl shadow-md border-2 border-orange-300 flex items-stretch gap-1.5 transition-transform"
-            : "route-lib-card bg-white p-2.5 rounded-2xl shadow-sm border border-gray-100 flex items-stretch gap-1.5 transition-transform";
+            ? "route-lib-card route-lib-card-has-update bg-gradient-to-r from-white to-orange-50/50 px-2.5 py-1.5 rounded-xl shadow-sm border-2 border-orange-300 flex items-stretch gap-1 transition-transform"
+            : "route-lib-card bg-white px-2.5 py-1.5 rounded-xl shadow-sm border border-gray-100 flex items-stretch gap-1 transition-transform";
 
         const authorTag = r.author
-            ? `<span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap"><i class="fa-solid fa-user-ninja mr-1"></i>${r.author}</span>`
+            ? `<span class="route-lib-author-badge bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold whitespace-nowrap flex-shrink-0"><i class="fa-solid fa-user-ninja mr-0.5"></i>${r.author}</span>`
             : '';
 
         const versionBadgeHtml = updateInfo.hasUpdate
-            ? `<span class="bg-gradient-to-r from-orange-500 to-red-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black whitespace-nowrap shadow-sm animate-pulse">v${updateInfo.localVer} ➔ v${updateInfo.cloudVer} 有新版</span>`
-            : `<span class="route-lib-ver-badge bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap">v${updateInfo.localVer}</span>`;
+            ? `<span class="bg-gradient-to-r from-orange-500 to-red-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black whitespace-nowrap shadow-sm animate-pulse flex-shrink-0">v${updateInfo.localVer}➔v${updateInfo.cloudVer}</span>`
+            : `<span class="route-lib-ver-badge bg-gray-100 text-gray-600 text-[10px] px-1.5 py-0.5 rounded-md font-extrabold whitespace-nowrap flex-shrink-0">v${updateInfo.localVer}</span>`;
 
         const cloudTimeHtml = updateInfo.hasUpdate
-            ? `<div class="text-[11px] font-extrabold text-orange-600 mt-0.5">☁️ 最新版更新於：${updateInfo.updateTimeText}</div>`
-            : `<div class="route-lib-date text-xs text-gray-400 mt-0.5 mb-1">${r.date || ''}</div>`;
+            ? `<span class="text-[10px] font-extrabold text-orange-600 whitespace-nowrap flex-shrink-0">☁️ ${updateInfo.updateTimeText}</span>`
+            : `<span class="route-lib-date text-[10px] font-bold text-gray-400 whitespace-nowrap flex-shrink-0">${r.date || ''}</span>`;
+
+        const editBtnHtml = (typeof canCurrentUserManageRoutes === 'function' && canCurrentUserManageRoutes())
+            ? `<button type="button" class="edit-name-btn text-gray-400 hover:text-amber-500 w-6 h-6 flex items-center justify-center rounded-lg active:bg-gray-100 transition-colors flex-shrink-0" title="更改名稱"><i class="fa-solid fa-pen text-[11px]"></i></button>`
+            : '';
 
         card.innerHTML = `
-            <div class="drag-handle text-gray-300 w-11 min-h-[44px] -ml-1.5 -my-1.5 px-2 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-blue-500 flex-shrink-0 rounded-l-2xl" title="按住拖曳排序">
-                <i class="fa-solid fa-grip-vertical text-xl pointer-events-none"></i>
+            <div class="drag-handle text-red-400 w-7 min-h-[36px] -ml-1 -my-1 px-1 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-red-500 flex-shrink-0 rounded-l-xl" title="按住拖曳排序">
+                <i class="fa-solid fa-grip-vertical text-base pointer-events-none"></i>
             </div>
-            <div class="route-card-info flex-1 min-w-0 py-1 cursor-pointer">
-                <div class="route-lib-title font-black text-gray-900 text-base flex items-center gap-1.5 flex-wrap">
-                    <span class="truncate max-w-full">${r.name}</span>
-                    ${versionBadgeHtml}
-                    ${authorTag}
+            <div class="route-card-info flex-1 min-w-0 flex flex-col justify-center gap-1 cursor-pointer">
+                <div class="flex items-center justify-between gap-1.5 min-w-0">
+                    <div class="flex items-center gap-1 flex-wrap min-w-0 flex-1">
+                        <span class="route-lib-title font-black text-gray-900 text-[13.5px] leading-tight break-words">${r.name}</span>
+                        ${versionBadgeHtml}
+                        ${authorTag}
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        ${cloudTimeHtml}
+                        ${editBtnHtml}
+                    </div>
                 </div>
-                ${cloudTimeHtml}
-                <div class="route-lib-stats flex gap-3 text-[11px] font-bold mt-1">
-                    <span class="route-lib-stat-dist text-blue-600"><i class="fa-solid fa-route mr-1"></i>${r.distance} km</span>
-                    <span class="route-lib-stat-events text-green-600"><i class="fa-solid fa-music mr-1"></i>${(r.events||[]).length} 處標記</span>
-                </div>
-            </div>
-            <div class="flex flex-col justify-between items-end py-0.5 gap-1.5 flex-shrink-0">
-                <div class="flex items-center gap-1">
-                    ${(typeof canCurrentUserManageRoutes === 'function' && canCurrentUserManageRoutes())
-                        ? `<button class="edit-name-btn text-gray-300 hover:text-amber-500 w-7 h-7 flex items-center justify-center rounded-xl active:bg-gray-50 transition-colors" title="更改名稱"><i class="fa-solid fa-pen text-xs"></i></button>`
-                        : ''}
-                </div>
-                <div class="flex flex-col items-end gap-1">
-                    ${updateInfo.hasUpdate ? `
-                    <button type="button" class="update-from-cloud-btn bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white px-2.5 py-1.5 rounded-xl text-[11px] font-black shadow-md flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="立即覆蓋更新為雲端最新版">
-                        🔄 更新路線
-                    </button>` : ''}
-                    <button type="button" class="upload-cloud-btn bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-xl text-[11px] font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap" title="上傳分享至車隊雲端">
-                        ⬆️ 上傳至雲端
-                    </button>
+                <div class="flex items-center justify-between gap-1.5 min-w-0">
+                    <div class="route-lib-stats flex items-center gap-2.5 flex-wrap text-[11px] font-bold min-w-0">
+                        <span class="route-lib-stat-dist text-blue-600 whitespace-nowrap"><i class="fa-solid fa-route mr-0.5"></i>${r.distance} km</span>
+                        <span class="route-lib-stat-events text-green-600 whitespace-nowrap"><i class="fa-solid fa-music mr-0.5"></i>${(r.events||[]).length} 處標記</span>
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        ${updateInfo.hasUpdate ? `
+                        <button type="button" class="update-from-cloud-btn bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white px-2 py-0.5 rounded-lg text-[10.5px] font-black shadow-sm flex items-center gap-0.5 active:scale-95 transition-all whitespace-nowrap" title="立即覆蓋更新為雲端最新版">
+                            🔄 更新路線
+                        </button>` : ''}
+                        <button type="button" class="upload-cloud-btn bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-lg text-[10.5px] font-extrabold flex items-center gap-0.5 active:scale-95 transition-all whitespace-nowrap" title="上傳分享至車隊雲端">
+                            ⬆️ 上傳至雲端
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
@@ -743,6 +747,17 @@ if (deleteRouteBtnEl) {
     };
     deleteRouteBtnEl.onclick = handleDeleteLocalRoute;
     deleteRouteBtnEl.ontouchend = handleDeleteLocalRoute;
+}
+
+const detailUploadCloudBtnEl = document.getElementById('detailUploadCloudBtn');
+if (detailUploadCloudBtnEl) {
+    detailUploadCloudBtnEl.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (selectedRouteIdx >= 0 && selectedRouteIdx < savedRoutes.length && typeof uploadRouteToCloud === 'function') {
+            uploadRouteToCloud(selectedRouteIdx, detailUploadCloudBtnEl);
+        }
+    };
 }
 
 // ==========================================
@@ -3881,6 +3896,10 @@ document.getElementById('saveEditBtn').onclick = () => {
     }
 
     deduplicateSavedRoutes(false);
+    if (editedRoute) {
+        const syncedIdx = savedRoutes.indexOf(editedRoute);
+        if (syncedIdx !== -1) selectedRouteIdx = syncedIdx;
+    }
     persistSavedRoutesToStorage().then(() => {
         renderHistoryList();
         document.getElementById('topBackBtn').classList.remove('hidden');

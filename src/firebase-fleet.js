@@ -436,9 +436,24 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             callouts: Array.isArray(r.callouts) ? r.callouts : []
         };
 
+        const syncPreviewDetailCardIfVisible = () => {
+            const detailUI = document.getElementById('routeDetailUI');
+            if (detailUI && !detailUI.classList.contains('hidden')) {
+                const activeRoute = savedRoutes[selectedRouteIdx] || r;
+                if (activeRoute) {
+                    const curVer = getRouteVersion(activeRoute);
+                    const titleEl = document.getElementById('detailTitle');
+                    const dateEl = document.getElementById('detailDate');
+                    if (titleEl) titleEl.innerText = `${activeRoute.name} (v${curVer})`;
+                    if (dateEl) dateEl.innerText = `更新於 ${activeRoute.date} · 創作者：${activeRoute.author || '隊員'}`;
+                }
+            }
+        };
+
         if (publishDirectlyAsAdmin) {
             const published = await publishRouteToSharedDB(payload, uploadAction === 'overwrite');
             renderHistoryList();
+            syncPreviewDetailCardIfVisible();
             alert(`✅ 管理員直通上架成功！\n路線【${finalRouteName}】(v${published.routeVersion}) 已${uploadAction === 'overwrite' ? '覆蓋更新至' : '新增至'}正式雲端路線庫。`);
         } else {
             // 一般隊員上傳至 pending_routes：不提前竄改本機正式版號，待管理員審核通過後再同步升級
@@ -447,6 +462,7 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             r.uploadedAtText = uploadedAtText;
             await persistSavedRoutesToStorage();
             renderHistoryList();
+            syncPreviewDetailCardIfVisible();
 
             const res = await fetchWithTimeout(FIREBASE_PENDING_URL, {
                 method: 'POST',

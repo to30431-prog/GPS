@@ -1077,135 +1077,176 @@ function attachMapWebglAndViewportGuards() {
 attachMapWebglAndViewportGuards();
 
 // ==========================================
-// 🗺️ 右上角「圖層」切換面板渲染與切換邏輯（含 localStorage 記憶偏好）
+// 🗺️ 右上角「圖層」雙書籤分頁面板（🗺️ 地圖圖層 / ⚙️ 功能開關）渲染與切換邏輯
 // ==========================================
+let currentMapLayerMenuTab = 'layers'; // 'layers'（預設顯示）| 'features'
+
+function syncMapLayerMenuTabUI() {
+    const isLayersTab = (currentMapLayerMenuTab !== 'features');
+    const tabBtnLayers = document.getElementById('mapLayerTabBtnLayers');
+    const tabBtnFeatures = document.getElementById('mapLayerTabBtnFeatures');
+    const panelLayers = document.getElementById('mapLayerTabPanelLayers');
+    const panelFeatures = document.getElementById('mapLayerTabPanelFeatures');
+
+    if (tabBtnLayers) {
+        tabBtnLayers.className = isLayersTab
+            ? 'px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 bg-emerald-600 text-white shadow-sm'
+            : 'px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 text-gray-600 hover:bg-white/70';
+    }
+    if (tabBtnFeatures) {
+        tabBtnFeatures.className = !isLayersTab
+            ? 'px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 bg-indigo-600 text-white shadow-sm'
+            : 'px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 text-gray-600 hover:bg-white/70';
+    }
+    if (panelLayers) {
+        panelLayers.classList.toggle('hidden', !isLayersTab);
+    }
+    if (panelFeatures) {
+        panelFeatures.classList.toggle('hidden', isLayersTab);
+    }
+}
+
+function switchMapLayerMenuTab(tabKey) {
+    currentMapLayerMenuTab = (tabKey === 'features') ? 'features' : 'layers';
+    syncMapLayerMenuTabUI();
+    positionMapLayerMenuPanel();
+}
+
 function renderMapLayerMenuOptions() {
     const listEl = document.getElementById('mapLayerOptionList');
+    const featureListEl = document.getElementById('mapFeatureSwitchList');
     const badgeEl = document.getElementById('currentMapLayerBadge');
     if (badgeEl && currentMapLayerPreset) {
         badgeEl.textContent = currentMapLayerPreset.shortName;
     }
-    if (!listEl) return;
 
-    listEl.innerHTML = '';
+    syncMapLayerMenuTabUI();
 
-    // 🎄 選項第一個：使用者節慶主題開關（耶誕節主題開啟時，右側內嵌專屬「水晶音樂開／關」切換膠囊）
-    if (typeof getEffectiveFestivalThemeState === 'function') {
-        const themeState = getEffectiveFestivalThemeState();
-        const themeMeta = themeState.themeMeta;
-        const isThemeOn = Boolean(themeState.isActive);
-        const showXmasMusicBtn = Boolean(isThemeOn && themeState.themeKey === 'christmas');
-        const isBgmOn = Boolean(window.BgmPlayer && typeof window.BgmPlayer.isEnabled === 'function' && window.BgmPlayer.isEnabled());
-
-        const themeCard = document.createElement('div');
-        themeCard.setAttribute('role', 'button');
-        themeCard.setAttribute('tabindex', '0');
-        themeCard.id = 'mapLayerFestivalThemeToggleBtn';
-        themeCard.className = isThemeOn
-            ? 'w-full text-left px-3 py-2 rounded-xl bg-red-50 border-2 border-red-400 text-red-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none'
-            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none';
-
-        themeCard.innerHTML = `
-            <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span class="text-base flex-shrink-0">${themeMeta.icon}</span>
-                <div class="min-w-0">
-                    <div class="text-xs font-black truncate ${isThemeOn ? 'text-red-800' : 'text-gray-800'}">${themeMeta.name}</div>
-                    <div class="text-[10px] font-bold truncate ${isThemeOn ? 'text-red-600' : 'text-gray-400'}">${isThemeOn ? '已開啟 · 點擊關閉' : '已關閉 · 點擊開啟'}</div>
-                </div>
-            </div>
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-                ${showXmasMusicBtn ? `
-                <button type="button" id="mapLayerXmasBgmBtn" class="px-2 py-1 rounded-full text-[10px] font-black flex items-center gap-1 shadow-sm active:scale-90 transition-all whitespace-nowrap border ${
-                    isBgmOn
-                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-400'
-                        : 'bg-white hover:bg-gray-100 text-gray-600 border-gray-300'
-                }" title="${isBgmOn ? '點擊關閉聖誕水晶音樂' : '點擊開啟聖誕水晶音樂'}">
-                    <span>${isBgmOn ? '🎵 音樂開' : '🔇 音樂關'}</span>
-                </button>` : ''}
-                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isThemeOn ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'}">${isThemeOn ? '開' : '關'}</span>
-            </div>
-        `;
-
-        themeCard.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (typeof toggleUserFestivalTheme === 'function') {
-                toggleUserFestivalTheme();
-            }
-        });
-
-        const xmasBgmBtn = themeCard.querySelector('#mapLayerXmasBgmBtn');
-        if (xmasBgmBtn) {
-            xmasBgmBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                window.BgmPlayer?.toggle();
-            });
+    // --------------------------------------------------
+    // 分頁 2（「⚙️ 功能開關」）：集中放置聖誕節主題（含音樂開關）、測速照相、車隊無線電對講
+    // --------------------------------------------------
+    const targetFeatureContainer = featureListEl || listEl;
+    if (targetFeatureContainer) {
+        if (featureListEl) {
+            featureListEl.innerHTML = '';
+        } else if (listEl) {
+            listEl.innerHTML = '';
         }
 
-        listEl.appendChild(themeCard);
+        // 🎄 1. 使用者節慶主題開關（耶誕節主題開啟時，右側內嵌專屬「水晶音樂開／關」切換膠囊）
+        if (typeof getEffectiveFestivalThemeState === 'function') {
+            const themeState = getEffectiveFestivalThemeState();
+            const themeMeta = themeState.themeMeta;
+            const isThemeOn = Boolean(themeState.isActive);
+            const showXmasMusicBtn = Boolean(isThemeOn && themeState.themeKey === 'christmas');
+            const isBgmOn = Boolean(window.BgmPlayer && typeof window.BgmPlayer.isEnabled === 'function' && window.BgmPlayer.isEnabled());
 
-        const divider = document.createElement('div');
-        divider.className = 'border-b border-gray-100 my-0.5';
-        listEl.appendChild(divider);
+            const themeCard = document.createElement('div');
+            themeCard.setAttribute('role', 'button');
+            themeCard.setAttribute('tabindex', '0');
+            themeCard.id = 'mapLayerFestivalThemeToggleBtn';
+            themeCard.className = isThemeOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-red-50 border-2 border-red-400 text-red-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98] cursor-pointer select-none';
+
+            themeCard.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">${themeMeta.icon}</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isThemeOn ? 'text-red-800' : 'text-gray-800'}">${themeMeta.name}</div>
+                        <div class="text-[10px] font-bold truncate ${isThemeOn ? 'text-red-600' : 'text-gray-400'}">${isThemeOn ? '已開啟 · 點擊關閉' : '已關閉 · 點擊開啟'}</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    ${showXmasMusicBtn ? `
+                    <button type="button" id="mapLayerXmasBgmBtn" class="px-2 py-1 rounded-full text-[10px] font-black flex items-center gap-1 shadow-sm active:scale-90 transition-all whitespace-nowrap border ${
+                        isBgmOn
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-400'
+                            : 'bg-white hover:bg-gray-100 text-gray-600 border-gray-300'
+                    }" title="${isBgmOn ? '點擊關閉聖誕水晶音樂' : '點擊開啟聖誕水晶音樂'}">
+                        <span>${isBgmOn ? '🎵 音樂開' : '🔇 音樂關'}</span>
+                    </button>` : ''}
+                    <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isThemeOn ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-600'}">${isThemeOn ? '開' : '關'}</span>
+                </div>
+            `;
+
+            themeCard.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (typeof toggleUserFestivalTheme === 'function') {
+                    toggleUserFestivalTheme();
+                }
+            });
+
+            const xmasBgmBtn = themeCard.querySelector('#mapLayerXmasBgmBtn');
+            if (xmasBgmBtn) {
+                xmasBgmBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    window.BgmPlayer?.toggle();
+                });
+            }
+
+            targetFeatureContainer.appendChild(themeCard);
+        }
+
+        // 📸 2. 固定式測速照相圖標開關（預設開啟）
+        if (window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function') {
+            const isCamOn = Boolean(window.SpeedCameraManager.isVisible());
+            const camBtn = document.createElement('button');
+            camBtn.type = 'button';
+            camBtn.id = 'mapLayerSpeedCameraToggleBtn';
+            camBtn.className = isCamOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-rose-50 border-2 border-rose-400 text-rose-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            camBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">📸</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isCamOn ? 'text-rose-800' : 'text-gray-800'}">測速照相</div>
+                        <div class="text-[10px] font-bold truncate ${isCamOn ? 'text-rose-600' : 'text-gray-400'}">${isCamOn ? '已顯示 · 接近 300m 語音提醒' : '已隱藏 · 點擊開啟圖標'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isCamOn ? 'bg-rose-600 text-white' : 'bg-gray-200 text-gray-600'}">${isCamOn ? '開' : '關'}</span>
+            `;
+            camBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.SpeedCameraManager.toggle();
+            });
+            targetFeatureContainer.appendChild(camBtn);
+        }
+
+        // 🎙️ 3. 車隊無線電對講開關（預設開啟）
+        if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function') {
+            const isRadioOn = Boolean(window.FleetRadioPTT.isEnabled());
+            const radioBtn = document.createElement('button');
+            radioBtn.type = 'button';
+            radioBtn.id = 'mapLayerFleetRadioToggleBtn';
+            radioBtn.className = isRadioOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-sky-50 border-2 border-sky-400 text-sky-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            radioBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">🎙️</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isRadioOn ? 'text-sky-800' : 'text-gray-800'}">車隊無線電對講</div>
+                        <div class="text-[10px] font-bold truncate ${isRadioOn ? 'text-sky-600' : 'text-gray-400'}">${isRadioOn ? '已開啟 · 顯示對講鈕並接收語音' : '已關閉 · 隱藏對講鈕並停止收音'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isRadioOn ? 'bg-sky-600 text-white' : 'bg-gray-200 text-gray-600'}">${isRadioOn ? '開' : '關'}</span>
+            `;
+            radioBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.FleetRadioPTT.toggle();
+            });
+            targetFeatureContainer.appendChild(radioBtn);
+        }
     }
 
-    // 📸 固定式測速照相圖標開關（預設開啟）
-    if (window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function') {
-        const isCamOn = Boolean(window.SpeedCameraManager.isVisible());
-        const camBtn = document.createElement('button');
-        camBtn.type = 'button';
-        camBtn.id = 'mapLayerSpeedCameraToggleBtn';
-        camBtn.className = isCamOn
-            ? 'w-full text-left px-3 py-2 rounded-xl bg-rose-50 border-2 border-rose-400 text-rose-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
-            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
-        camBtn.innerHTML = `
-            <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span class="text-base flex-shrink-0">📸</span>
-                <div class="min-w-0">
-                    <div class="text-xs font-black truncate ${isCamOn ? 'text-rose-800' : 'text-gray-800'}">測速照相</div>
-                    <div class="text-[10px] font-bold truncate ${isCamOn ? 'text-rose-600' : 'text-gray-400'}">${isCamOn ? '已顯示 · 接近 300m 語音提醒' : '已隱藏 · 點擊開啟圖標'}</div>
-                </div>
-            </div>
-            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isCamOn ? 'bg-rose-600 text-white' : 'bg-gray-200 text-gray-600'}">${isCamOn ? '開' : '關'}</span>
-        `;
-        camBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.SpeedCameraManager.toggle();
-        });
-        listEl.appendChild(camBtn);
-
-        const camDivider = document.createElement('div');
-        camDivider.className = 'border-b border-gray-100 my-0.5';
-        listEl.appendChild(camDivider);
-    }
-
-    // 🎙️ 車隊無線電對講開關（預設開啟）
-    if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function') {
-        const isRadioOn = Boolean(window.FleetRadioPTT.isEnabled());
-        const radioBtn = document.createElement('button');
-        radioBtn.type = 'button';
-        radioBtn.id = 'mapLayerFleetRadioToggleBtn';
-        radioBtn.className = isRadioOn
-            ? 'w-full text-left px-3 py-2 rounded-xl bg-sky-50 border-2 border-sky-400 text-sky-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
-            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
-        radioBtn.innerHTML = `
-            <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span class="text-base flex-shrink-0">🎙️</span>
-                <div class="min-w-0">
-                    <div class="text-xs font-black truncate ${isRadioOn ? 'text-sky-800' : 'text-gray-800'}">車隊無線電對講</div>
-                    <div class="text-[10px] font-bold truncate ${isRadioOn ? 'text-sky-600' : 'text-gray-400'}">${isRadioOn ? '已開啟 · 顯示對講鈕並接收語音' : '已關閉 · 隱藏對講鈕並停止收音'}</div>
-                </div>
-            </div>
-            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isRadioOn ? 'bg-sky-600 text-white' : 'bg-gray-200 text-gray-600'}">${isRadioOn ? '開' : '關'}</span>
-        `;
-        radioBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.FleetRadioPTT.toggle();
-        });
-        listEl.appendChild(radioBtn);
-
-        const radioDivider = document.createElement('div');
-        radioDivider.className = 'border-b border-gray-100 my-0.5';
-        listEl.appendChild(radioDivider);
+    // --------------------------------------------------
+    // 分頁 1（「🗺️ 地圖圖層」預設顯示）：集中放置 6 種底圖樣式切換
+    // --------------------------------------------------
+    if (!listEl) return;
+    if (featureListEl) {
+        listEl.innerHTML = '';
     }
 
     MAP_LAYER_PRESETS.forEach(preset => {
@@ -1277,6 +1318,21 @@ function positionMapLayerMenuPanel() {
     const menuPanel = document.getElementById('mapLayerMenuPanel');
     const refreshMapBtn = document.getElementById('refreshMapBtn');
     const menuRefreshMapBtn = document.getElementById('menuRefreshMapBtn');
+    const tabBtnLayers = document.getElementById('mapLayerTabBtnLayers');
+    const tabBtnFeatures = document.getElementById('mapLayerTabBtnFeatures');
+
+    if (tabBtnLayers) {
+        tabBtnLayers.addEventListener('click', (e) => {
+            e.stopPropagation();
+            switchMapLayerMenuTab('layers');
+        });
+    }
+    if (tabBtnFeatures) {
+        tabBtnFeatures.addEventListener('click', (e) => {
+            e.stopPropagation();
+            switchMapLayerMenuTab('features');
+        });
+    }
 
     renderMapLayerMenuOptions();
 
@@ -1285,6 +1341,7 @@ function positionMapLayerMenuPanel() {
             e.stopPropagation();
             const willOpen = menuPanel.classList.contains('hidden');
             if (willOpen) {
+                currentMapLayerMenuTab = 'layers';
                 renderMapLayerMenuOptions();
                 menuPanel.classList.remove('hidden');
                 positionMapLayerMenuPanel();

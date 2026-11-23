@@ -207,18 +207,42 @@
         </div>
     </div>
 
-    <!-- 🗺️ 地圖圖層與節慶主題切換彈出選單（獨立 fixed 浮層，不受右側工具列捲動容器裁切） -->
-    <div id="mapLayerMenuPanel" class="hidden fixed right-16 top-24 w-64 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-200 p-2.5 z-[99999] flex flex-col gap-1.5 pointer-events-auto">
-        <div class="px-2 py-1 border-b border-gray-100 flex items-center justify-between">
-            <span class="text-xs font-black text-gray-800 flex items-center gap-1">🗺️ 切換地圖圖層</span>
-            <span id="currentMapLayerBadge" class="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Google 地圖</span>
-        </div>
-        <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[55vh] overflow-y-auto"></div>
-        <div class="pt-1 border-t border-gray-100">
-            <button id="menuRefreshMapBtn" type="button" class="w-full px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 font-black text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all">
-                <i class="fa-solid fa-arrows-rotate text-sky-600"></i>
-                <span>輕量重整地圖（保留目前狀態）</span>
+    <!-- 🗺️ 地圖圖層與功能開關雙分頁彈出選單（獨立 fixed 浮層，不受右側工具列捲動容器裁切） -->
+    <div id="mapLayerMenuPanel" class="hidden fixed right-16 top-24 w-[272px] max-w-[calc(100vw-80px)] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-200 p-2.5 z-[99999] flex flex-col gap-2 pointer-events-auto">
+        <!-- 頂部雙書籤分頁切換列 -->
+        <div class="grid grid-cols-2 gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200/80">
+            <button id="mapLayerTabBtnLayers" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 bg-emerald-600 text-white shadow-sm">
+                <span>🗺️</span>
+                <span>地圖圖層</span>
             </button>
+            <button id="mapLayerTabBtnFeatures" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-black flex items-center justify-center gap-1 transition-all active:scale-95 text-gray-600 hover:bg-white/70">
+                <span>⚙️</span>
+                <span>功能開關</span>
+            </button>
+        </div>
+
+        <!-- 分頁 1：🗺️ 地圖圖層（預設顯示） -->
+        <div id="mapLayerTabPanelLayers" class="flex flex-col gap-1.5">
+            <div class="px-1.5 py-0.5 flex items-center justify-between">
+                <span class="text-[11px] font-extrabold text-gray-500">目前套用底圖</span>
+                <span id="currentMapLayerBadge" class="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">Google 地圖</span>
+            </div>
+            <div id="mapLayerOptionList" class="flex flex-col gap-1 max-h-[50vh] overflow-y-auto"></div>
+            <div class="pt-1 border-t border-gray-100">
+                <button id="menuRefreshMapBtn" type="button" class="w-full px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 font-black text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all">
+                    <i class="fa-solid fa-arrows-rotate text-sky-600"></i>
+                    <span>輕量重整地圖（保留目前狀態）</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 分頁 2：⚙️ 功能開關 -->
+        <div id="mapLayerTabPanelFeatures" class="hidden flex flex-col gap-1.5">
+            <div class="px-1.5 py-0.5 flex items-center justify-between">
+                <span class="text-[11px] font-extrabold text-gray-500">主題、測速與車隊對講</span>
+                <span class="text-[10px] font-bold text-gray-400">即時生效</span>
+            </div>
+            <div id="mapFeatureSwitchList" class="flex flex-col gap-1.5 max-h-[52vh] overflow-y-auto"></div>
         </div>
     </div>
 
@@ -504,9 +528,14 @@
                 <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
               </div>
         </div>
-            <div class="flex items-center gap-4 text-xs font-bold mb-3 px-1">
-                <span class="flex items-center gap-1.5 text-green-700"><span class="w-3 h-1.5 bg-green-600 rounded-full inline-block"></span> 綠線：音樂收運</span>
-                <span class="flex items-center gap-1.5 text-blue-600"><span class="w-3 h-1.5 bg-blue-500 rounded-full inline-block"></span> 藍線：音樂關閉</span>
+            <div class="flex items-center justify-between gap-2 text-xs font-bold mb-3 px-1">
+                <div class="flex items-center gap-3 sm:gap-4 flex-wrap min-w-0">
+                    <span class="flex items-center gap-1.5 text-green-700 whitespace-nowrap"><span class="w-3 h-1.5 bg-green-600 rounded-full inline-block"></span> 綠線：音樂收運</span>
+                    <span class="flex items-center gap-1.5 text-blue-600 whitespace-nowrap"><span class="w-3 h-1.5 bg-blue-500 rounded-full inline-block"></span> 藍線：音樂關閉</span>
+                </div>
+                <button id="detailUploadCloudBtn" type="button" class="upload-cloud-btn bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-xl text-[11px] font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap flex-shrink-0 shadow-sm relative z-[99999]" title="將目前預覽路線直接上傳或更新至車隊雲端路線庫">
+                    ⬆️ 上傳至雲端
+                </button>
             </div>
             <div class="grid grid-cols-3 gap-2 mb-4">
                 <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
@@ -837,7 +866,7 @@
                 </button>
             </div>
         </div>
-        <div id="historyList" class="flex-1 overflow-y-auto p-4 space-y-3 pb-24"></div>
+        <div id="historyList" class="flex-1 overflow-y-auto px-3 py-2.5 space-y-2 pb-24"></div>
     </div>
 
     <!-- ☁️ 車隊雲端路線庫彈窗 -->

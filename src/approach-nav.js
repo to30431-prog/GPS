@@ -49,9 +49,10 @@
 
     let cachedApproachGeoJSON = { type: 'FeatureCollection', features: [] };
 
-    // DOM 元素參考（建立一次後永久複用，杜絕重繪吃點擊）
-    let promptOuterBtn = null;
-    let promptDistSpan = null;
+    // DOM 元素參考（建立／綁定一次後永久複用，杜絕重繪吃點擊）
+    let statusPillContainerEl = null;
+    let statusTitleEl = null;
+    let isStatusPillBound = false;
     let turnCardEl = null;
     let turnIconEl = null;
     let turnDistEl = null;
@@ -270,58 +271,52 @@
     }
 
     // ==========================================
-    // 4. DOM 元件建立（綁定一次，防重繪吃點擊）
+    // 4. 頂部既有狀態膠囊掛載（綁定一次於外層固定容器，不新增第二顆按鈕，防重繪吃點擊）
     // ==========================================
-    function ensurePromptButtonDOM() {
-        if (promptOuterBtn) return;
-        const leftCol = document.querySelector('#topNavHeaderBar > div:first-child');
-        if (!leftCol) return;
+    function ensureStatusPillApproachBinding() {
+        if (isStatusPillBound && statusPillContainerEl && statusTitleEl) return;
+        const titleEl = document.getElementById('appStatusTitle');
+        const pillEl = titleEl?.parentElement;
+        if (!titleEl || !pillEl) return;
 
-        const btn = document.createElement('button');
-        btn.id = 'approachNavPromptBtn';
-        btn.type = 'button';
-        btn.className = 'hidden bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-3.5 py-2 rounded-2xl shadow-xl border-2 border-white flex items-center gap-2 active:scale-95 transition-all pointer-events-auto cursor-pointer select-none';
-        btn.innerHTML = `
-            <span class="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                <i class="fa-solid fa-diamond-turn-right text-xs"></i>
-            </span>
-            <span class="text-xs font-black whitespace-nowrap">
-                前往起點 (<span id="approachNavDistNum">----m</span>) · 按我導航
-            </span>
-        `;
+        statusTitleEl = titleEl;
+        statusPillContainerEl = pillEl;
+        isStatusPillBound = true;
 
-        // 點擊事件永久綁定於外層固定容器，距離刷新絕不覆蓋 DOM 或事件
-        btn.addEventListener('click', (e) => {
+        // 點擊事件以 capture 階段永久綁定於既有的頂部狀態膠囊外層固定容器，
+        // 每秒與 GPS 刷新僅更新標題距離文字，絕不重繪容器或覆蓋按鈕事件
+        statusPillContainerEl.addEventListener('click', (e) => {
+            if (!isApproachPromptVisible || isApproachActive || !isFollowSessionActive || !targetStartLngLat) return;
+            // 保留版本號膠囊點擊開啟開發者模式不衝突
+            if (e.target && e.target.closest && e.target.closest('#appVersionBadge')) return;
+            e.preventDefault();
             e.stopPropagation();
-            if (!isFollowSessionActive || !targetStartLngLat) return;
             try {
                 if (typeof unlockSpeechSynthesis === 'function') unlockSpeechSynthesis();
             } catch (err) {}
             try { if (typeof vibrate === 'function') vibrate(35); } catch (err) {}
             startApproachNavigation();
-        });
+        }, true);
+    }
 
-        const fleetBadge = document.getElementById('fleetUserBadgeBtn');
-        if (fleetBadge && fleetBadge.parentNode === leftCol) {
-            leftCol.insertBefore(btn, fleetBadge.nextSibling);
-        } else {
-            leftCol.appendChild(btn);
-        }
-
-        promptOuterBtn = btn;
-        promptDistSpan = btn.querySelector('#approachNavDistNum');
+    function updateStatusPillPromptText(distM) {
+        if (!statusTitleEl) statusTitleEl = document.getElementById('appStatusTitle');
+        if (!statusTitleEl || !isFinite(distM)) return;
+        statusTitleEl.textContent = `前往起點 (${Math.round(distM)}m) · 按我導航`;
     }
 
     function showPromptButton(distM) {
-        ensurePromptButtonDOM();
-        if (!promptOuterBtn) return;
+        ensureStatusPillApproachBinding();
+        if (!statusPillContainerEl || !statusTitleEl) return;
         isApproachPromptVisible = true;
-        if (promptDistSpan && isFinite(distM)) {
-            promptDistSpan.textContent = `${Math.round(distM)}m`;
-        }
-        promptOuterBtn.classList.remove('hidden');
 
-        // 每秒僅更新距離數字（不重繪外層按鈕、不覆蓋事件）
+        // 保留原本頂部狀態膠囊的樣式與位置，僅加上可點擊視覺提示
+        statusPillContainerEl.classList.add('cursor-pointer', 'ring-2', 'ring-blue-500/70', 'active:scale-95', 'transition-transform');
+        statusPillContainerEl.setAttribute('role', 'button');
+        statusPillContainerEl.title = '點擊啟動前往起點導航';
+        updateStatusPillPromptText(distM);
+
+        // 每秒僅更新距離數字（不重繪外層狀態膠囊、不覆蓋點擊事件）
         if (!promptRefreshTimer) {
             promptRefreshTimer = setInterval(() => {
                 if (!isApproachPromptVisible || isApproachActive || !isFollowSessionActive) {
@@ -329,8 +324,8 @@
                     promptRefreshTimer = null;
                     return;
                 }
-                if (promptDistSpan && isFinite(lastDistToStartM)) {
-                    promptDistSpan.textContent = `${Math.round(lastDistToStartM)}m`;
+                if (isFinite(lastDistToStartM)) {
+                    updateStatusPillPromptText(lastDistToStartM);
                 }
             }, 1000);
         }
@@ -342,8 +337,10 @@
             clearInterval(promptRefreshTimer);
             promptRefreshTimer = null;
         }
-        if (promptOuterBtn) {
-            promptOuterBtn.classList.add('hidden');
+        if (statusPillContainerEl) {
+            statusPillContainerEl.classList.remove('cursor-pointer', 'ring-2', 'ring-blue-500/70', 'active:scale-95', 'transition-transform');
+            statusPillContainerEl.removeAttribute('role');
+            statusPillContainerEl.removeAttribute('title');
         }
     }
 
@@ -819,13 +816,9 @@
             return;
         }
 
-        // 手動關閉前往起點引導卡片，若仍距起點 > 100m 則回到待命手動啟動狀態
+        // 手動關閉前往起點引導卡片，若仍距起點 > 100m 則回到待命手動啟動狀態（頂部狀態膠囊恢復「前往起點 (XXXXm) · 按我導航」）
         if (isFollowSessionActive && isFinite(lastDistToStartM) && lastDistToStartM > MANUAL_PROMPT_THRESHOLD_M) {
             showPromptButton(lastDistToStartM);
-            const titleEl = document.getElementById('appStatusTitle');
-            if (titleEl) {
-                titleEl.innerText = `前往起點 (${Math.round(lastDistToStartM)}m)`;
-            }
         } else {
             hidePromptButton();
         }
@@ -886,9 +879,9 @@
                 if (curDistToStartM > MANUAL_PROMPT_THRESHOLD_M) {
                     if (!isApproachPromptVisible) {
                         showPromptButton(curDistToStartM);
-                    } else if (promptDistSpan) {
-                        // 僅更新距離數字，絕不重繪按鈕 DOM
-                        promptDistSpan.textContent = `${Math.round(curDistToStartM)}m`;
+                    } else {
+                        // 僅更新頂部狀態膠囊的距離文字，絕不重繪外層容器或覆蓋點擊事件
+                        updateStatusPillPromptText(curDistToStartM);
                     }
                 } else {
                     hidePromptButton();
@@ -933,6 +926,10 @@
 
         isActive() {
             return Boolean(isApproachActive);
+        },
+
+        isPromptVisible() {
+            return Boolean(isApproachPromptVisible && !isApproachActive);
         },
 
         stop(isManualExit = true) {

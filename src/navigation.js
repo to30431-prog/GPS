@@ -657,7 +657,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 speakText("我們任務開始，路上請注意安全。");
                 vibrate([200, 100, 200]);
             } else {
-                document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+                if (!window.ApproachNav?.isPromptVisible?.()) {
+                    document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+                }
                 return;
             }
         }

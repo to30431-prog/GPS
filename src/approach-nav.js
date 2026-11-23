@@ -734,6 +734,16 @@
         // 進入前往起點導航時預設收合右側功能按鈕列（關），點按可展開或收起
         setRightToolbarCollapsed(true);
 
+        // 保底確認正式清運路線維持完整原色（未走過進度 index = 0），不被誤染為灰色
+        try {
+            if (typeof updateProgressRouteLayers === 'function' &&
+                Array.isArray(activeTargetRoute?.points) &&
+                activeTargetRoute.points.length >= 2 &&
+                !(typeof isPowerSaveMapPaused === 'function' && isPowerSaveMapPaused())) {
+                updateProgressRouteLayers(activeTargetRoute.points, 0, null, 0);
+            }
+        } catch (e) {}
+
         const titleEl = document.getElementById('appStatusTitle');
         if (titleEl) {
             titleEl.innerText = '前往起點導航中';

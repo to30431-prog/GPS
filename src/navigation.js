@@ -603,7 +603,45 @@ document.getElementById('startFollowBtn').onclick = async () => {
             window.syncCarHeading?.(heading, map ? map.getBearing() : 0);
         }
 
-        // 即時計算路線進度索引 currentTrackIndex：
+        // 純唯讀計算距起點與距正式路線最短距離（絕不提前推進 currentTrackIndex 或把正式路線變灰）
+        const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+        let minDistToFormalRoute = Infinity;
+        for (let i = 0; i < pts.length; i++) {
+            const dM = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+            if (dM < minDistToFormalRoute) minDistToFormalRoute = dM;
+        }
+
+        window.ApproachNav?.onGpsUpdate({
+            lng,
+            lat,
+            heading,
+            speedKmh: filtered.speedKmh,
+            route,
+            minDistToRoute: minDistToFormalRoute,
+            distToStart,
+            hasAnnouncedStart
+        });
+
+        // 🛡️ 前往起點導航中：完全隔離正式路線進度與灰色已通過渲染，保持原本清運路線顏色正常
+        if (window.ApproachNav?.isActive()) return;
+
+        // 尚未抵達起點或正式路線前（待命前往起點階段）：同樣不提前推進 currentTrackIndex 或將正式路線變灰
+        if (!hasAnnouncedStart) {
+            if (distToStart <= 45 || minDistToFormalRoute <= 45) {
+                hasAnnouncedStart = true;
+                document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
+                showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
+                speakText("我們任務開始，路上請注意安全。");
+                vibrate([200, 100, 200]);
+            } else {
+                if (!window.ApproachNav?.isPromptVisible?.()) {
+                    document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
+                }
+                return;
+            }
+        }
+
+        // 即時計算路線進度索引 currentTrackIndex（僅於真正抵達起點並進入正式遵循導航後才開始更新）：
         // 1. 初次進入導航：起點 80m 內優先由起點端匹配；半路切入則找最近軌跡段（排除終點末端）
         // 2. 導航進行中：嚴格限制在前方滑動視窗（沿線約 150~250m 內）順序推進，防止折返重疊跳號
         const prevTrackIndex = currentTrackIndex;
@@ -634,34 +672,6 @@ document.getElementById('startFollowBtn').onclick = async () => {
         // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 渲染為半透明淺灰色，currentTrackIndex ~ 終點維持高亮原色
         if (!isPowerSaveMapPaused()) {
             updateProgressRouteLayers(pts, currentTrackIndex, null, 150);
-        }
-
-        const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
-        window.ApproachNav?.onGpsUpdate({
-            lng,
-            lat,
-            heading,
-            speedKmh: filtered.speedKmh,
-            route,
-            minDistToRoute: minDist,
-            distToStart,
-            hasAnnouncedStart
-        });
-        if (window.ApproachNav?.isActive()) return;
-
-        if (!hasAnnouncedStart) {
-            if (distToStart <= 45 || minDist <= 45) {
-                hasAnnouncedStart = true;
-                document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
-                showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
-                speakText("我們任務開始，路上請注意安全。");
-                vibrate([200, 100, 200]);
-            } else {
-                if (!window.ApproachNav?.isPromptVisible?.()) {
-                    document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
-                }
-                return;
-            }
         }
 
         if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {

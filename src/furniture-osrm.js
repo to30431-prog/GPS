@@ -1140,13 +1140,82 @@ function showFurnitureSearchPreviewPin(lng, lat, label) {
 
 // ==========================================
 // 🤖 串聯方式 1：自動沿路串（OSRM 以目前車輛即時 GPS 位置與車頭方向角為起點，強制靠右順向停靠＋禁止原地 U 型迴轉）
+// - 完全獨立於一般路線編輯器（src/route-editor.js），不共用或覆蓋任何一般畫線狀態與 OSRM 函式
 // ==========================================
+function normalizeFurnitureHeadingDeg(rawHeading) {
+    if (typeof rawHeading !== 'number' || isNaN(rawHeading) || !isFinite(rawHeading)) {
+        return null;
+    }
+    return ((Math.round(rawHeading) % 360) + 360) % 360;
+}
+
+// 家具模式專屬：兩點間 OSRM driving 道路吸附（強制 continue_straight=true 與台灣靠右 approaches=curb）
+async function fetchFurnitureOsrmSegmentGeometry(lng1, lat1, lng2, lat2, options = {}) {
+    const validHeading = normalizeFurnitureHeadingDeg(options?.startHeading);
+    const bearingsQuery = validHeading !== null ? `&bearings=${validHeading},45;` : '';
+    const approachCandidates = [
+        options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb',
+        'unrestricted;curb'
+    ];
+
+    for (const approachesParam of approachCandidates) {
+        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${approachesParam}${bearingsQuery}`;
+        try {
+            const res = await fetchWithTimeout(osrmUrl, {}, 4000);
+            if (!res.ok) continue;
+            const data = await res.json();
+            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
+                let endHeading = validHeading;
+                if (alignedCoords.length >= 2) {
+                    const pPrev = alignedCoords[alignedCoords.length - 2];
+                    const pLast = alignedCoords[alignedCoords.length - 1];
+                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
+                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+                    }
+                }
+                return { coords: alignedCoords, usedOsrm: true, endHeading };
+            }
+        } catch (err) {
+            // 單次嘗試失敗或超時，繼續嘗試備援參數
+        }
+    }
+
+    try {
+        const fallbackUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=unrestricted;curb`;
+        const res = await fetchWithTimeout(fallbackUrl, {}, 3500);
+        if (res.ok) {
+            const data = await res.json();
+            const coords = data?.routes?.[0]?.geometry?.coordinates;
+            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
+                let endHeading = validHeading;
+                if (alignedCoords.length >= 2) {
+                    const pPrev = alignedCoords[alignedCoords.length - 2];
+                    const pLast = alignedCoords[alignedCoords.length - 1];
+                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
+                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+                    }
+                }
+                return { coords: alignedCoords, usedOsrm: true, endHeading };
+            }
+        }
+    } catch (e) {}
+
+    return {
+        coords: [[lng1, lat1], [lng2, lat2]],
+        usedOsrm: false,
+        endHeading: getBearing(lng1, lat1, lng2, lat2)
+    };
+}
+
 function getCurrentValidVehicleHeading() {
     if (typeof lastRealGpsHeading === 'number' && !isNaN(lastRealGpsHeading) && lastRealGpsHeading >= 0 && lastRealGpsHeading <= 360 && lastValidGpsTime > 0) {
-        return normalizeValidHeadingDeg(lastRealGpsHeading);
+        return normalizeFurnitureHeadingDeg(lastRealGpsHeading);
     }
     if (typeof currentHeading === 'number' && !isNaN(currentHeading) && currentHeading >= 0 && currentHeading <= 360) {
-        return normalizeValidHeadingDeg(currentHeading);
+        return normalizeFurnitureHeadingDeg(currentHeading);
     }
     return null;
 }
@@ -1176,7 +1245,7 @@ async function resolveVehicleOriginForFurnitureOsrm() {
                 const lng = Number(pos.coords.longitude.toFixed(6));
                 const lat = Number(pos.coords.latitude.toFixed(6));
                 const hwHeading = (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading) && pos.coords.heading >= 0 && pos.coords.heading <= 360)
-                    ? normalizeValidHeadingDeg(pos.coords.heading)
+                    ? normalizeFurnitureHeadingDeg(pos.coords.heading)
                     : getCurrentValidVehicleHeading();
                 lastValidGpsLng = lng;
                 lastValidGpsLat = lat;
@@ -1221,7 +1290,7 @@ async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     }
 
     const coordStr = waypoints.map(w => `${w.lng},${w.lat}`).join(';');
-    const validHeading = normalizeValidHeadingDeg(originHeading);
+    const validHeading = normalizeFurnitureHeadingDeg(originHeading);
     // 第 1 個點帶入 ${Math.round(heading)},45，其餘插針點全部留空（例如 bearings=180,45;;...）
     const bearingsParam = validHeading !== null
         ? `&bearings=${[`${validHeading},45`, ...waypoints.slice(1).map(() => '')].join(';')}`
@@ -1301,7 +1370,7 @@ async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     for (let i = 0; i < waypoints.length - 1; i++) {
         const pA = waypoints[i];
         const pB = waypoints[i + 1];
-        const { coords, endHeading } = await fetchOsrmRoadGeometry(pA.lng, pA.lat, pB.lng, pB.lat, {
+        const { coords, endHeading } = await fetchFurnitureOsrmSegmentGeometry(pA.lng, pA.lat, pB.lng, pB.lat, {
             startHeading: rollingHeading,
             originUnrestricted: (i === 0)
         });

@@ -2703,7 +2703,9 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
 }
 
 // ==========================================
-// ✏️ 手繪自由路線 ＋ 點到點拉線（兩種工具並存，共用軌跡與復原／重畫流程）
+// ✏️ 手繪自由路線 ＋ 📍 點到點拉線（邏輯徹底分離，各自獨立處理，且與家具串路線完全隔離）
+// - 手繪自由畫路線：100% 忠實保留使用者手繪原始座標，嚴禁呼叫 OSRM Map Matching 或任何路網吸附演算法
+// - 點到點自動貼齊：獨立呼叫 OSRM foot 小巷路網模式，並附帶 > 2.2 倍直線距離繞路防呆（自動改用直線）
 // ==========================================
 let isManualDrawingMode = false;
 let manualDrawToolMode = 'freehand'; // 'freehand'（✏️ 手繪自由路線）| 'point2point'（📍 點到點拉線）
@@ -2714,6 +2716,12 @@ let isManualDrawFetching = false;
 let manualDrawActionSeq = 0;
 let isManualFreehandStrokeActive = false;
 let manualFreehandStrokeCoords = [];
+let manualFreehandSnappedToPrevEnd = false;
+let manualFreehandPrevTailCoords = [];
+let manualFreehandIncomingUnitVec = null;
+
+const FREEHAND_SNAP_ENDPOINT_MAX_METERS = 20;
+const P2P_OSRM_MAX_DETOUR_RATIO = 2.2;
 
 const startManualDrawBtn = document.getElementById('startManualDrawBtn');
 const manualDrawTopBanner = document.getElementById('manualDrawTopBanner');
@@ -2859,66 +2867,60 @@ function normalizeValidHeadingDeg(rawHeading) {
     return ((Math.round(rawHeading) % 360) + 360) % 360;
 }
 
-// 呼叫 OSRM 道路吸附 API（強制 continue_straight=true 禁止途經點原地迴轉、approaches=curb 台灣靠右順向停靠、並支援起點 bearings 車頭方向角）
-async function fetchOsrmRoadGeometry(lng1, lat1, lng2, lat2, options = {}) {
-    const validHeading = normalizeValidHeadingDeg(options?.startHeading);
-    const bearingsQuery = validHeading !== null ? `&bearings=${validHeading},45;` : '';
-    const approachCandidates = [
-        options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb',
-        'unrestricted;curb'
-    ];
-
-    for (const approachesParam of approachCandidates) {
-        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${approachesParam}${bearingsQuery}`;
-        try {
-            const res = await fetchWithTimeout(osrmUrl, {}, 4000);
-            if (!res.ok) continue;
-            const data = await res.json();
-            const coords = data?.routes?.[0]?.geometry?.coordinates;
-            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-                // 確保起點與前一段終點座標完全銜接無縫隙
-                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
-                let endHeading = validHeading;
-                if (alignedCoords.length >= 2) {
-                    const pPrev = alignedCoords[alignedCoords.length - 2];
-                    const pLast = alignedCoords[alignedCoords.length - 1];
-                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
-                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-                    }
-                }
-                return { coords: alignedCoords, usedOsrm: true, endHeading };
-            }
-        } catch (err) {
-            // 單次嘗試失敗或超時，繼續嘗試備援參數
-        }
+// 📍 點到點拉線專屬：獨立呼叫 OSRM foot 小巷路網模式（避免單行道／分隔島限制造成繞大圈）
+// - 內建繞路防呆機制：當貼齊後路徑長度超過兩點直線距離的 2.2 倍時，自動捨棄繞路結果改用兩點直線連接
+// - 與家具模式（src/furniture-osrm.js）及手繪自由畫路線完全分離
+async function fetchPointToPointFootRoadGeometry(lng1, lat1, lng2, lat2) {
+    const straightDistKm = getDistanceKm(lng1, lat1, lng2, lat2);
+    if (straightDistKm * 1000 < 1) {
+        return {
+            coords: [[lng1, lat1], [lng2, lat2]],
+            usedOsrm: false,
+            detourFallback: false
+        };
     }
 
-    // 若帶入 bearings 在窄巷單行道無解，嘗試保留 continue_straight=true 與 approaches=unrestricted;curb
+    const osrmFootUrl = `https://router.project-osrm.org/route/v1/foot/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
     try {
-        const fallbackUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=unrestricted;curb`;
-        const res = await fetchWithTimeout(fallbackUrl, {}, 3500);
+        const res = await fetchWithTimeout(osrmFootUrl, {}, 4000);
         if (res.ok) {
             const data = await res.json();
             const coords = data?.routes?.[0]?.geometry?.coordinates;
             if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                // 確保起點與前一段終點精準銜接無縫隙
                 const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
-                let endHeading = validHeading;
-                if (alignedCoords.length >= 2) {
-                    const pPrev = alignedCoords[alignedCoords.length - 2];
-                    const pLast = alignedCoords[alignedCoords.length - 1];
-                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
-                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-                    }
+                let snappedDistKm = 0;
+                for (let i = 1; i < alignedCoords.length; i++) {
+                    snappedDistKm += getDistanceKm(
+                        alignedCoords[i - 1][0], alignedCoords[i - 1][1],
+                        alignedCoords[i][0], alignedCoords[i][1]
+                    );
                 }
-                return { coords: alignedCoords, usedOsrm: true, endHeading };
+
+                // 繞路防呆機制：若貼齊路徑長度 > 兩點直線距離的 2.2 倍，捨棄繞路改用兩點直線
+                if (snappedDistKm > straightDistKm * P2P_OSRM_MAX_DETOUR_RATIO) {
+                    return {
+                        coords: [[lng1, lat1], [lng2, lat2]],
+                        usedOsrm: false,
+                        detourFallback: true
+                    };
+                }
+
+                return {
+                    coords: alignedCoords,
+                    usedOsrm: true,
+                    detourFallback: false
+                };
             }
         }
-    } catch (e) {}
+    } catch (err) {
+        // 網路超時或失敗時自動降級為兩點直線連接
+    }
 
     return {
         coords: [[lng1, lat1], [lng2, lat2]],
         usedOsrm: false,
-        endHeading: getBearing(lng1, lat1, lng2, lat2)
+        detourFallback: false
     };
 }
 
@@ -3072,9 +3074,167 @@ function renderManualDrawPreview() {
     }
 }
 
+// 取得目前畫布上已繪製路線的最後一個端點 E（[lng, lat]）
+function getLastManualDrawEndpoint() {
+    for (let i = manualDrawSteps.length - 1; i >= 0; i--) {
+        const step = manualDrawSteps[i];
+        const coords = Array.isArray(step?.densifiedCoords) && step.densifiedCoords.length > 0
+            ? step.densifiedCoords
+            : (Array.isArray(step?.clickLngLat) ? [step.clickLngLat] : []);
+        if (coords.length > 0) {
+            const last = coords[coords.length - 1];
+            return [last[0], last[1]];
+        }
+    }
+    return null;
+}
+
+// 收集前一段路線尾端約 maxTailMeters 公尺的座標串（依順序由舊到新，最後一點即為終點 E），供防折返重疊修剪比對
+function getPreviousManualDrawTailCoords(maxTailMeters = 35) {
+    const tailReversed = [];
+    let accumMeters = 0;
+
+    for (let sIdx = manualDrawSteps.length - 1; sIdx >= 0; sIdx--) {
+        const step = manualDrawSteps[sIdx];
+        const coords = Array.isArray(step?.densifiedCoords) && step.densifiedCoords.length > 0
+            ? step.densifiedCoords
+            : (Array.isArray(step?.clickLngLat) ? [step.clickLngLat] : []);
+        for (let cIdx = coords.length - 1; cIdx >= 0; cIdx--) {
+            const pt = coords[cIdx];
+            if (tailReversed.length > 0) {
+                const prev = tailReversed[tailReversed.length - 1];
+                const dM = getDistanceKm(prev[0], prev[1], pt[0], pt[1]) * 1000;
+                if (dM < 0.05) continue;
+                accumMeters += dM;
+            }
+            tailReversed.push([pt[0], pt[1]]);
+            if (accumMeters >= maxTailMeters) {
+                return tailReversed.reverse();
+            }
+        }
+    }
+    return tailReversed.reverse();
+}
+
+// 計算前一段路線進入終點 E 的局部平面單位方向向量（指向 E）
+function computeIncomingTailUnitVector(tailCoords) {
+    if (!Array.isArray(tailCoords) || tailCoords.length < 2) return null;
+    const endCoord = tailCoords[tailCoords.length - 1];
+    const cosLat = Math.max(0.2, Math.cos((endCoord[1] * Math.PI) / 180));
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * cosLat;
+
+    // 優先取距離終點 E 約 6m~15m 的前段參考點，避免單一微抖動點影響切線方向
+    let refCoord = tailCoords[0];
+    for (let i = tailCoords.length - 2; i >= 0; i--) {
+        const dM = getDistanceKm(tailCoords[i][0], tailCoords[i][1], endCoord[0], endCoord[1]) * 1000;
+        refCoord = tailCoords[i];
+        if (dM >= 6) break;
+    }
+
+    const dx = (endCoord[0] - refCoord[0]) * mPerDegLng;
+    const dy = (endCoord[1] - refCoord[1]) * mPerDegLat;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.2) return null;
+    return { x: dx / len, y: dy / len };
+}
+
+// 判斷接續繪製時的新座標點是否往回重疊到前一段路線尾巴（折返重疊判定）
+function isPointBacktrackingOntoPrevTail(coord, prevEnd, prevTailCoords, incomingUnitVec) {
+    if (!coord || !prevEnd || !incomingUnitVec || !Array.isArray(prevTailCoords) || prevTailCoords.length < 2) {
+        return false;
+    }
+    const cosLat = Math.max(0.2, Math.cos((prevEnd[1] * Math.PI) / 180));
+    const dx = (coord[0] - prevEnd[0]) * 111320 * cosLat;
+    const dy = (coord[1] - prevEnd[1]) * 111320;
+    const distFromE = Math.hypot(dx, dy);
+
+    // 超出接續交界範圍（> 22m）即停止判定為起筆折返
+    if (distFromE > 22) return false;
+    if (distFromE < 0.3) return true;
+
+    // 沿前段行進方向的投影：< -0.5m 代表落在終點 E 後方（往回折返）
+    const proj = dx * incomingUnitVec.x + dy * incomingUnitVec.y;
+    if (proj >= -0.5) return false;
+
+    // 計算該點至前段尾巴各線段的最短距離（公尺）
+    let minTailDistM = Infinity;
+    for (let i = 0; i < prevTailCoords.length - 1; i++) {
+        const a = prevTailCoords[i];
+        const b = prevTailCoords[i + 1];
+        const dM = (typeof pointToSegmentDistMeters === 'function')
+            ? pointToSegmentDistMeters(coord[0], coord[1], a[0], a[1], b[0], b[1])
+            : getDistanceKm(coord[0], coord[1], a[0], a[1]) * 1000;
+        if (dM < minTailDistM) minTailDistM = dM;
+    }
+
+    // 距離前段尾巴 <= 8m 且確實沿著前段尾巴往回重疊（非垂直轉向旁巷）
+    return minTailDistM <= 8 && minTailDistM <= Math.abs(proj) * 1.2 + 2;
+}
+
+// 接續手繪防折返重疊修剪：過濾掉交接處往回重疊前段尾巴與起筆毛刺折返點
+function trimBacktrackingJunctionPoints(rawCoords, prevTailCoords) {
+    if (!Array.isArray(rawCoords) || rawCoords.length < 2) return rawCoords || [];
+    if (!Array.isArray(prevTailCoords) || prevTailCoords.length < 2) return rawCoords;
+
+    const prevEnd = prevTailCoords[prevTailCoords.length - 1];
+    const incomingVec = computeIncomingTailUnitVector(prevTailCoords);
+
+    // 1. 濾除開頭往回重疊到前段尾巴的重複／折返觸控點
+    let firstValidIdx = 1;
+    while (firstValidIdx < rawCoords.length) {
+        const candidate = rawCoords[firstValidIdx];
+        const dFromEM = getDistanceKm(prevEnd[0], prevEnd[1], candidate[0], candidate[1]) * 1000;
+        if (dFromEM < 0.3 || isPointBacktrackingOntoPrevTail(candidate, prevEnd, prevTailCoords, incomingVec)) {
+            firstValidIdx++;
+            continue;
+        }
+        break;
+    }
+
+    const cleaned = [[prevEnd[0], prevEnd[1]], ...rawCoords.slice(firstValidIdx)];
+    if (cleaned.length < 3) return cleaned;
+
+    // 2. 過濾交接處（距終點 E <= 12m）因落筆微抖動造成的尖銳髮夾折返毛刺
+    const cosLat = Math.max(0.2, Math.cos((prevEnd[1] * Math.PI) / 180));
+    const toLocalXY = (pt) => ({
+        x: (pt[0] - prevEnd[0]) * 111320 * cosLat,
+        y: (pt[1] - prevEnd[1]) * 111320
+    });
+
+    let i = 1;
+    while (i < cleaned.length - 1 && i <= 6) {
+        const pPrev = toLocalXY(cleaned[i - 1]);
+        const pCurr = toLocalXY(cleaned[i]);
+        const pNext = toLocalXY(cleaned[i + 1]);
+        const distCurrE = Math.hypot(pCurr.x, pCurr.y);
+        if (distCurrE > 12) break;
+
+        const v1x = pCurr.x - pPrev.x, v1y = pCurr.y - pPrev.y;
+        const v2x = pNext.x - pCurr.x, v2y = pNext.y - pCurr.y;
+        const len1 = Math.hypot(v1x, v1y);
+        const len2 = Math.hypot(v2x, v2y);
+        const distNextE = Math.hypot(pNext.x, pNext.y);
+
+        if (len1 > 0.1 && len2 > 0.1) {
+            const cosAngle = (v1x * v2x + v1y * v2y) / (len1 * len2);
+            if (cosAngle < -0.75 && distNextE < distCurrE) {
+                cleaned.splice(i, 1);
+                continue;
+            }
+        }
+        i++;
+    }
+
+    return cleaned;
+}
+
 function cancelActiveManualFreehandStroke() {
     isManualFreehandStrokeActive = false;
     manualFreehandStrokeCoords = [];
+    manualFreehandSnappedToPrevEnd = false;
+    manualFreehandPrevTailCoords = [];
+    manualFreehandIncomingUnitVec = null;
     updateFreehandTempLayer([]);
     try { map.dragPan.enable(); } catch (e) {}
     try { map.touchZoomRotate.enable(); } catch (e) {}
@@ -3082,35 +3242,39 @@ function cancelActiveManualFreehandStroke() {
 
 function commitManualFreehandStroke() {
     const rawCoords = manualFreehandStrokeCoords.slice();
+    const wasSnappedToPrevEnd = manualFreehandSnappedToPrevEnd;
+    const prevTailSnapshot = manualFreehandPrevTailCoords.slice();
+
     isManualFreehandStrokeActive = false;
     manualFreehandStrokeCoords = [];
+    manualFreehandSnappedToPrevEnd = false;
+    manualFreehandPrevTailCoords = [];
+    manualFreehandIncomingUnitVec = null;
     updateFreehandTempLayer([]);
     try { map.dragPan.enable(); } catch (e) {}
 
     if (!isManualDrawingMode || rawCoords.length < 2) return;
 
-    // 計算該筆自由繪製長度，過短（< 3m）視為誤觸略過
+    // 若起點已磁吸對齊前一段終點 E（20 公尺內），執行防折返重疊修剪，確保銜接滑順無毛刺、不打結
+    let finalFreehandCoords = rawCoords;
+    if (wasSnappedToPrevEnd && prevTailSnapshot.length >= 2) {
+        finalFreehandCoords = trimBacktrackingJunctionPoints(rawCoords, prevTailSnapshot);
+        if (finalFreehandCoords.length < 2) return;
+    }
+
+    // 計算修剪後該筆自由繪製長度，過短（< 3m）視為誤觸或純折返抖動略過
     let strokeMeters = 0;
-    for (let i = 1; i < rawCoords.length; i++) {
-        strokeMeters += getDistanceKm(rawCoords[i - 1][0], rawCoords[i - 1][1], rawCoords[i][0], rawCoords[i][1]) * 1000;
+    for (let i = 1; i < finalFreehandCoords.length; i++) {
+        strokeMeters += getDistanceKm(
+            finalFreehandCoords[i - 1][0], finalFreehandCoords[i - 1][1],
+            finalFreehandCoords[i][0], finalFreehandCoords[i][1]
+        ) * 1000;
     }
     if (strokeMeters < 3) return;
 
-    // 若已有前一段手繪軌跡且新起點距離前段終點 <= 45m，無縫銜接前段終點
-    let coordsToDensify = rawCoords;
-    if (manualDrawSteps.length > 0) {
-        const prevStep = manualDrawSteps[manualDrawSteps.length - 1];
-        const prevCoords = prevStep.densifiedCoords || [];
-        if (prevCoords.length > 0) {
-            const prevEnd = prevCoords[prevCoords.length - 1];
-            const gapM = getDistanceKm(prevEnd[0], prevEnd[1], rawCoords[0][0], rawCoords[0][1]) * 1000;
-            if (gapM > 0.2 && gapM <= 45) {
-                coordsToDensify = [prevEnd, ...rawCoords];
-            }
-        }
-    }
-
-    const densified = densifyRoadCoordinates(coordsToDensify, 6);
+    // 手繪自由畫路線存檔保護：
+    // 嚴禁呼叫 OSRM Map Matching 或任何路網吸附演算法，僅做共線等距細分（直線 100% 維持筆直不扭曲，零偏移）
+    const densified = densifyRoadCoordinates(finalFreehandCoords, 6);
     if (densified.length < 2) return;
 
     const endCoord = densified[densified.length - 1];
@@ -3118,12 +3282,15 @@ function commitManualFreehandStroke() {
         clickLngLat: endCoord,
         musicActive: manualDrawMusicActive,
         densifiedCoords: densified,
-        usedOsrm: false
+        usedOsrm: false,
+        sourceMode: 'freehand'
     });
 
     vibrate(30);
     if (manualDrawPromptText) {
-        manualDrawPromptText.textContent = '✅ 已轉為路線軌跡！可繼續補畫、按「重畫」清除，或直接導航／播放';
+        manualDrawPromptText.textContent = wasSnappedToPrevEnd
+            ? '✅ 已磁吸銜接前段終點並轉為軌跡！可繼續補畫或點擊「✅ 儲存」'
+            : '✅ 已轉為路線軌跡！可繼續補畫、按「重畫」清除，或直接儲存';
     }
     renderManualDrawPreview();
 }
@@ -3372,8 +3539,44 @@ if (btnManualSave) {
         return Boolean(targetEl.closest('.shared-pin-wrapper, .fleet-truck-marker, .furniture-pin-wrapper, .furniture-popup-wrapper, .alert-popup-wrapper'));
     }
 
+    function beginManualFreehandStroke(rawStartCoord) {
+        if (!rawStartCoord) return false;
+        isManualFreehandStrokeActive = true;
+        manualFreehandSnappedToPrevEnd = false;
+        manualFreehandPrevTailCoords = [];
+        manualFreehandIncomingUnitVec = null;
+
+        // 起點自動磁吸接點（Snap to Endpoint）：
+        // 若畫布上已有前一段手繪路線（存在終點 E），落筆位置距離 E 在 20 公尺以內，自動將新線段第 1 點精準吸附對齊至 E
+        const prevEnd = getLastManualDrawEndpoint();
+        if (prevEnd) {
+            const distToPrevEndM = getDistanceKm(prevEnd[0], prevEnd[1], rawStartCoord[0], rawStartCoord[1]) * 1000;
+            if (distToPrevEndM <= FREEHAND_SNAP_ENDPOINT_MAX_METERS) {
+                manualFreehandSnappedToPrevEnd = true;
+                manualFreehandPrevTailCoords = getPreviousManualDrawTailCoords(35);
+                manualFreehandIncomingUnitVec = computeIncomingTailUnitVector(manualFreehandPrevTailCoords);
+                manualFreehandStrokeCoords = [[prevEnd[0], prevEnd[1]]];
+                return true;
+            }
+        }
+
+        manualFreehandStrokeCoords = [rawStartCoord];
+        return true;
+    }
+
     function pushStrokePoint(coord) {
         if (!coord) return;
+        // 接續繪製防折返即時過濾：若已磁吸至前段終點 E，剛開始移動的前幾個點若仍往回重疊在前段尾巴上，直接過濾不加入草稿線
+        if (manualFreehandSnappedToPrevEnd && manualFreehandStrokeCoords.length === 1) {
+            if (isPointBacktrackingOntoPrevTail(
+                coord,
+                manualFreehandStrokeCoords[0],
+                manualFreehandPrevTailCoords,
+                manualFreehandIncomingUnitVec
+            )) {
+                return;
+            }
+        }
         const prev = manualFreehandStrokeCoords[manualFreehandStrokeCoords.length - 1];
         if (!prev || getDistanceKm(prev[0], prev[1], coord[0], coord[1]) * 1000 >= 2.5) {
             manualFreehandStrokeCoords.push(coord);
@@ -3416,9 +3619,8 @@ if (btnManualSave) {
         const coord = clientXYToLngLat(touch.clientX, touch.clientY);
         if (!coord) return;
 
-        // 僅記錄起點，保持 dragPan 與 touchZoomRotate 啟用，直到單指實際滑動（touchmove）才鎖定 dragPan，避免干擾緊接著落下的第二指
-        isManualFreehandStrokeActive = true;
-        manualFreehandStrokeCoords = [coord];
+        // 僅記錄起點（若距前段終點 <= 20m 自動精準磁吸），保持 dragPan 與 touchZoomRotate 啟用，直到單指實際滑動（touchmove）才鎖定 dragPan
+        beginManualFreehandStroke(coord);
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
@@ -3448,11 +3650,7 @@ if (btnManualSave) {
         if (isManualMultiTouchGesture) {
             if (remaining === 0) {
                 resetManualMultiTouchState();
-                isManualFreehandStrokeActive = false;
-                manualFreehandStrokeCoords = [];
-                updateFreehandTempLayer([]);
-                try { map.dragPan.enable(); } catch (err) {}
-                try { map.touchZoomRotate.enable(); } catch (err) {}
+                cancelActiveManualFreehandStroke();
             }
             return;
         }
@@ -3484,8 +3682,7 @@ if (btnManualSave) {
         const coord = clientXYToLngLat(e.clientX, e.clientY);
         if (!coord) return;
 
-        isManualFreehandStrokeActive = true;
-        manualFreehandStrokeCoords = [coord];
+        if (!beginManualFreehandStroke(coord)) return;
         try { map.dragPan.disable(); } catch (err) {}
         updateFreehandTempLayer(manualFreehandStrokeCoords);
     });
@@ -3519,7 +3716,8 @@ async function handleManualPointToPointClick(e) {
             clickLngLat: [lng, lat],
             musicActive: manualDrawMusicActive,
             densifiedCoords: [[lng, lat]],
-            usedOsrm: false
+            usedOsrm: false,
+            sourceMode: 'point2point'
         });
         vibrate(30);
         if (manualDrawPromptText) {
@@ -3545,7 +3743,8 @@ async function handleManualPointToPointClick(e) {
             clickLngLat: [lng, lat],
             musicActive: segMusic,
             densifiedCoords: densified.length >= 2 ? densified : [[lng1, lat1], [lng, lat]],
-            usedOsrm: false
+            usedOsrm: false,
+            sourceMode: 'point2point'
         });
         vibrate(30);
         if (manualDrawPromptText) {
@@ -3555,15 +3754,15 @@ async function handleManualPointToPointClick(e) {
         return;
     }
 
-    // 自動馬路貼齊模式（呼叫 OSRM，超時自動降級直線）
+    // 自動馬路貼齊模式（獨立呼叫 OSRM foot 小巷路網模式，超時或繞路 > 2.2 倍直線距離自動改用兩點直線連接）
     isManualDrawFetching = true;
     const currentSeq = ++manualDrawActionSeq;
     if (btnManualUndo) btnManualUndo.disabled = false;
     if (manualDrawPromptText) {
-        manualDrawPromptText.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在沿道路自動貼齊路徑...';
+        manualDrawPromptText.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> 正在沿小巷路網自動貼齊路徑...';
     }
 
-    const { coords: rawRoadCoords, usedOsrm } = await fetchOsrmRoadGeometry(lng1, lat1, lng, lat);
+    const { coords: rawRoadCoords, usedOsrm, detourFallback } = await fetchPointToPointFootRoadGeometry(lng1, lat1, lng, lat);
     if (!isManualDrawingMode || manualDrawToolMode !== 'point2point' || currentSeq !== manualDrawActionSeq) return;
 
     const densified = densifyRoadCoordinates(rawRoadCoords, 6);
@@ -3573,14 +3772,19 @@ async function handleManualPointToPointClick(e) {
         clickLngLat: [lng, lat],
         musicActive: segMusic,
         densifiedCoords: densified.length >= 2 ? densified : [[lng1, lat1], [lng, lat]],
-        usedOsrm
+        usedOsrm,
+        sourceMode: 'point2point'
     });
 
     vibrate(30);
     if (manualDrawPromptText) {
-        manualDrawPromptText.textContent = usedOsrm
-            ? '📍 已自動沿馬路貼齊，請繼續點擊下一個轉彎路口'
-            : '📍 已使用直線連接，請繼續點擊下一個轉彎路口';
+        if (usedOsrm) {
+            manualDrawPromptText.textContent = '📍 已自動沿馬路貼齊（小巷模式），請繼續點擊下一個轉彎路口';
+        } else if (detourFallback) {
+            manualDrawPromptText.textContent = '📍 偵測到路網繞路超過 2.2 倍，已自動改用直線連接，請繼續點擊下一個路口';
+        } else {
+            manualDrawPromptText.textContent = '📍 已使用直線連接，請繼續點擊下一個轉彎路口';
+        }
     }
     renderManualDrawPreview();
 }

@@ -546,6 +546,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
         renderRouteMarkers(route);
     }
     setCameraFollow(true);
+    window.ApproachNav?.onFollowStart(route, lastKnownLngLat);
 
     // 🚀 按下導航瞬間，強制將鏡頭拉近到「實戰特寫視角」並傾斜
     const initBearing = isHeadingUpMode ? currentHeading : 0;
@@ -636,6 +637,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
         }
 
         const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
+        window.ApproachNav?.onGpsUpdate({
+            lng,
+            lat,
+            heading,
+            speedKmh: filtered.speedKmh,
+            route,
+            minDistToRoute: minDist,
+            distToStart,
+            hasAnnouncedStart
+        });
+        if (window.ApproachNav?.isActive()) return;
+
         if (!hasAnnouncedStart) {
             if (distToStart <= 45 || minDist <= 45) {
                 hasAnnouncedStart = true;
@@ -769,6 +782,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 };
 
 const endFollowAction = () => {
+    window.ApproachNav?.stop(true);
     VoiceQueue.clear();
     activeFollowGpsHandler = null;
     window.activeFollowCurrentTrackIndex = null;

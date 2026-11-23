@@ -4191,6 +4191,7 @@ function restoreRealGpsAfterReplay(alignCamera = true) {
 function backToMain() {
     const wasReplaying = isReplaying;
     stopSmoothPlayback();
+    window.ApproachNav?.stop(true);
     VoiceQueue.clear();
     activeFollowGpsHandler = null;
     if (followWatchId !== null) {

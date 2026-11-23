@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.45';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.45';
+const CACHE_VERSION = 'v3.46';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.46';
 const CACHE_ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const CACHE_ASSETS = [
   './src/map-core.js',
   './src/route-editor.js',
   './src/navigation.js',
+  './src/approach-nav.js',
   './src/firebase-fleet.js',
   './src/shared-pins.js',
   './src/firebase-auth.js',

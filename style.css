@@ -1112,6 +1112,10 @@ input, textarea {
 #rightMapToolbar::-webkit-scrollbar {
     display: none;
 }
+/* 右側功能按鈕列「一鍵收合／展開（預設關）」：非侵入式 CSS Class 切換，不改動各按鈕 id 與事件 */
+#rightMapToolbar.is-collapsed > :not(#rightToolbarToggleBtn):not(#followStopBtn) {
+    display: none !important;
+}
 
 /* 矮螢幕或手機橫向模式：自動緊湊化右側工具列與底部預覽卡片，杜絕與底部卡片重疊 */
 @media (max-height: 700px), (orientation: landscape) and (max-height: 600px) {

@@ -200,19 +200,25 @@ html, body {
     object-fit: contain;
 }
 
-/* 車隊雷達隊友小車標（限制於 48px 內，避免 124px~140px 原圖撐爆覆蓋隊友名稱） */
+/* 車隊雷達隊友小車標（限制於 48px 內，緊貼名牌下方 3px，消除多餘留白與位移偏移） */
 .fleet-car-svg-wrap {
     width: 48px;
     height: 48px;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
 }
 .fleet-car-svg-wrap .vehicle-puck-stage,
 .fleet-car-svg-wrap .vehicle-heading-rotator,
-.fleet-car-svg-wrap .vehicle-img-wrap {
+.fleet-car-svg-wrap .vehicle-img-wrap,
+.fleet-car-svg-wrap .vehicle-sprite-stack {
     width: 48px !important;
     height: 48px !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 .fleet-car-svg-wrap svg,
 .fleet-car-svg-wrap img {
@@ -221,6 +227,7 @@ html, body {
     max-width: 48px !important;
     max-height: 48px !important;
     object-fit: contain !important;
+    display: block !important;
 }
 
 /* 進度條拉桿 */
@@ -1005,6 +1012,11 @@ input, textarea {
    （外層 .fleet-truck-marker 為 MapLibre Marker 容器，嚴禁設定 transform）
    ========================================== */
 .fleet-truck-marker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
     transition: opacity 0.25s ease, filter 0.25s ease;
 }
 

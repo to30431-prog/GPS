@@ -395,7 +395,8 @@
 
       .fleet-car-svg-wrap .vehicle-puck-stage,
       .fleet-car-svg-wrap .vehicle-heading-rotator,
-      .fleet-car-svg-wrap .vehicle-img-wrap {
+      .fleet-car-svg-wrap .vehicle-img-wrap,
+      .fleet-car-svg-wrap .vehicle-sprite-stack {
         width: 48px !important;
         height: 48px !important;
       }

@@ -1828,6 +1828,11 @@ function updateFleetTruckMarkerAppearance(el, memberName, updatedAt, now = Date.
                 rotatorEl.style.width = '48px';
                 rotatorEl.style.height = '48px';
             }
+            const spriteStackEl = carWrap.querySelector('.vehicle-sprite-stack');
+            if (spriteStackEl) {
+                spriteStackEl.style.width = '48px';
+                spriteStackEl.style.height = '48px';
+            }
             const svgEl = carWrap.querySelector('svg');
             if (svgEl) {
                 svgEl.style.width = '48px';
@@ -1944,13 +1949,13 @@ function renderOnlineFleetListUI() {
 
 function createFleetTruckMarkerElement(memberName, updatedAt = Date.now(), peerCarType = 'garbage_yellow', peerIsMoving = false, peerHeadingDeg = 0) {
     const wrapper = document.createElement('div');
-    wrapper.className = 'fleet-truck-marker flex flex-col items-center pointer-events-none select-none';
+    wrapper.className = 'fleet-truck-marker flex flex-col items-center justify-center gap-[3px] pointer-events-none select-none';
     wrapper.style.filter = 'drop-shadow(0 3px 6px rgba(0,0,0,0.38))';
     wrapper.innerHTML = `
-        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-0.5 rounded-full border-2 border-white font-black text-[11px] flex items-center gap-1 whitespace-nowrap shadow-md mb-1">
+        <div class="fleet-truck-pill bg-emerald-600 text-white px-2.5 py-0.5 rounded-full border-2 border-white font-black text-[11px] flex items-center gap-1 whitespace-nowrap shadow-md leading-tight">
             <span class="fleet-member-name"></span>
         </div>
-        <div class="fleet-car-svg-wrap w-12 h-12 flex items-center justify-center"></div>
+        <div class="fleet-car-svg-wrap w-12 h-12 flex items-center justify-center flex-shrink-0"></div>
     `;
     updateFleetTruckMarkerAppearance(wrapper, memberName, updatedAt, Date.now(), peerCarType, peerIsMoving, peerHeadingDeg);
     return wrapper;
@@ -2055,7 +2060,7 @@ async function fetchAndRenderFleetRadar() {
                     const el = createFleetTruckMarkerElement(memberName, updatedAt, peerCarType, peerIsMoving, peerHeading);
                     const marker = new maplibregl.Marker({
                         element: el,
-                        anchor: 'bottom',
+                        anchor: 'center',
                         rotationAlignment: 'viewport',
                         pitchAlignment: 'viewport'
                     })

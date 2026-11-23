@@ -3104,21 +3104,76 @@ if (btnManualUndo) {
     };
 }
 
+const manualClearConfirmModal = document.getElementById('manualClearConfirmModal');
+const btnConfirmManualClear = document.getElementById('btnConfirmManualClear');
+const btnCancelManualClear = document.getElementById('btnCancelManualClear');
+
+function closeManualClearConfirmModal() {
+    if (manualClearConfirmModal) {
+        manualClearConfirmModal.classList.add('hidden');
+    }
+}
+
+function executeManualDrawClear() {
+    if (!isManualDrawingMode) return;
+    manualDrawActionSeq++;
+    isManualDrawFetching = false;
+    cancelActiveManualFreehandStroke();
+    if (manualDrawSteps.length === 0) return;
+    manualDrawSteps = [];
+    vibrate(35);
+    if (manualDrawPromptText) {
+        manualDrawPromptText.textContent = manualDrawToolMode === 'point2point'
+            ? '🗑️ 已清除軌跡，請重新點擊起點與路口'
+            : '🗑️ 已清除軌跡，請重新按住拖曳自由畫橘色線';
+    }
+    renderManualDrawPreview();
+}
+
+if (btnConfirmManualClear) {
+    btnConfirmManualClear.onclick = () => {
+        closeManualClearConfirmModal();
+        executeManualDrawClear();
+    };
+}
+
+if (btnCancelManualClear) {
+    btnCancelManualClear.onclick = () => {
+        closeManualClearConfirmModal();
+    };
+}
+
+if (manualClearConfirmModal) {
+    manualClearConfirmModal.addEventListener('click', (e) => {
+        if (e.target === manualClearConfirmModal) {
+            closeManualClearConfirmModal();
+        }
+    });
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && manualClearConfirmModal && !manualClearConfirmModal.classList.contains('hidden')) {
+        closeManualClearConfirmModal();
+    }
+});
+
 if (btnManualClear) {
     btnManualClear.onclick = () => {
         if (!isManualDrawingMode) return;
-        manualDrawActionSeq++;
-        isManualDrawFetching = false;
-        cancelActiveManualFreehandStroke();
-        if (manualDrawSteps.length === 0) return;
-        manualDrawSteps = [];
-        vibrate(35);
-        if (manualDrawPromptText) {
-            manualDrawPromptText.textContent = manualDrawToolMode === 'point2point'
-                ? '🗑️ 已清除軌跡，請重新點擊起點與路口'
-                : '🗑️ 已清除軌跡，請重新按住拖曳自由畫橘色線';
+        const { points, totalDistKm } = buildManualRouteFromSteps();
+        const hasDrawnTrack = manualDrawSteps.length > 0 || points.length > 0 || totalDistKm > 0;
+        if (!hasDrawnTrack) {
+            manualDrawActionSeq++;
+            isManualDrawFetching = false;
+            cancelActiveManualFreehandStroke();
+            renderManualDrawPreview();
+            return;
         }
-        renderManualDrawPreview();
+        if (manualClearConfirmModal) {
+            manualClearConfirmModal.classList.remove('hidden');
+        } else if (confirm('確定要清除目前所有已繪製的軌跡重新畫嗎？')) {
+            executeManualDrawClear();
+        }
     };
 }
 

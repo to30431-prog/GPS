@@ -903,6 +903,27 @@
         </div>
     </div>
 
+    <!-- 🗑️ 手繪自由路線「重畫」防誤觸確認彈窗 -->
+    <div id="manualClearConfirmModal" class="hidden fixed inset-0 bg-black/70 z-[100001] flex items-center justify-center p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3 border border-gray-100">
+            <div class="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center text-2xl mx-auto">
+                <i class="fa-solid fa-trash-can"></i>
+            </div>
+            <h3 class="text-lg font-black text-gray-900 text-center">確定要重畫軌跡嗎？</h3>
+            <p class="text-xs font-bold text-gray-500 text-center leading-relaxed">
+                確定要清除目前所有已繪製的軌跡重新畫嗎？
+            </p>
+            <div class="grid grid-cols-2 gap-2 mt-1">
+                <button id="btnCancelManualClear" type="button" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-3 rounded-2xl active:scale-95 transition-all text-sm">
+                    取消
+                </button>
+                <button id="btnConfirmManualClear" type="button" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3 rounded-2xl shadow-md active:scale-95 transition-all text-sm">
+                    確定重畫
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- 📍 長按地圖 2 秒：二選一標記類型選擇選單（⚠️ 標記髒亂點 ／ 🏢 標記社區大樓） -->
     <div id="longPressPinTypeModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto transition-opacity">
         <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 border-2 border-gray-100">

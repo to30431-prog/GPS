@@ -16,6 +16,7 @@ const CACHE_ASSETS = [
   './src/furniture-osrm.js',
   './src/bgm-player.js',
   './src/speed-cameras.js',
+  './src/fleet-radio-ptt.js',
   './src/main.js',
   './manifest.json',
   './icon-512.png',

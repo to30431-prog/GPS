@@ -1178,6 +1178,36 @@ function renderMapLayerMenuOptions() {
         listEl.appendChild(camDivider);
     }
 
+    // 🎙️ 車隊無線電對講開關（預設開啟）
+    if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function') {
+        const isRadioOn = Boolean(window.FleetRadioPTT.isEnabled());
+        const radioBtn = document.createElement('button');
+        radioBtn.type = 'button';
+        radioBtn.id = 'mapLayerFleetRadioToggleBtn';
+        radioBtn.className = isRadioOn
+            ? 'w-full text-left px-3 py-2 rounded-xl bg-sky-50 border-2 border-sky-400 text-sky-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+        radioBtn.innerHTML = `
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-base flex-shrink-0">🎙️</span>
+                <div class="min-w-0">
+                    <div class="text-xs font-black truncate ${isRadioOn ? 'text-sky-800' : 'text-gray-800'}">車隊無線電對講</div>
+                    <div class="text-[10px] font-bold truncate ${isRadioOn ? 'text-sky-600' : 'text-gray-400'}">${isRadioOn ? '已開啟 · 顯示對講鈕並接收語音' : '已關閉 · 隱藏對講鈕並停止收音'}</div>
+                </div>
+            </div>
+            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isRadioOn ? 'bg-sky-600 text-white' : 'bg-gray-200 text-gray-600'}">${isRadioOn ? '開' : '關'}</span>
+        `;
+        radioBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.FleetRadioPTT.toggle();
+        });
+        listEl.appendChild(radioBtn);
+
+        const radioDivider = document.createElement('div');
+        radioDivider.className = 'border-b border-gray-100 my-0.5';
+        listEl.appendChild(radioDivider);
+    }
+
     MAP_LAYER_PRESETS.forEach(preset => {
         const isSelected = (preset.id === currentMapLayerPreset?.id);
         const btn = document.createElement('button');

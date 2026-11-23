@@ -815,6 +815,9 @@ function ensureDomMarkersIntactAfterStyleSwitch() {
                 }
             });
         }
+        if (window.SpeedCameraManager && typeof window.SpeedCameraManager.ensureMarkersIntact === 'function') {
+            window.SpeedCameraManager.ensureMarkersIntact();
+        }
 
         const singleMarkers = [
             typeof furnitureSearchPreviewMarker !== 'undefined' ? furnitureSearchPreviewMarker : null,
@@ -1143,6 +1146,36 @@ function renderMapLayerMenuOptions() {
         const divider = document.createElement('div');
         divider.className = 'border-b border-gray-100 my-0.5';
         listEl.appendChild(divider);
+    }
+
+    // 📸 固定式測速照相圖標開關（預設開啟）
+    if (window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function') {
+        const isCamOn = Boolean(window.SpeedCameraManager.isVisible());
+        const camBtn = document.createElement('button');
+        camBtn.type = 'button';
+        camBtn.id = 'mapLayerSpeedCameraToggleBtn';
+        camBtn.className = isCamOn
+            ? 'w-full text-left px-3 py-2 rounded-xl bg-rose-50 border-2 border-rose-400 text-rose-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+            : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+        camBtn.innerHTML = `
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-base flex-shrink-0">📸</span>
+                <div class="min-w-0">
+                    <div class="text-xs font-black truncate ${isCamOn ? 'text-rose-800' : 'text-gray-800'}">測速照相</div>
+                    <div class="text-[10px] font-bold truncate ${isCamOn ? 'text-rose-600' : 'text-gray-400'}">${isCamOn ? '已顯示 · 接近 300m 語音提醒' : '已隱藏 · 點擊開啟圖標'}</div>
+                </div>
+            </div>
+            <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isCamOn ? 'bg-rose-600 text-white' : 'bg-gray-200 text-gray-600'}">${isCamOn ? '開' : '關'}</span>
+        `;
+        camBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.SpeedCameraManager.toggle();
+        });
+        listEl.appendChild(camBtn);
+
+        const camDivider = document.createElement('div');
+        camDivider.className = 'border-b border-gray-100 my-0.5';
+        listEl.appendChild(camDivider);
     }
 
     MAP_LAYER_PRESETS.forEach(preset => {

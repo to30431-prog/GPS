@@ -15,6 +15,7 @@ const CACHE_ASSETS = [
   './src/ai-settings.js',
   './src/furniture-osrm.js',
   './src/bgm-player.js',
+  './src/speed-cameras.js',
   './src/main.js',
   './manifest.json',
   './icon-512.png',

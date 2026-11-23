@@ -607,6 +607,9 @@ function processFilteredGpsPosition(pos, options = {}) {
         if (!isReplaying && typeof window.setMyVehicleMovingState === 'function') {
             window.setMyVehicleMovingState(effectiveSpeedKmh > 1.8);
         }
+        if (!isReplaying && window.SpeedCameraManager && typeof window.SpeedCameraManager.checkPosition === 'function') {
+            window.SpeedCameraManager.checkPosition(stationaryRes.lat, stationaryRes.lng, stationaryRes.heading, stationaryRes.speedKmh, true);
+        }
         return stationaryRes;
     }
 
@@ -644,6 +647,9 @@ function processFilteredGpsPosition(pos, options = {}) {
     lastRecordedSpeedKmh = movingSpeedKmh;
     if (!isReplaying && typeof window.setMyVehicleMovingState === 'function') {
         window.setMyVehicleMovingState(movingSpeedKmh > 1.8);
+    }
+    if (!isReplaying && window.SpeedCameraManager && typeof window.SpeedCameraManager.checkPosition === 'function') {
+        window.SpeedCameraManager.checkPosition(movingRes.lat, movingRes.lng, movingRes.heading, movingRes.speedKmh, false);
     }
     return movingRes;
 }

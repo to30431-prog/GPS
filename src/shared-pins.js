@@ -692,15 +692,66 @@ function openLongPressPinTypeModal(lat, lng) {
     if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
     pendingMapPinLat = lat;
     pendingMapPinLng = lng;
+    window._lastLongPressCoords = { lat, lng };
 
+    const isCalMode = Boolean(window.SpeedCameraManager && typeof window.SpeedCameraManager.isCalibrationMode === 'function' && window.SpeedCameraManager.isCalibrationMode());
     if (longPressPinTypeCoordsText) {
-        longPressPinTypeCoordsText.innerText = `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        longPressPinTypeCoordsText.innerText = isCalMode
+            ? `座標：${lat.toFixed(6)}, ${lng.toFixed(6)}`
+            : `座標：${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    }
+    const speedCamSec = document.getElementById('longPressSpeedCamSection');
+    const precisionValEl = document.getElementById('longPressPrecisionCoordsValue');
+    const copyBtn = document.getElementById('btnCopyLongPressCoords');
+    if (speedCamSec) {
+        if (isCalMode) {
+            speedCamSec.classList.remove('hidden');
+            if (precisionValEl) precisionValEl.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            if (copyBtn) copyBtn.textContent = '📋 一鍵複製';
+        } else {
+            speedCamSec.classList.add('hidden');
+        }
     }
     if (longPressPinTypeModal) {
         window.history.pushState({ pwa: true }, '');
         longPressPinTypeModal.classList.remove('hidden');
     }
 }
+
+document.getElementById('btnCopyLongPressCoords')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const coordsText = (typeof pendingMapPinLat === 'number' && typeof pendingMapPinLng === 'number')
+        ? `${pendingMapPinLat.toFixed(6)}, ${pendingMapPinLng.toFixed(6)}`
+        : '';
+    if (!coordsText) return;
+    const copyBtn = e.currentTarget;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(coordsText);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = coordsText;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        if (copyBtn) copyBtn.textContent = '✅ 已複製';
+    } catch (_) {
+        if (copyBtn) copyBtn.textContent = '⚠️ 複製失敗';
+    }
+});
+
+document.getElementById('btnChooseSpeedCameraPin')?.addEventListener('click', () => {
+    const lat = pendingMapPinLat;
+    const lng = pendingMapPinLng;
+    closeLongPressPinTypeModal(false);
+    if (window.SpeedCameraManager && typeof window.SpeedCameraManager.openEditorModal === 'function') {
+        window.SpeedCameraManager.openEditorModal(null, { lat, lng });
+    }
+});
 
 function closeLongPressPinTypeModal(clearCoords = true) {
     if (longPressPinTypeModal) longPressPinTypeModal.classList.add('hidden');

@@ -28,9 +28,13 @@
         const adminSettingsModal = document.getElementById('adminSettingsModal');
         const adminPasswordModal = document.getElementById('adminPasswordModal');
         const aiDispatchModal = document.getElementById('aiDispatchModal');
+        const speedCameraEditorModal = document.getElementById('speedCameraEditorModal');
 
         // 依序檢查目前是哪個畫面在最上層，就模擬點擊它的「關閉/返回」按鈕
-        if (aiDispatchModal && !aiDispatchModal.classList.contains('hidden')) {
+        if (speedCameraEditorModal && !speedCameraEditorModal.classList.contains('hidden')) {
+            window.SpeedCameraManager?.closeEditorModal();
+        }
+        else if (aiDispatchModal && !aiDispatchModal.classList.contains('hidden')) {
             aiDispatchModal.classList.add('hidden');
         }
         else if (adminSettingsModal && !adminSettingsModal.classList.contains('hidden')) {

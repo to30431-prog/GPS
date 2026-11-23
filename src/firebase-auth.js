@@ -288,6 +288,9 @@ async function checkAndApplyRadarInterval() {
         const cloudCfg = await fetchSystemConfig();
         applySystemConfigToRuntime(cloudCfg);
         await checkMyFleetUserAccessStatus();
+        if (window.SpeedCameraManager && typeof window.SpeedCameraManager.syncFromCloud === 'function') {
+            window.SpeedCameraManager.syncFromCloud(false);
+        }
     } finally {
         isCheckingSystemConfig = false;
     }
@@ -382,6 +385,9 @@ function setLocalUserPermissionRole(newRole) {
     syncAdminCurrentRoleBadgeUI();
     syncRoutePermissionControlsUI();
     evaluateAndRenderAccessGateOverlay();
+    if (window.SpeedCameraManager && typeof window.SpeedCameraManager.syncCalibrationUI === 'function') {
+        window.SpeedCameraManager.syncCalibrationUI();
+    }
 }
 
 function openAdminPasswordModal() {

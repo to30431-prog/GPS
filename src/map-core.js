@@ -1871,6 +1871,11 @@ const VoiceQueue = {
                 this.isSpeaking = false;
                 if (this.queue.length === 0) {
                     window.BgmPlayer?.setVoiceDucking(false);
+                    try {
+                        if ('speechSynthesis' in window && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+                            window.speechSynthesis.cancel();
+                        }
+                    } catch (e) {}
                 }
                 this.processNext();
             };
@@ -1914,20 +1919,12 @@ const VoiceQueue = {
 window.VoiceQueue = VoiceQueue;
 
 function unlockSpeechSynthesis() {
-    if (!('speechSynthesis' in window)) return;
-    try {
-        if (window.speechSynthesis.paused) {
-            window.speechSynthesis.resume();
-        }
-        const wakeUtterance = new SpeechSynthesisUtterance('');
-        wakeUtterance.lang = 'zh-TW';
-        wakeUtterance.volume = 0;
-        window.speechSynthesis.speak(wakeUtterance);
-    } catch (e) {}
+    // 嚴禁預先發送空白 SpeechSynthesisUtterance('')，避免尚未實際播報語音前就觸發手機系統 TTS Audio Ducking 壓低外部背景音樂
 }
 window.unlockSpeechSynthesis = unlockSpeechSynthesis;
 
 function speakText(text) {
+    if (!isVoiceEnabled || !text) return;
     if ('speechSynthesis' in window) {
         try {
             if (window.speechSynthesis.paused) {

@@ -2153,90 +2153,15 @@ function removeMyFleetLocationOnUnload() {
 window.addEventListener('beforeunload', removeMyFleetLocationOnUnload);
 
 // ==========================================
-// 🔇 輕量級「背景無聲保活機制」(AudioContext + 靜音音軌循環)
-// 降低手機切換至背景 (LINE / 通話) 或鎖屏時凍結 GPS 與車隊雷達上傳的機率
+// 🔇 背景保活：停用無聲 AudioContext 與靜音音軌循環，避免進入 App 或觸碰畫面時搶佔手機系統音訊焦點（Audio Focus）而壓低外部背景音樂音量
 // ==========================================
 let bgSilentAudioCtx = null;
 let bgSilentAudioEl = null;
 let bgSilentKeepAliveStarted = false;
 
-function createSilentWavDataUri() {
-    // 產生 1 秒、8000Hz、8-bit Mono 的極輕量無聲 WAV
-    const sampleRate = 8000;
-    const numSamples = sampleRate;
-    const buffer = new ArrayBuffer(44 + numSamples);
-    const view = new DataView(buffer);
-    const writeStr = (offset, str) => {
-        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-    };
-    writeStr(0, 'RIFF');
-    view.setUint32(4, 36 + numSamples, true);
-    writeStr(8, 'WAVE');
-    writeStr(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // Mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate, true);
-    view.setUint16(32, 1, true);
-    view.setUint16(34, 8, true); // 8-bit
-    writeStr(36, 'data');
-    view.setUint32(40, numSamples, true);
-    for (let i = 0; i < numSamples; i++) {
-        view.setUint8(44 + i, 128); // 8-bit PCM 128 為完全靜音
-    }
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return 'data:audio/wav;base64,' + btoa(binary);
-}
-
 function ensureBackgroundSilentKeepAlive() {
-    try {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx) {
-            if (!bgSilentAudioCtx) {
-                bgSilentAudioCtx = new AudioCtx();
-                const osc = bgSilentAudioCtx.createOscillator();
-                const gain = bgSilentAudioCtx.createGain();
-                // 極微小增益 (0.00001) 完全無聲，同時防止瀏覽器判定為空音軌而休眠
-                gain.gain.value = 0.00001;
-                osc.connect(gain);
-                gain.connect(bgSilentAudioCtx.destination);
-                osc.start();
-            }
-            if (bgSilentAudioCtx.state === 'suspended') {
-                bgSilentAudioCtx.resume().catch(() => {});
-            }
-        }
-    } catch (e) {}
-
-    try {
-        if (!bgSilentAudioEl) {
-            bgSilentAudioEl = new Audio(createSilentWavDataUri());
-            bgSilentAudioEl.loop = true;
-            bgSilentAudioEl.volume = 0.01;
-            bgSilentAudioEl.setAttribute('playsinline', '');
-            bgSilentAudioEl.setAttribute('webkit-playsinline', '');
-        }
-        if (bgSilentAudioEl.paused) {
-            bgSilentAudioEl.play().catch(() => {});
-        }
-    } catch (e) {}
-
-    bgSilentKeepAliveStarted = true;
+    // 嚴禁建立或播放常駐無聲 AudioContext / Audio，確保手機背景播放音樂（Spotify / Apple Music / YouTube Music 等）不被壓低音量
 }
-
-['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evtName => {
-    window.addEventListener(evtName, function onFirstUserInteract() {
-        ensureBackgroundSilentKeepAlive();
-        if (bgSilentAudioCtx && bgSilentAudioCtx.state === 'running') {
-            window.removeEventListener(evtName, onFirstUserInteract);
-        }
-    }, { passive: true });
-});
 
 // ==========================================
 // 📍 共享地圖地標核心狀態變數（提前宣告以避免 startFleetRadarSystem 啟動時觸發 TDZ ReferenceError）
@@ -2472,9 +2397,6 @@ function startFleetRadarSystem() {
 
 async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
     if (sourceEvent === 'visibilitychange' && document.visibilityState !== 'visible') return;
-    if (bgSilentKeepAliveStarted) {
-        ensureBackgroundSilentKeepAlive();
-    }
     ensurePureBlackSystemBars();
 
     // 切回前台後延遲 150ms 執行 map.resize() 與 map.triggerRepaint()；若偵測到 webglcontextlost 則自動重建底圖渲染避免白屏

@@ -318,6 +318,12 @@
         }, 180);
     }
 
+    function suspendAudioContextIfIdle() {
+        if ((!isBgmEnabled || isPausedBySystemState()) && audioCtx && audioCtx.state === 'running') {
+            audioCtx.suspend().catch(() => {});
+        }
+    }
+
     function setEnabled(enabled) {
         isBgmEnabled = Boolean(enabled);
         try {
@@ -329,7 +335,8 @@
             startCurrentSongLoop();
         } else {
             stopTimers();
-            applyGainTarget(false);
+            applyGainTarget(true);
+            suspendAudioContextIfIdle();
         }
 
         if (typeof renderMapLayerMenuOptions === 'function') {
@@ -353,7 +360,8 @@
         const isXmas = themeKey === 'christmas' || isChristmasThemeActive();
         if (!isXmas) {
             stopTimers();
-            applyGainTarget(false);
+            applyGainTarget(true);
+            suspendAudioContextIfIdle();
             return;
         }
         if (isBgmEnabled && !isPausedBySystemState()) {
@@ -364,14 +372,16 @@
             }
         } else {
             stopTimers();
-            applyGainTarget(false);
+            applyGainTarget(true);
+            suspendAudioContextIfIdle();
         }
     }
 
     function syncPlaybackState() {
         if (!isBgmEnabled || isPausedBySystemState()) {
             stopTimers();
-            applyGainTarget(false);
+            applyGainTarget(true);
+            suspendAudioContextIfIdle();
             return;
         }
         const ctx = ensureAudioContext();

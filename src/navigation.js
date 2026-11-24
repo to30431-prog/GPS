@@ -470,19 +470,7 @@ function updateTacticalDisplay() {
 }
 
 document.getElementById('startFollowBtn').onclick = async () => {
-    // 🔊 在使用者點擊「遵循路線」手勢當下同步喚醒瀏覽器 TTS 引擎，解除手機自動播放限制
     window.BgmPlayer?.unlockAndSync();
-    if (typeof unlockSpeechSynthesis === 'function') {
-        unlockSpeechSynthesis();
-    } else if ('speechSynthesis' in window) {
-        try {
-            if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-            const wakeU = new SpeechSynthesisUtterance('');
-            wakeU.lang = 'zh-TW';
-            wakeU.volume = 0;
-            window.speechSynthesis.speak(wakeU);
-        } catch (e) {}
-    }
     isReplaying = false;
     window.isReplaying = false;
     stopSmoothPlayback();

@@ -189,42 +189,10 @@
         return true;
     }
 
-    // 🔓 瀏覽器音訊自動播放解鎖（於首次使用者互動時預熱 AudioContext 與共用 Audio 元素，並自動補播先前被阻擋的語音）
+    // 🔓 瀏覽器音訊延遲處理（嚴禁於頁面載入、一般點擊或切回前景時預先建立/resume AudioContext 或播放無聲 WAV，避免搶佔手機音訊焦點而壓低外部背景音樂）
     function unlockBrowserAudio() {
-        if (!sharedAudioEl) {
-            sharedAudioEl = new Audio();
-            sharedAudioEl.setAttribute('playsinline', '');
-            sharedAudioEl.setAttribute('webkit-playsinline', '');
-            sharedAudioEl.preload = 'auto';
-        }
-        try {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            if (AudioCtx) {
-                if (!unlockAudioCtx) unlockAudioCtx = new AudioCtx();
-                if (unlockAudioCtx.state === 'suspended') {
-                    unlockAudioCtx.resume().catch(() => {});
-                }
-            }
-        } catch (e) {}
-        if (!isAudioUnlocked && sharedAudioEl && !isPlayingAudio) {
-            try {
-                // 極短無聲 WAV 解鎖 iOS/Android 自動播放權限（嚴禁在語音播放中覆寫 src）
-                sharedAudioEl.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-                sharedAudioEl.volume = 0.01;
-                const p = sharedAudioEl.play();
-                if (p && typeof p.then === 'function') {
-                    p.then(() => {
-                        if (!isPlayingAudio) {
-                            sharedAudioEl.pause();
-                            sharedAudioEl.currentTime = 0;
-                            sharedAudioEl.volume = 1.0;
-                        }
-                        isAudioUnlocked = true;
-                        flushPendingAutoplayItem();
-                    }).catch(() => {});
-                }
-            } catch (e) {}
-        } else if (isAudioUnlocked) {
+        isAudioUnlocked = true;
+        if (pendingAutoplayRetryItem) {
             flushPendingAutoplayItem();
         }
     }
@@ -239,7 +207,7 @@
         }
     }
 
-    function scheduleIdleAudioCtxSuspend() {
+    function scheduleIdleAudioCtxSuspend(delayMs = 150) {
         if (audioCtxIdleSuspendTimer) {
             clearTimeout(audioCtxIdleSuspendTimer);
             audioCtxIdleSuspendTimer = null;
@@ -249,38 +217,46 @@
             if (!isRecordingPtt && !isPlayingAudio && unlockAudioCtx && unlockAudioCtx.state === 'running') {
                 unlockAudioCtx.suspend().catch(() => {});
             }
-        }, 400);
+        }, delayMs);
     }
 
-    // 🔔 極短清脆無線電提示音（開始收音：高音短嗶；結束送出：低音確認嗶；播畢後自動釋放 AudioContext 避免佔用音訊通道）
+    // 🔔 極短清脆無線電提示音（僅在實際按下/放開對講鍵時才按需喚醒 AudioContext，85ms 播畢後立即 suspend 釋放音訊通道）
     function playPttCueTone(kind = 'start') {
         try {
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
             if (!AudioCtx) return;
             if (!unlockAudioCtx) unlockAudioCtx = new AudioCtx();
+            const triggerTone = () => {
+                if (!unlockAudioCtx || unlockAudioCtx.state !== 'running') return;
+                const now = unlockAudioCtx.currentTime;
+                const osc = unlockAudioCtx.createOscillator();
+                const gain = unlockAudioCtx.createGain();
+                osc.type = 'sine';
+                if (kind === 'start') {
+                    osc.frequency.setValueAtTime(880, now);
+                    osc.frequency.exponentialRampToValueAtTime(1046, now + 0.055);
+                } else {
+                    osc.frequency.setValueAtTime(740, now);
+                    osc.frequency.exponentialRampToValueAtTime(520, now + 0.06);
+                }
+                gain.gain.setValueAtTime(0.0001, now);
+                gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
+                osc.connect(gain);
+                gain.connect(unlockAudioCtx.destination);
+                osc.onended = () => {
+                    try { osc.disconnect(); gain.disconnect(); } catch (_) {}
+                    scheduleIdleAudioCtxSuspend(120);
+                };
+                osc.start(now);
+                osc.stop(now + 0.085);
+                scheduleIdleAudioCtxSuspend(150);
+            };
             if (unlockAudioCtx.state === 'suspended') {
-                unlockAudioCtx.resume().catch(() => {});
-            }
-            if (unlockAudioCtx.state !== 'running') return;
-            const now = unlockAudioCtx.currentTime;
-            const osc = unlockAudioCtx.createOscillator();
-            const gain = unlockAudioCtx.createGain();
-            osc.type = 'sine';
-            if (kind === 'start') {
-                osc.frequency.setValueAtTime(880, now);
-                osc.frequency.exponentialRampToValueAtTime(1046, now + 0.055);
+                unlockAudioCtx.resume().then(triggerTone).catch(() => {});
             } else {
-                osc.frequency.setValueAtTime(740, now);
-                osc.frequency.exponentialRampToValueAtTime(520, now + 0.06);
+                triggerTone();
             }
-            gain.gain.setValueAtTime(0.0001, now);
-            gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
-            osc.connect(gain);
-            gain.connect(unlockAudioCtx.destination);
-            osc.start(now);
-            osc.stop(now + 0.085);
-            scheduleIdleAudioCtxSuspend();
         } catch (e) {}
     }
 
@@ -288,7 +264,7 @@
     function syncAudioFocusWithBgm() {
         const shouldDuck = Boolean(isRecordingPtt || isPlayingAudio);
         if (!shouldDuck) {
-            scheduleIdleAudioCtxSuspend();
+            scheduleIdleAudioCtxSuspend(120);
         }
         if (shouldDuck === isBgmDuckedByRadio) return;
         isBgmDuckedByRadio = shouldDuck;
@@ -302,12 +278,11 @@
         } catch (e) {}
     }
 
-    // 僅解鎖一般媒體自動播放權限，絕不在任何頁面互動時預開麥克風
+    // 僅在有待補播的對講語音時，才於使用者互動時觸發補播；平時觸碰畫面絕不啟動任何 AudioContext 或 Audio 元素
     ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evtName => {
         window.addEventListener(evtName, function onInteractUnlock() {
-            unlockBrowserAudio();
-            if (isAudioUnlocked && !pendingAutoplayRetryItem) {
-                window.removeEventListener(evtName, onInteractUnlock);
+            if (pendingAutoplayRetryItem) {
+                flushPendingAutoplayItem();
             }
         }, { passive: true });
     });

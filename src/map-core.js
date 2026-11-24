@@ -288,6 +288,7 @@ function bindCoreMapInstanceListeners(targetMap) {
     }
 }
 
+let mapInstanceCreatedAt = Date.now();
 let map = new maplibregl.Map({
     container: 'map',
     style: currentMapLayerPreset.getStyle(),
@@ -374,6 +375,53 @@ function setMyVehicleMovingState(isMoving) {
 
 renderMyVehicleCarSvg();
 
+// 🚗 確保本機車輛標記永遠已建立、可見且掛載於目前最新的 MapLibre map 實例上（防止實例重建或冷啟動競態導致車輛消失）
+function ensureVehicleMarkerOnMap(lngLatOverride = null, headingOverride = null) {
+    if (!map) return null;
+    const targetLngLat = (Array.isArray(lngLatOverride) && lngLatOverride.length >= 2 && Number.isFinite(lngLatOverride[0]) && Number.isFinite(lngLatOverride[1]))
+        ? [lngLatOverride[0], lngLatOverride[1]]
+        : ((Array.isArray(vehicleVisualLngLat) && vehicleVisualLngLat.length >= 2 && Number.isFinite(vehicleVisualLngLat[0]) && Number.isFinite(vehicleVisualLngLat[1]))
+            ? [vehicleVisualLngLat[0], vehicleVisualLngLat[1]]
+            : ((Array.isArray(lastKnownLngLat) && lastKnownLngLat.length >= 2) ? [lastKnownLngLat[0], lastKnownLngLat[1]] : [121.346, 24.954]));
+    const targetHeading = (typeof headingOverride === 'number' && !isNaN(headingOverride))
+        ? headingOverride
+        : ((typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading)) ? vehicleVisualHeading : currentHeading);
+
+    if (!puckEl.innerHTML || !puckEl.innerHTML.trim()) {
+        renderMyVehicleCarSvg();
+    }
+    puckEl.style.display = 'flex';
+    puckEl.style.opacity = '1';
+    puckEl.style.visibility = 'visible';
+    puckEl.style.zIndex = '35';
+
+    if (!vehicleMarker) {
+        vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'viewport', pitchAlignment: 'viewport' })
+            .setLngLat(targetLngLat)
+            .setRotation(0)
+            .addTo(map);
+        vehicleMarker.setRotation = function (headingDeg) {
+            const h = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : currentHeading;
+            window.syncCarHeading?.(h, map ? map.getBearing() : 0);
+            return this;
+        };
+    } else {
+        const el = vehicleMarker.getElement?.();
+        if (!el || !el.isConnected || vehicleMarker._map !== map) {
+            try { vehicleMarker.addTo(map); } catch (e) {}
+        }
+        try { vehicleMarker.setLngLat(targetLngLat); } catch (e) {}
+    }
+
+    vehicleVisualLngLat = [...targetLngLat];
+    vehicleVisualHeading = targetHeading;
+    window.syncCarHeading?.(targetHeading, map ? map.getBearing() : 0);
+    return vehicleMarker;
+}
+
+// 頁面初始化即掛載車輛標記，不等候 map.once('load')，避免冷啟動或前景重建競態導致 vehicleMarker 為 null
+ensureVehicleMarkerOnMap();
+
 // 🚗 點擊自己車輛 Marker 彈出橫向「換車選單」（選單內動態展示烏龜划水與千陽號破浪）
 function closeCarModelPickerMenu() {
     const overlay = document.getElementById('carModelPickerOverlay');
@@ -440,6 +488,7 @@ function openCarModelPickerMenu() {
                 e.stopPropagation();
                 if (typeof setMyCarType === 'function') setMyCarType(model.id);
                 renderMyVehicleCarSvg();
+                ensureVehicleMarkerOnMap();
                 try { navigator.vibrate?.(25); } catch (_) {}
                 if (typeof window.broadcastRadarNow === 'function') {
                     window.broadcastRadarNow();
@@ -478,7 +527,11 @@ function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) 
         }
         return;
     }
-    if (!vehicleMarker || !Array.isArray(targetLngLat) || targetLngLat.length < 2) return;
+    if (!Array.isArray(targetLngLat) || targetLngLat.length < 2) return;
+    if (!vehicleMarker || !vehicleMarker.getElement?.()?.isConnected || vehicleMarker._map !== map) {
+        ensureVehicleMarkerOnMap(targetLngLat, targetHeading);
+    }
+    if (!vehicleMarker) return;
     const endLng = Number(targetLngLat[0]);
     const endLat = Number(targetLngLat[1]);
     const endHeading = typeof targetHeading === 'number' && !isNaN(targetHeading) ? targetHeading : vehicleVisualHeading;
@@ -891,17 +944,7 @@ function fixSymbolTextAlignment() {
 // 確保所有 DOM Marker（黃色垃圾車、橘黃色警示膠囊、起終點、隊友雷達、共享地標、編輯節點、家具插針）在底圖切換或前景回切後完整保留且座標不偏移
 function ensureDomMarkersIntactAfterStyleSwitch() {
     try {
-        if (vehicleMarker) {
-            const el = vehicleMarker.getElement();
-            if (el && !el.isConnected) {
-                vehicleMarker.addTo(map);
-            }
-            vehicleMarker.setLngLat(vehicleVisualLngLat || lastKnownLngLat);
-            window.syncCarHeading?.(
-                typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading) ? vehicleVisualHeading : currentHeading,
-                map ? map.getBearing() : 0
-            );
-        }
+        ensureVehicleMarkerOnMap();
         const reconnectMarkerList = (list) => {
             if (!Array.isArray(list)) return;
             list.forEach(m => {
@@ -1039,6 +1082,8 @@ function isMapWebglContextBroken() {
 function isMapBaseStyleAbnormal() {
     if (!map) return true;
     if (isMapWebglContextBroken()) return true;
+    // 實例剛建立 2.5 秒內正處於正常初始載入期，避免 pageshow/focus 誤判 isStyleLoaded()=false 而打斷首次載入
+    if ((Date.now() - mapInstanceCreatedAt) < 2500) return false;
     try {
         if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return true;
         const style = map.getStyle?.();
@@ -1110,6 +1155,7 @@ function rebuildMapInstanceAndRestoreAllState(reason = 'webgl-recovery') {
         }
 
         // 3. 重新建立全新的 MapLibre 實例（取得嶄新健康的 WebGL Context）
+        mapInstanceCreatedAt = Date.now();
         const nextMap = new maplibregl.Map({
             container: 'map',
             style: currentMapLayerPreset.getStyle(),
@@ -1121,6 +1167,7 @@ function rebuildMapInstanceAndRestoreAllState(reason = 'webgl-recovery') {
             touchZoomRotate: true
         });
         map = nextMap;
+        ensureVehicleMarkerOnMap();
 
         // 4. 掛載事件紀錄代理、核心監聽器、WebGL 監聽與自動重放所有外部模組監聽器
         installMapInstanceListenerRecorder(nextMap);
@@ -1656,26 +1703,16 @@ function positionMapLayerMenuPanel() {
 })();
 
 map.once('load', () => {
-    // 外層 Marker 固定不旋轉 (rotation: 0, viewport)，統一交由內層 .vehicle-heading-rotator (window.syncCarHeading) 根據 heading 與 map.getBearing() 控制角度，避免重複旋轉疊加
-    vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'viewport', pitchAlignment: 'viewport' })
-        .setLngLat(lastKnownLngLat)
-        .setRotation(0)
-        .addTo(map);
-    vehicleMarker.setRotation = function (headingDeg) {
-        const h = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : currentHeading;
-        window.syncCarHeading?.(h, map ? map.getBearing() : 0);
-        return this;
-    };
-    vehicleVisualLngLat = [...lastKnownLngLat];
-    vehicleVisualHeading = currentHeading;
-    window.syncCarHeading?.(currentHeading, map.getBearing());
-
+    ensureVehicleMarkerOnMap();
     restoreCustomLayersAndAlignmentAfterStyleLoad();
 
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
         if (!isReplaying && map) {
-            map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
+            const lngLat = [pos.coords.longitude, pos.coords.latitude];
+            lastKnownLngLat = lngLat;
+            ensureVehicleMarkerOnMap(lngLat, currentHeading);
+            map.jumpTo({ center: lngLat, zoom: 17 });
             window.syncCarHeading?.(currentHeading, map.getBearing());
         }
     });

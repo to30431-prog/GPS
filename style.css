@@ -180,7 +180,7 @@ html, body {
     margin-top: -1px;
 }
 
-/* 導航本機車頭圖示（正方形置中盒模型，確保 360° 旋轉不偏心且清晰醒目） */
+/* 導航本機車頭圖示（正方形置中盒模型，確保 360° 旋轉不偏心且清晰醒目，層級高於一般地標） */
 .nav-puck {
     width: 80px;
     height: 80px;
@@ -189,6 +189,9 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 35 !important;
+    opacity: 1;
+    visibility: visible;
     filter: drop-shadow(0px 4px 6px rgba(0, 0, 0, 0.45));
 }
 .nav-puck svg,

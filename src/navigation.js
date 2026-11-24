@@ -616,6 +616,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
             lat,
             heading,
             speedKmh: filtered.speedKmh,
+            rawSpeedMps: (typeof pos?.coords?.speed === 'number' ? pos.coords.speed : null),
             route,
             minDistToRoute: minDistToFormalRoute,
             distToStart,

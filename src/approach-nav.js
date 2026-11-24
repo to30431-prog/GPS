@@ -24,6 +24,7 @@
     const DETOUR_WARNING_RATIO = 1.8;
     const FREE_NAV_LONG_PRESS_MS = 650;
     const FREE_NAV_LONG_PRESS_MOVE_PX = 10;
+    const ROUTE_PREF_HIGHWAY_WEIGHT = { normal: 0.8, shortcut: 0.2 };
 
     const VALHALLA_API_URL = 'https://valhalla1.openstreetmap.de/route';
     const APPROACH_SOURCE_ID = 'approach-nav-route-source';
@@ -32,6 +33,9 @@
 
     // --- 模組私有狀態（完全獨立，不汙染正式路線狀態） ---
     let activeNavMode = null; // null | 'approach' | 'free'
+    let routePrefMode = 'normal'; // 'normal'（一般 use_highways=0.8）| 'shortcut'（捷徑 use_highways=0.2）
+    let isSwitchingRoutePref = false;
+
     let activeTargetRoute = null;
     let targetStartLngLat = null; // 正式路線起點座標 [lng, lat]
     let activeDestLngLat = null;  // 目前導航（前往起點或自由點）目的地座標 [lng, lat]
@@ -39,13 +43,17 @@
 
     let isFollowSessionActive = false;
     let isApproachPromptVisible = false;
-    let isApproachActive = false; // 前往起點或自由導航「進行中」皆為 true（approach 模式下會隔離正式路線進度）
+    let isApproachActive = false;
     let isApproachFallbackMode = false;
     let isFetchingRoute = false;
     let fetchSeqId = 0;
 
     let activeEngineCode = '';       // 'V' | 'O' | ''
     let isDetourSuspected = false;
+    let activeRouteTotalDistM = 0;
+    let activeRouteTotalDurationSec = 0;
+    let latestRemainingDurationSec = 0;
+    let latestRawSpeedMps = null;
 
     let lastVehicleLngLat = null;
     let lastVehicleHeading = null;
@@ -58,12 +66,18 @@
     let hasSpokenNearStart80m = false;
     let lastFallbackSpokenTime = 0;
     let promptRefreshTimer = null;
+    let hudEtaRefreshTimer = null;
+
+    // 導航進行中畫面精簡快照（結束導航時精準還原原本顯示狀態）
+    let isNavChromeImmersed = false;
+    let wasMainUiHiddenBeforeNav = false;
+    let wasQuickAlertHiddenBeforeNav = false;
 
     // 自由導航專屬狀態（預設關閉）
     let isFreeNavEnabled = false;
-    let freeNavPendingConfirmLngLat = null; // 長按確認彈窗目標 [lng, lat]
-    let freeNavPreviewRoute = null;         // 預覽中的路線規劃結果
-    let freeNavDestMarker = null;           // 地圖上自由導航目的地標記
+    let freeNavPendingConfirmLngLat = null;
+    let freeNavPreviewRoute = null;
+    let freeNavDestMarker = null;
 
     let cachedApproachGeoJSON = { type: 'FeatureCollection', features: [] };
 
@@ -81,12 +95,21 @@
     let turnModeBadgeEl = null;
     let turnDetourBadgeEl = null;
 
+    // 左下角行車儀表卡（時速 ＋ ETA）＆ 右下角導航懸浮控制區（一般/捷徑 ＋ 藍色 Google 導航）
+    let drivingHudCardEl = null;
+    let drivingHudSpeedEl = null;
+    let drivingHudEtaEl = null;
+    let bottomRightControlsEl = null;
+    let floatingRoutePrefBtn = null;
+    let floatingGoogleNavBtn = null;
+
     let freeNavConfirmModalEl = null;
     let freeNavConfirmCoordEl = null;
     let freeNavPreviewBarEl = null;
     let freeNavPreviewDistEl = null;
     let freeNavPreviewDetourEl = null;
     let freeNavPreviewCoordEl = null;
+    let freeNavPreviewPrefBtn = null;
     let freeNavPreviewStartBtn = null;
     let freeNavPreviewGoogleBtn = null;
 
@@ -493,48 +516,253 @@
     }
 
     // ==========================================
-    // 5. 頂部轉彎提示卡 DOM（右側新增精簡「Google 導航」按鈕於 ✕ 旁）
+    // 5. 頂部轉彎提示卡 DOM（乾淨寬敞：僅轉向圖示、距離／路名／引擎標記與右側 ✕ 關閉鈕）
+    //    ＋ 左下角行車儀表卡（目前時速 ＋ ETA）
+    //    ＋ 右下角懸浮控制區（一般/捷徑切換 ＋ 獨立藍色 Google 導航鈕）
     // ==========================================
+    function formatEtaClockHHMM(remainingSeconds) {
+        const sec = Math.max(0, Math.round(Number(remainingSeconds) || 0));
+        const etaDate = new Date(Date.now() + sec * 1000);
+        const hh = String(etaDate.getHours()).padStart(2, '0');
+        const mm = String(etaDate.getMinutes()).padStart(2, '0');
+        return `${hh}:${mm} 抵達`;
+    }
+
+    function computeDisplaySpeedKmh(rawSpeedMps) {
+        if (typeof rawSpeedMps !== 'number' || !isFinite(rawSpeedMps) || isNaN(rawSpeedMps) || rawSpeedMps < 0) {
+            return 0;
+        }
+        const kmh = rawSpeedMps * 3.6;
+        return kmh < 2 ? 0 : Math.round(kmh);
+    }
+
+    function syncRoutePrefToggleButtonsUI(isBusy = false) {
+        const isNormal = (routePrefMode === 'normal');
+        const label = isBusy ? '重算中...' : (isNormal ? '🛣️ 一般' : '⚡ 捷徑');
+
+        if (floatingRoutePrefBtn) {
+            floatingRoutePrefBtn.disabled = Boolean(isBusy);
+            floatingRoutePrefBtn.className = isNormal
+                ? 'bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md text-white text-xs font-black px-3 py-2 rounded-2xl shadow-xl border-2 border-slate-500/80 active:scale-95 transition-all flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-60'
+                : 'bg-amber-600/95 hover:bg-amber-700 backdrop-blur-md text-white text-xs font-black px-3 py-2 rounded-2xl shadow-xl border-2 border-amber-300 active:scale-95 transition-all flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-60';
+            floatingRoutePrefBtn.innerHTML = isBusy
+                ? '<i class="fa-solid fa-spinner fa-spin text-[11px]"></i><span>重算中...</span>'
+                : `<span>${label}</span>`;
+        }
+
+        if (freeNavPreviewPrefBtn) {
+            freeNavPreviewPrefBtn.disabled = Boolean(isBusy);
+            freeNavPreviewPrefBtn.className = isNormal
+                ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 font-black text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 whitespace-nowrap flex items-center gap-1 flex-shrink-0 disabled:opacity-60'
+                : 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-400 font-black text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 whitespace-nowrap flex items-center gap-1 flex-shrink-0 disabled:opacity-60';
+            freeNavPreviewPrefBtn.innerHTML = isBusy
+                ? '<i class="fa-solid fa-spinner fa-spin text-[10px]"></i><span>重算中</span>'
+                : `<span>${label}</span>`;
+        }
+    }
+
+    async function handleToggleRoutePrefMode() {
+        if (isSwitchingRoutePref || isFetchingRoute) return;
+        routePrefMode = (routePrefMode === 'normal') ? 'shortcut' : 'normal';
+        try { if (typeof vibrate === 'function') vibrate(25); } catch (e) {}
+
+        // 情境 1：目前處於自由導航預覽階段 → 立即重算預覽路線
+        if (freeNavPreviewRoute && Array.isArray(freeNavPreviewRoute.destLngLat) && !isApproachActive) {
+            isSwitchingRoutePref = true;
+            syncRoutePrefToggleButtonsUI(true);
+            try {
+                await planFreeNavPreviewTo(freeNavPreviewRoute.destLngLat[0], freeNavPreviewRoute.destLngLat[1], true);
+            } finally {
+                isSwitchingRoutePref = false;
+                syncRoutePrefToggleButtonsUI(false);
+            }
+            return;
+        }
+
+        // 情境 2：目前處於導航進行中（前往起點或自由導航）→ 立即重算導航路線
+        if (isApproachActive) {
+            const dest = activeDestLngLat || targetStartLngLat;
+            const origin = resolveValidGpsOrigin();
+            if (!dest || !origin) {
+                syncRoutePrefToggleButtonsUI(false);
+                if (!origin) notifyNoValidGps();
+                return;
+            }
+            isSwitchingRoutePref = true;
+            syncRoutePrefToggleButtonsUI(true);
+            if (turnRoadEl) {
+                turnRoadEl.textContent = `切換為「${routePrefMode === 'normal' ? '一般主幹道' : '捷徑'}」重算中...`;
+            }
+            try {
+                await fetchAndApplyActiveNavigationRoute(
+                    origin.lng,
+                    origin.lat,
+                    dest[0],
+                    dest[1],
+                    lastVehicleHeading,
+                    false
+                );
+            } finally {
+                isSwitchingRoutePref = false;
+                syncRoutePrefToggleButtonsUI(false);
+            }
+            return;
+        }
+
+        syncRoutePrefToggleButtonsUI(false);
+    }
+
+    function ensureDrivingHudAndFloatingControlsDOM() {
+        if (!drivingHudCardEl) {
+            const hud = document.createElement('div');
+            hud.id = 'navDrivingHudCard';
+            hud.className = 'hidden fixed bottom-5 left-3.5 z-[61] bg-slate-900/92 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-slate-500/80 px-3.5 py-2 pointer-events-none select-none min-w-[126px]';
+            hud.innerHTML = `
+                <div class="flex items-baseline gap-1 leading-none">
+                    <span id="navDrivingHudSpeed" class="text-2xl font-black font-mono text-cyan-300 tracking-tight">0</span>
+                    <span class="text-[11px] font-extrabold text-slate-300">km/h</span>
+                </div>
+                <div id="navDrivingHudEta" class="text-xs font-black text-emerald-300 font-mono mt-1 whitespace-nowrap">--:-- 抵達</div>
+            `;
+            document.body.appendChild(hud);
+            drivingHudCardEl = hud;
+            drivingHudSpeedEl = hud.querySelector('#navDrivingHudSpeed');
+            drivingHudEtaEl = hud.querySelector('#navDrivingHudEta');
+        }
+
+        if (!bottomRightControlsEl) {
+            const box = document.createElement('div');
+            box.id = 'navBottomRightControls';
+            // 置於右下角紅色 ✕ 結束鈕（bottom-6, h-14）上方，保留安全間距
+            box.className = 'hidden fixed bottom-[5.8rem] right-3.5 z-[61] flex flex-col items-end gap-2 pointer-events-auto select-none';
+            box.innerHTML = `
+                <button id="navFloatingRoutePrefBtn" type="button" title="切換一般主幹道 / 捷徑模式並重算">
+                    <span>🛣️ 一般</span>
+                </button>
+                <button id="navFloatingGoogleBtn" type="button" class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-black px-3 py-2.5 rounded-2xl shadow-xl border-2 border-white/90 active:scale-95 transition-all flex items-center gap-1.5 whitespace-nowrap" title="開啟 Google Maps 外部導航">
+                    <i class="fa-solid fa-diamond-turn-right text-xs"></i>
+                    <span>Google 導航</span>
+                </button>
+            `;
+
+            box.querySelector('#navFloatingRoutePrefBtn')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                handleToggleRoutePrefMode();
+            });
+            box.querySelector('#navFloatingGoogleBtn')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const dest = activeDestLngLat || targetStartLngLat;
+                openExternalGoogleMapsNav(dest);
+            });
+
+            document.body.appendChild(box);
+            bottomRightControlsEl = box;
+            floatingRoutePrefBtn = box.querySelector('#navFloatingRoutePrefBtn');
+            floatingGoogleNavBtn = box.querySelector('#navFloatingGoogleBtn');
+            syncRoutePrefToggleButtonsUI(false);
+        }
+    }
+
+    function updateDrivingHudUI(rawSpeedMps, remainingDurationSec) {
+        ensureDrivingHudAndFloatingControlsDOM();
+        if (rawSpeedMps !== undefined) {
+            latestRawSpeedMps = rawSpeedMps;
+        }
+        if (typeof remainingDurationSec === 'number' && isFinite(remainingDurationSec) && remainingDurationSec >= 0) {
+            latestRemainingDurationSec = remainingDurationSec;
+        }
+        if (drivingHudSpeedEl) {
+            drivingHudSpeedEl.textContent = String(computeDisplaySpeedKmh(latestRawSpeedMps));
+        }
+        if (drivingHudEtaEl) {
+            drivingHudEtaEl.textContent = latestRemainingDurationSec > 0 || activeRouteTotalDurationSec > 0
+                ? formatEtaClockHHMM(latestRemainingDurationSec)
+                : '--:-- 抵達';
+        }
+    }
+
+    function enterActiveNavChrome() {
+        ensureDrivingHudAndFloatingControlsDOM();
+        const mainUiEl = document.getElementById('mainUI');
+        const quickAlertEl = document.getElementById('tacticalQuickAlertBtn');
+
+        if (!isNavChromeImmersed) {
+            wasMainUiHiddenBeforeNav = mainUiEl ? mainUiEl.classList.contains('hidden') : true;
+            wasQuickAlertHiddenBeforeNav = quickAlertEl ? quickAlertEl.classList.contains('hidden') : true;
+            isNavChromeImmersed = true;
+        }
+
+        // 統一隱藏底部白色控制面板與左下角黃色 +⚠️ 圖釘按鈕
+        mainUiEl?.classList.add('hidden');
+        quickAlertEl?.classList.add('hidden');
+
+        // 顯示左下角精簡行車儀表卡與右下角懸浮控制區（一般/捷徑 ＋ 藍色 Google 導航）
+        drivingHudCardEl?.classList.remove('hidden');
+        bottomRightControlsEl?.classList.remove('hidden');
+        syncRoutePrefToggleButtonsUI(isSwitchingRoutePref);
+        updateDrivingHudUI(latestRawSpeedMps, latestRemainingDurationSec);
+
+        if (!hudEtaRefreshTimer) {
+            hudEtaRefreshTimer = setInterval(() => {
+                if (!isApproachActive) {
+                    clearInterval(hudEtaRefreshTimer);
+                    hudEtaRefreshTimer = null;
+                    return;
+                }
+                updateDrivingHudUI(latestRawSpeedMps, latestRemainingDurationSec);
+            }, 15000);
+        }
+    }
+
+    function exitActiveNavChrome() {
+        if (hudEtaRefreshTimer) {
+            clearInterval(hudEtaRefreshTimer);
+            hudEtaRefreshTimer = null;
+        }
+        drivingHudCardEl?.classList.add('hidden');
+        bottomRightControlsEl?.classList.add('hidden');
+
+        if (isNavChromeImmersed) {
+            isNavChromeImmersed = false;
+            const mainUiEl = document.getElementById('mainUI');
+            const quickAlertEl = document.getElementById('tacticalQuickAlertBtn');
+            if (mainUiEl && !wasMainUiHiddenBeforeNav) {
+                mainUiEl.classList.remove('hidden');
+            }
+            if (quickAlertEl && !wasQuickAlertHiddenBeforeNav) {
+                quickAlertEl.classList.remove('hidden');
+            }
+        }
+    }
+
     function ensureTurnCardDOM() {
         if (turnCardEl) return;
 
         const card = document.createElement('div');
         card.id = 'approachTurnCard';
-        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[375px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3 py-2.5 pointer-events-auto select-none';
+        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[360px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3.5 py-2.5 pointer-events-auto select-none';
         card.innerHTML = `
-            <div class="flex items-center gap-2.5">
-                <div id="approachTurnIconBox" class="w-11 h-11 rounded-xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center flex-shrink-0 text-cyan-300">
-                    <i id="approachTurnIcon" class="fa-solid fa-arrow-up text-xl"></i>
+            <div class="flex items-center gap-3">
+                <div id="approachTurnIconBox" class="w-12 h-12 rounded-xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center flex-shrink-0 text-cyan-300">
+                    <i id="approachTurnIcon" class="fa-solid fa-arrow-up text-2xl"></i>
                 </div>
                 <div class="flex-1 min-w-0">
                     <div class="flex items-baseline gap-1.5">
-                        <span id="approachTurnDist" class="text-lg font-black text-cyan-300 tracking-tight leading-none whitespace-nowrap">-- 公尺</span>
-                        <span id="approachTurnAction" class="text-xs sm:text-sm font-black text-white truncate">規劃中...</span>
+                        <span id="approachTurnDist" class="text-xl font-black text-cyan-300 tracking-tight leading-none whitespace-nowrap">-- 公尺</span>
+                        <span id="approachTurnAction" class="text-sm font-black text-white truncate">規劃中...</span>
                     </div>
-                    <div id="approachTurnRoad" class="text-[11px] font-bold text-slate-200 truncate mt-0.5">正在計算導航路線</div>
-                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    <div id="approachTurnRoad" class="text-xs font-bold text-slate-200 truncate mt-1">正在計算導航路線</div>
+                    <div class="flex items-center gap-1.5 mt-1 flex-wrap">
                         <span id="approachStartRem" class="text-[10px] font-extrabold text-slate-400 whitespace-nowrap">距目標 -- 公尺</span>
                         <span id="approachDetourBadge" class="hidden text-[9px] font-black bg-orange-500/30 text-orange-200 border border-orange-400/70 px-1.5 py-0.2 rounded-full whitespace-nowrap">疑似繞遠路</span>
                         <span id="approachModeBadge" class="hidden text-[9px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/50 px-1.5 py-0.2 rounded-full whitespace-nowrap">直線方位</span>
                     </div>
                 </div>
-                <div class="flex items-center gap-1 flex-shrink-0">
-                    <button id="approachGoogleNavBtn" type="button" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black px-2 py-1.5 rounded-xl shadow active:scale-95 transition-all flex items-center gap-1 whitespace-nowrap border border-blue-300/60" title="開啟 Google Maps 外部導航">
-                        <i class="fa-solid fa-diamond-turn-right text-[10px]"></i>
-                        <span>Google 導航</span>
-                    </button>
-                    <button id="approachCancelBtn" type="button" class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 flex items-center justify-center flex-shrink-0 active:scale-90" title="結束導航">
-                        <i class="fa-solid fa-xmark text-xs"></i>
-                    </button>
-                </div>
+                <button id="approachCancelBtn" type="button" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 flex items-center justify-center flex-shrink-0 active:scale-90" title="結束導航">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
             </div>
         `;
-
-        card.querySelector('#approachGoogleNavBtn')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const dest = activeDestLngLat || targetStartLngLat;
-            openExternalGoogleMapsNav(dest);
-        });
 
         card.querySelector('#approachCancelBtn')?.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -664,9 +892,14 @@
                     </div>
                     <div id="freeNavPreviewCoord" class="text-[10px] font-bold font-mono text-gray-500 truncate mt-0.5">--</div>
                 </div>
-                <button type="button" id="btnFreeNavPreviewGoogle" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-black text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 whitespace-nowrap flex items-center gap-1 flex-shrink-0" title="開啟 Google Maps 外部導航">
-                    <i class="fa-solid fa-diamond-turn-right text-[10px]"></i> Google 導航
-                </button>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <button type="button" id="btnFreeNavPreviewPref" title="切換一般主幹道 / 捷徑模式並重算">
+                        <span>🛣️ 一般</span>
+                    </button>
+                    <button type="button" id="btnFreeNavPreviewGoogle" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-black text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 whitespace-nowrap flex items-center gap-1 flex-shrink-0" title="開啟 Google Maps 外部導航">
+                        <i class="fa-solid fa-diamond-turn-right text-[10px]"></i> Google 導航
+                    </button>
+                </div>
             </div>
             <div class="grid grid-cols-3 gap-2">
                 <button type="button" id="btnFreeNavPreviewCancel" class="col-span-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-2.5 rounded-2xl text-xs active:scale-95">
@@ -677,6 +910,11 @@
                 </button>
             </div>
         `;
+
+        bar.querySelector('#btnFreeNavPreviewPref')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleToggleRoutePrefMode();
+        });
 
         bar.querySelector('#btnFreeNavPreviewCancel')?.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -703,8 +941,10 @@
         freeNavPreviewDistEl = bar.querySelector('#freeNavPreviewDist');
         freeNavPreviewDetourEl = bar.querySelector('#freeNavPreviewDetour');
         freeNavPreviewCoordEl = bar.querySelector('#freeNavPreviewCoord');
+        freeNavPreviewPrefBtn = bar.querySelector('#btnFreeNavPreviewPref');
         freeNavPreviewStartBtn = bar.querySelector('#btnFreeNavPreviewStart');
         freeNavPreviewGoogleBtn = bar.querySelector('#btnFreeNavPreviewGoogle');
+        syncRoutePrefToggleButtonsUI(false);
     }
 
     function hideFreeNavPreviewBar() {
@@ -786,6 +1026,7 @@
             iconClass,
             roadName,
             distance: (Number(m?.length) || 0) * 1000, // 公里 × 1000 轉公尺
+            durationSec: Number(m?.time) || 0,        // 秒
             maneuverLocation: coords[beginIdx] || coords[coords.length - 1],
             stepCoords: coords.slice(beginIdx, endIdx + 1),
             _preSpoken: false,
@@ -848,8 +1089,9 @@
 
         const straightDistanceMeters = calcDistMeters(originLng, originLat, destLng, destLat);
         const validHeading = normalizeValidHeading(headingDeg);
+        const useHighwaysWeight = ROUTE_PREF_HIGHWAY_WEIGHT[routePrefMode] ?? 0.8;
 
-        // --- 第一順位：Valhalla 公開 API（3500ms 逾時、auto、use_highways: 0.3、kilometers、zh-TW） ---
+        // --- 第一順位：Valhalla 公開 API（3500ms 逾時、auto、一般=0.8/捷徑=0.2、kilometers、zh-TW） ---
         try {
             const originLoc = { lat: originLat, lon: originLng };
             if (validHeading !== null) {
@@ -864,7 +1106,7 @@
                 costing: 'auto',
                 costing_options: {
                     auto: {
-                        use_highways: 0.3
+                        use_highways: useHighwaysWeight
                     }
                 },
                 units: 'kilometers',
@@ -898,6 +1140,7 @@
                     const totalDistanceMeters = summaryKm > 0
                         ? summaryKm * 1000
                         : calcPolylineLengthMeters(decodedCoords);
+                    const totalDurationSec = Number(leg?.summary?.time) || Number(valData?.trip?.summary?.time) || Math.round(totalDistanceMeters / (25 / 3.6));
                     const detourRatio = straightDistanceMeters > 10
                         ? (totalDistanceMeters / straightDistanceMeters)
                         : 1;
@@ -908,6 +1151,7 @@
                         coords: decodedCoords,
                         steps,
                         totalDistanceMeters,
+                        totalDurationSec,
                         straightDistanceMeters,
                         detourRatio,
                         isDetourSuspected: detourRatio > DETOUR_WARNING_RATIO
@@ -955,6 +1199,7 @@
                             iconClass: parsed.iconClass,
                             roadName: String(st.name || st.ref || '').trim(),
                             distance: Number(st.distance) || 0,
+                            durationSec: Number(st.duration) || 0, // 秒
                             maneuverLocation: loc,
                             stepCoords: Array.isArray(st.geometry?.coordinates) ? st.geometry.coordinates : [],
                             _preSpoken: false,
@@ -962,6 +1207,7 @@
                         };
                     });
                     const totalDistanceMeters = Number(osrmRoute.distance) || calcPolylineLengthMeters(coords);
+                    const totalDurationSec = Number(osrmRoute.duration) || Math.round(totalDistanceMeters / (25 / 3.6));
                     const detourRatio = straightDistanceMeters > 10
                         ? (totalDistanceMeters / straightDistanceMeters)
                         : 1;
@@ -972,6 +1218,7 @@
                         coords,
                         steps,
                         totalDistanceMeters,
+                        totalDurationSec,
                         straightDistanceMeters,
                         detourRatio,
                         isDetourSuspected: detourRatio > DETOUR_WARNING_RATIO
@@ -983,6 +1230,7 @@
         return {
             ok: false,
             engine: '',
+            totalDurationSec: Math.round(straightDistanceMeters / (25 / 3.6)),
             straightDistanceMeters,
             detourRatio: 1,
             isDetourSuspected: false
@@ -1033,6 +1281,32 @@
     // ==========================================
     // 10. 進行中導航算路與單向推進引導（前往起點 & 自由導航共用）
     // ==========================================
+    function computeRemainingDurationSec(curLng, curLat, distToDestM) {
+        if (!isApproachFallbackMode && Array.isArray(approachSteps) && approachSteps.length > 0) {
+            let remSec = 0;
+            const curIdx = Math.min(currentStepIndex, approachSteps.length - 1);
+            const curStep = approachSteps[curIdx];
+            if (curStep) {
+                const dToM = calcDistMeters(curLng, curLat, curStep.maneuverLocation[0], curStep.maneuverLocation[1]);
+                const stepDist = Number(curStep.distance) || 0;
+                const stepDur = Number(curStep.durationSec) || 0;
+                if (stepDist > 1 && stepDur > 0) {
+                    remSec += stepDur * Math.min(1, dToM / stepDist);
+                } else {
+                    remSec += stepDur;
+                }
+            }
+            for (let i = curIdx + 1; i < approachSteps.length; i++) {
+                remSec += Number(approachSteps[i]?.durationSec) || 0;
+            }
+            if (remSec > 0) return Math.round(remSec);
+        }
+        if (activeRouteTotalDurationSec > 0 && activeRouteTotalDistM > 1) {
+            return Math.max(0, Math.round(activeRouteTotalDurationSec * Math.min(1, distToDestM / activeRouteTotalDistM)));
+        }
+        return Math.max(0, Math.round(distToDestM / (25 / 3.6)));
+    }
+
     async function fetchAndApplyActiveNavigationRoute(originLng, originLat, destLng, destLat, headingDeg, isSilentRecalc = false) {
         if (isFetchingRoute) return;
         isFetchingRoute = true;
@@ -1048,6 +1322,8 @@
             isApproachFallbackMode = false;
             activeEngineCode = result.engine;
             isDetourSuspected = Boolean(result.isDetourSuspected);
+            activeRouteTotalDistM = Number(result.totalDistanceMeters) || calcPolylineLengthMeters(result.coords);
+            activeRouteTotalDurationSec = Number(result.totalDurationSec) || Math.round(activeRouteTotalDistM / (25 / 3.6));
             approachPolylineCoords = result.coords;
             approachSteps = result.steps;
             currentStepIndex = (approachSteps.length > 1 && approachSteps[0].type === 'depart') ? 1 : 0;
@@ -1074,6 +1350,8 @@
         setApproachMapLine(approachPolylineCoords, true);
 
         const distM = calcDistMeters(curLng, curLat, dest[0], dest[1]);
+        activeRouteTotalDistM = distM;
+        activeRouteTotalDurationSec = Math.round(distM / (25 / 3.6));
         const bearing = calcBearingDeg(curLng, curLat, dest[0], dest[1]);
         const dirZh = bearingToCompassZh(bearing);
         const destName = activeDestLabel || activeTargetRoute?.name || '目的地';
@@ -1086,6 +1364,7 @@
             startRemM: distM,
             isFallback: true
         });
+        updateDrivingHudUI(latestRawSpeedMps, activeRouteTotalDurationSec);
 
         const now = Date.now();
         if (announceNow || (now - lastFallbackSpokenTime > 20000 && !(activeNavMode === 'approach' && hasSpokenNearStart80m))) {
@@ -1152,6 +1431,8 @@
             startRemM: distToDestM,
             isFallback: false
         });
+        const remSec = computeRemainingDurationSec(curLng, curLat, distToDestM);
+        updateDrivingHudUI(latestRawSpeedMps, remSec);
 
         if (activeNavMode === 'approach' && hasSpokenNearStart80m) return;
 
@@ -1212,6 +1493,7 @@
 
         hidePromptButton();
         setRightToolbarCollapsed(true);
+        enterActiveNavChrome();
 
         // 保底確認正式清運路線維持完整原色（未走過進度 index = 0），不被誤染為灰色
         try {
@@ -1266,6 +1548,7 @@
         clearApproachMapLine();
         hideTurnCardUI();
         hidePromptButton();
+        exitActiveNavChrome();
 
         const titleEl = document.getElementById('appStatusTitle');
         if (titleEl && activeTargetRoute?.name) {
@@ -1289,6 +1572,7 @@
             currentStepIndex = 0;
             clearApproachMapLine();
             hideTurnCardUI();
+            exitActiveNavChrome();
         }
 
         if (forceFullStop) {
@@ -1343,12 +1627,15 @@
             currentStepIndex = 0;
             clearApproachMapLine();
             hideTurnCardUI();
+            exitActiveNavChrome();
         }
     }
 
-    async function planFreeNavPreviewTo(destLng, destLat) {
-        // 先清除先前殘留的預覽線、標記與狀態
-        stopFreeNavigationCompletely();
+    async function planFreeNavPreviewTo(destLng, destLat, isPrefToggle = false) {
+        // 先清除先前殘留的預覽線、標記與狀態（切換模式重算時保留目的地標記與預覽列防閃爍）
+        if (!isPrefToggle) {
+            stopFreeNavigationCompletely();
+        }
 
         const origin = resolveValidGpsOrigin();
         if (!origin) {
@@ -1360,10 +1647,11 @@
         ensureFreeNavPreviewBarDOM();
         setFreeNavDestMarker([destLng, destLat]);
 
-        if (freeNavPreviewDistEl) freeNavPreviewDistEl.textContent = '算路中...';
+        if (freeNavPreviewDistEl) freeNavPreviewDistEl.textContent = isPrefToggle ? '重算中...' : '算路中...';
         if (freeNavPreviewDetourEl) freeNavPreviewDetourEl.classList.add('hidden');
         if (freeNavPreviewCoordEl) freeNavPreviewCoordEl.textContent = `目標：${destLat.toFixed(6)}, ${destLng.toFixed(6)}`;
         if (freeNavPreviewStartBtn) freeNavPreviewStartBtn.disabled = true;
+        syncRoutePrefToggleButtonsUI(isPrefToggle);
         activeDestLngLat = [destLng, destLat];
         freeNavPreviewBarEl?.classList.remove('hidden');
 
@@ -1393,6 +1681,7 @@
                 coords: straightCoords,
                 steps: [],
                 totalDistanceMeters: straightM,
+                totalDurationSec: Math.round(straightM / (25 / 3.6)),
                 straightDistanceMeters: straightM,
                 detourRatio: 1,
                 isDetourSuspected: false,
@@ -1409,6 +1698,7 @@
         }
 
         if (freeNavPreviewStartBtn) freeNavPreviewStartBtn.disabled = false;
+        syncRoutePrefToggleButtonsUI(false);
 
         // 適度縮放地圖視野涵蓋起點與目的地預覽線
         try {
@@ -1441,6 +1731,8 @@
         isApproachFallbackMode = Boolean(preview.isFallback);
         activeEngineCode = preview.engine || '';
         isDetourSuspected = Boolean(preview.isDetourSuspected);
+        activeRouteTotalDistM = Number(preview.totalDistanceMeters) || calcPolylineLengthMeters(preview.coords);
+        activeRouteTotalDurationSec = Number(preview.totalDurationSec) || Math.round(activeRouteTotalDistM / (25 / 3.6));
         approachPolylineCoords = Array.isArray(preview.coords) ? preview.coords.slice() : [];
         approachSteps = Array.isArray(preview.steps) ? preview.steps : [];
         currentStepIndex = (approachSteps.length > 1 && approachSteps[0].type === 'depart') ? 1 : 0;
@@ -1448,6 +1740,7 @@
         lastFallbackSpokenTime = 0;
 
         setRightToolbarCollapsed(true);
+        enterActiveNavChrome();
         if (typeof setCameraFollow === 'function') setCameraFollow(true);
         setApproachMapLine(approachPolylineCoords, isApproachFallbackMode);
         evaluateActiveGuidance(origin.lng, origin.lat, true);
@@ -1627,12 +1920,16 @@
 
         onGpsUpdate(payload) {
             if (!payload) return;
-            const { lng, lat, heading, minDistToRoute, distToStart, hasAnnouncedStart } = payload;
+            const { lng, lat, heading, rawSpeedMps, minDistToRoute, distToStart, hasAnnouncedStart } = payload;
             if (!isValidLngLat(lng, lat)) return;
 
             lastVehicleLngLat = [lng, lat];
             const validH = normalizeValidHeading(heading);
             if (validH !== null) lastVehicleHeading = validH;
+            latestRawSpeedMps = (typeof rawSpeedMps === 'number' && isFinite(rawSpeedMps)) ? rawSpeedMps : null;
+            if (isApproachActive) {
+                updateDrivingHudUI(latestRawSpeedMps);
+            }
 
             // 若目前處於自由導航進行中，獨立處理自由導航
             if (activeNavMode === 'free' && isApproachActive) {
@@ -1699,13 +1996,15 @@
             evaluateActiveGuidance(lng, lat, false);
         },
 
-        onIdleGpsUpdate(filtered) {
+        onIdleGpsUpdate(filtered, rawSpeedMps = null) {
             if (!filtered || !isValidLngLat(filtered.lng, filtered.lat)) return;
             lastVehicleLngLat = [filtered.lng, filtered.lat];
             const validH = normalizeValidHeading(filtered.heading);
             if (validH !== null) lastVehicleHeading = validH;
+            latestRawSpeedMps = (typeof rawSpeedMps === 'number' && isFinite(rawSpeedMps)) ? rawSpeedMps : null;
 
             if (activeNavMode === 'free' && isApproachActive) {
+                updateDrivingHudUI(latestRawSpeedMps);
                 handleFreeNavLiveGps(filtered.lng, filtered.lat, lastVehicleHeading);
             }
         },

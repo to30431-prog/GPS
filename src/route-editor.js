@@ -431,9 +431,10 @@ if (clearSearchBtn) {
 
 // ==========================================
 // ↕️ 鶯歌清運路線庫：跨平台原生輕量拖曳排序引擎（iOS Safari / WebKit ＋ Android Chrome）
+// - 嚴格鎖定觸發手勢之 touchId / pointerId，阻絕多點觸控與背景重繪中斷拖拽
 // - 僅鎖定把柄與拖曳中卡片，完整保留 #historyList 清單原生捲動
-// - 拖曳中僅更新 GPU translate3d 位移與插入指示線（零 DOM 重建卡頓）
-// - 接近清單頂部／底部 64px 邊界自動捲動並同步重算插入落點
+// - 單一 requestAnimationFrame 迴圈統一驅動 GPU translate3d 位移、插入指示線與 64px 邊界自動捲動
+// - 拖曳中零 DOM 重建；僅在放開手時一次性換位並持久化存檔
 // - 完整監聽 pointerup/pointercancel/touchend/touchcancel/blur/visibilitychange 徹底清理狀態
 // ==========================================
 const historyDragState = {
@@ -441,6 +442,7 @@ const historyDragState = {
     inputMode: null, // 'touch' | 'pointer'
     pointerId: null,
     touchId: null,
+    handleEl: null,
     listEl: null,
     filteredRoutes: null,
     draggedCard: null,
@@ -450,8 +452,11 @@ const historyDragState = {
     targetIndex: -1,
     startClientY: 0,
     currentClientY: 0,
+    needsVisualUpdate: false,
     autoScrollRaf: null,
-    listenersBound: false
+    listenersBound: false,
+    pendingRerenderAfterDrag: false,
+    lastFinishedAt: 0
 };
 
 function getHistoryCardElements(listEl) {
@@ -487,13 +492,15 @@ function updateHistoryDragVisualAndTarget() {
 
     if (historyDragState.indicatorEl) {
         const clampedTop = Math.min(listRect.bottom - 3, Math.max(listRect.top + 1, Math.round(indicatorY)));
-        historyDragState.indicatorEl.style.left = `${Math.round(listRect.left + 12)}px`;
-        historyDragState.indicatorEl.style.width = `${Math.max(40, Math.round(listRect.width - 24))}px`;
-        historyDragState.indicatorEl.style.top = `${clampedTop}px`;
+        const leftPx = Math.round(listRect.left + 12);
+        const widthPx = Math.max(40, Math.round(listRect.width - 24));
+        historyDragState.indicatorEl.style.width = `${widthPx}px`;
+        historyDragState.indicatorEl.style.transform = `translate3d(${leftPx}px, ${clampedTop}px, 0)`;
     }
 }
 
-function startHistoryDragAutoScrollLoop() {
+// 單一 requestAnimationFrame 迴圈：每幀合併處理位移、指示線與 64px 邊界自動捲動
+function startHistoryDragFrameLoop() {
     if (historyDragState.autoScrollRaf !== null) {
         cancelAnimationFrame(historyDragState.autoScrollRaf);
         historyDragState.autoScrollRaf = null;
@@ -535,7 +542,8 @@ function startHistoryDragAutoScrollLoop() {
             }
         }
 
-        if (scrolled) {
+        if (historyDragState.needsVisualUpdate || scrolled) {
+            historyDragState.needsVisualUpdate = false;
             updateHistoryDragVisualAndTarget();
         }
         historyDragState.autoScrollRaf = requestAnimationFrame(tick);
@@ -544,37 +552,35 @@ function startHistoryDragAutoScrollLoop() {
     historyDragState.autoScrollRaf = requestAnimationFrame(tick);
 }
 
+function findMatchingTouch(touchList, targetId) {
+    if (!touchList || targetId === null) return null;
+    for (let i = 0; i < touchList.length; i++) {
+        if (touchList[i].identifier === targetId) {
+            return touchList[i];
+        }
+    }
+    return null;
+}
+
 function onHistoryDragTouchMove(e) {
     if (!historyDragState.active || historyDragState.inputMode !== 'touch') return;
-    let matchedTouch = null;
-    if (e.touches && e.touches.length > 0) {
-        for (let i = 0; i < e.touches.length; i++) {
-            if (e.touches[i].identifier === historyDragState.touchId) {
-                matchedTouch = e.touches[i];
-                break;
-            }
-        }
-        if (!matchedTouch) matchedTouch = e.touches[0];
-    }
+    // 嚴格僅追蹤起始觸控手指 identifier，忽略其他多指觸碰，絕不跳位
+    const matchedTouch = findMatchingTouch(e.touches, historyDragState.touchId);
     if (!matchedTouch) return;
     if (e.cancelable) e.preventDefault();
     historyDragState.currentClientY = matchedTouch.clientY;
-    updateHistoryDragVisualAndTarget();
+    historyDragState.needsVisualUpdate = true;
 }
 
 function onHistoryDragTouchEnd(e) {
     if (!historyDragState.active || historyDragState.inputMode !== 'touch') return;
-    if (e.changedTouches && historyDragState.touchId !== null) {
-        let matched = false;
-        for (let i = 0; i < e.changedTouches.length; i++) {
-            if (e.changedTouches[i].identifier === historyDragState.touchId) {
-                matched = true;
-                break;
-            }
-        }
-        if (!matched && e.touches && e.touches.length > 0) return;
-    }
-    finishHistoryCardDrag(e.type === 'touchend');
+    // 僅當起始拖曳的手指真正離開或被取消時才結束，忽略其他輔助手指的放開事件
+    const endedMatch = findMatchingTouch(e.changedTouches, historyDragState.touchId);
+    if (!endedMatch) return;
+
+    const movedEnough = Math.abs(historyDragState.currentClientY - historyDragState.startClientY) > 16;
+    const shouldCommit = e.type === 'touchend' || (e.type === 'touchcancel' && movedEnough);
+    finishHistoryCardDrag(shouldCommit);
 }
 
 function onHistoryDragPointerMove(e) {
@@ -582,18 +588,22 @@ function onHistoryDragPointerMove(e) {
     if (historyDragState.pointerId !== null && e.pointerId !== historyDragState.pointerId) return;
     if (e.cancelable) e.preventDefault();
     historyDragState.currentClientY = e.clientY;
-    updateHistoryDragVisualAndTarget();
+    historyDragState.needsVisualUpdate = true;
 }
 
 function onHistoryDragPointerEnd(e) {
     if (!historyDragState.active || historyDragState.inputMode !== 'pointer') return;
     if (historyDragState.pointerId !== null && e.pointerId !== historyDragState.pointerId) return;
-    finishHistoryCardDrag(e.type === 'pointerup');
+
+    const movedEnough = Math.abs(historyDragState.currentClientY - historyDragState.startClientY) > 16;
+    const shouldCommit = e.type === 'pointerup' || (e.type === 'pointercancel' && movedEnough);
+    finishHistoryCardDrag(shouldCommit);
 }
 
 function onHistoryDragInterrupt() {
     if (historyDragState.active) {
-        finishHistoryCardDrag(false);
+        const movedEnough = Math.abs(historyDragState.currentClientY - historyDragState.startClientY) > 16;
+        finishHistoryCardDrag(movedEnough);
     }
 }
 
@@ -649,13 +659,26 @@ function finishHistoryCardDrag(commitDrop = false) {
     const listEl = historyDragState.listEl;
     const filteredRoutes = historyDragState.filteredRoutes;
     const draggedCard = historyDragState.draggedCard;
+    const handleEl = historyDragState.handleEl;
+    const prevPointerId = historyDragState.pointerId;
     const startIndex = historyDragState.startIndex;
     const rawTargetIndex = historyDragState.targetIndex;
+    const shouldRerenderAfter = historyDragState.pendingRerenderAfterDrag;
 
     historyDragState.active = false;
     historyDragState.inputMode = null;
     historyDragState.pointerId = null;
     historyDragState.touchId = null;
+    historyDragState.handleEl = null;
+    historyDragState.needsVisualUpdate = false;
+    historyDragState.pendingRerenderAfterDrag = false;
+    if (wasActive) {
+        historyDragState.lastFinishedAt = Date.now();
+    }
+
+    if (handleEl && prevPointerId !== null && typeof handleEl.releasePointerCapture === 'function') {
+        try { handleEl.releasePointerCapture(prevPointerId); } catch (e) {}
+    }
 
     if (historyDragState.autoScrollRaf !== null) {
         cancelAnimationFrame(historyDragState.autoScrollRaf);
@@ -682,52 +705,65 @@ function finishHistoryCardDrag(commitDrop = false) {
     historyDragState.startIndex = -1;
     historyDragState.targetIndex = -1;
 
-    if (!wasActive || !commitDrop || !listEl || !Array.isArray(filteredRoutes) || !draggedCard) return;
+    let didReorder = false;
+    if (wasActive && commitDrop && listEl && Array.isArray(filteredRoutes) && draggedCard) {
+        const cards = getHistoryCardElements(listEl);
+        if (startIndex >= 0 && startIndex < cards.length && rawTargetIndex >= 0) {
+            let finalIndex = rawTargetIndex > startIndex ? rawTargetIndex - 1 : rawTargetIndex;
+            finalIndex = Math.max(0, Math.min(cards.length - 1, finalIndex));
 
-    const cards = getHistoryCardElements(listEl);
-    if (startIndex < 0 || startIndex >= cards.length || rawTargetIndex < 0) return;
+            if (finalIndex !== startIndex) {
+                const fromIdx = filteredRoutes[startIndex]?.originalIdx;
+                const toIdx = filteredRoutes[finalIndex]?.originalIdx;
+                if (fromIdx !== undefined && toIdx !== undefined) {
+                    // 1. 放開後一次性移動 DOM 節點，避免拖曳期間反覆重排
+                    const referenceNode = rawTargetIndex < cards.length ? cards[rawTargetIndex] : null;
+                    if (referenceNode && referenceNode !== draggedCard) {
+                        listEl.insertBefore(draggedCard, referenceNode);
+                    } else if (!referenceNode) {
+                        listEl.appendChild(draggedCard);
+                    }
 
-    let finalIndex = rawTargetIndex > startIndex ? rawTargetIndex - 1 : rawTargetIndex;
-    finalIndex = Math.max(0, Math.min(cards.length - 1, finalIndex));
-    if (finalIndex === startIndex) return;
+                    // 2. 更新 savedRoutes 與 filteredRoutes 排序陣列並原地同步每張卡片索引
+                    const movedItem = savedRoutes.splice(fromIdx, 1)[0];
+                    savedRoutes.splice(toIdx, 0, movedItem);
+                    const [movedFiltered] = filteredRoutes.splice(startIndex, 1);
+                    filteredRoutes.splice(finalIndex, 0, movedFiltered);
 
-    const fromIdx = filteredRoutes[startIndex]?.originalIdx;
-    const toIdx = filteredRoutes[finalIndex]?.originalIdx;
-    if (fromIdx === undefined || toIdx === undefined) return;
+                    const updatedCards = getHistoryCardElements(listEl);
+                    filteredRoutes.forEach((entry, i) => {
+                        const syncedIdx = savedRoutes.indexOf(entry.route);
+                        entry.originalIdx = syncedIdx;
+                        if (updatedCards[i]) {
+                            updatedCards[i].dataset.routeIdx = String(syncedIdx);
+                        }
+                    });
 
-    // 1. 放開後一次性移動 DOM 節點，避免拖曳期間反覆重排
-    const referenceNode = rawTargetIndex < cards.length ? cards[rawTargetIndex] : null;
-    if (referenceNode && referenceNode !== draggedCard) {
-        listEl.insertBefore(draggedCard, referenceNode);
-    } else if (!referenceNode) {
-        listEl.appendChild(draggedCard);
+                    didReorder = true;
+
+                    // 3. 確實儲存最新排序至 localforage
+                    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch((err) => {
+                        console.error('[RouteSort] 儲存路線排序失敗:', err);
+                        if (typeof showToast === 'function') {
+                            showToast('⚠️ 路線排序儲存失敗，請稍後再試');
+                        }
+                    });
+                }
+            }
+        }
     }
 
-    // 2. 更新 savedRoutes 與 filteredRoutes 排序陣列並原地同步每張卡片索引
-    const movedItem = savedRoutes.splice(fromIdx, 1)[0];
-    savedRoutes.splice(toIdx, 0, movedItem);
-    const [movedFiltered] = filteredRoutes.splice(startIndex, 1);
-    filteredRoutes.splice(finalIndex, 0, movedFiltered);
-
-    const updatedCards = getHistoryCardElements(listEl);
-    filteredRoutes.forEach((entry, i) => {
-        const syncedIdx = savedRoutes.indexOf(entry.route);
-        entry.originalIdx = syncedIdx;
-        if (updatedCards[i]) {
-            updatedCards[i].dataset.routeIdx = String(syncedIdx);
-        }
-    });
-
-    // 3. 確實儲存最新排序至 localforage
-    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch((err) => {
-        console.error('[RouteSort] 儲存路線排序失敗:', err);
-        if (typeof showToast === 'function') {
-            showToast('⚠️ 路線排序儲存失敗，請稍後再試');
-        }
-    });
+    // 若拖拽期間有背景更新要求重繪清單，待放開完成存檔後再安全補繪（不干擾拖拽手感）
+    if (shouldRerenderAfter) {
+        setTimeout(() => {
+            if (!historyDragState.active && typeof renderHistoryList === 'function') {
+                renderHistoryList();
+            }
+        }, didReorder ? 120 : 0);
+    }
 }
 
-function startHistoryCardDrag({ listEl, filteredRoutes, card, clientY, inputMode, pointerId = null, touchId = null }) {
+function startHistoryCardDrag({ listEl, filteredRoutes, card, handleEl = null, clientY, inputMode, pointerId = null, touchId = null }) {
     if (!listEl || !card || !Array.isArray(filteredRoutes)) return;
     if (historyDragState.active) {
         finishHistoryCardDrag(false);
@@ -759,6 +795,7 @@ function startHistoryCardDrag({ listEl, filteredRoutes, card, clientY, inputMode
     historyDragState.inputMode = inputMode;
     historyDragState.pointerId = pointerId;
     historyDragState.touchId = touchId;
+    historyDragState.handleEl = handleEl;
     historyDragState.listEl = listEl;
     historyDragState.filteredRoutes = filteredRoutes;
     historyDragState.draggedCard = card;
@@ -768,16 +805,27 @@ function startHistoryCardDrag({ listEl, filteredRoutes, card, clientY, inputMode
     historyDragState.targetIndex = startIndex;
     historyDragState.startClientY = clientY;
     historyDragState.currentClientY = clientY;
+    historyDragState.needsVisualUpdate = true;
+    historyDragState.pendingRerenderAfterDrag = false;
+
+    if (inputMode === 'pointer' && handleEl && pointerId !== null && typeof handleEl.setPointerCapture === 'function') {
+        try { handleEl.setPointerCapture(pointerId); } catch (e) {}
+    }
 
     try { vibrate(20); } catch (e) {}
     bindHistoryDragGlobalListeners();
     updateHistoryDragVisualAndTarget();
-    startHistoryDragAutoScrollLoop();
+    startHistoryDragFrameLoop();
 }
 
 function renderHistoryList() {
     const list = document.getElementById('historyList');
     if (!list) return;
+    // 嚴禁在手指按住拖拽排序期間重建整份清單 DOM，改為標記待拖拽結束後自動補繪
+    if (historyDragState.active) {
+        historyDragState.pendingRerenderAfterDrag = true;
+        return;
+    }
     stopHistoryDragAutoScroll(list);
     list.innerHTML = '';
 
@@ -880,6 +928,7 @@ function renderHistoryList() {
         `;
 
         card.querySelector('.route-card-info').onclick = () => {
+            if (historyDragState.active || (Date.now() - historyDragState.lastFinishedAt) < 300) return;
             const idx = Number(card.dataset.routeIdx);
             if (!isNaN(idx)) window.openRouteDetail(idx);
         };
@@ -927,6 +976,7 @@ function renderHistoryList() {
                     listEl: list,
                     filteredRoutes,
                     card,
+                    handleEl: dragHandle,
                     clientY: touch.clientY,
                     inputMode: 'touch',
                     touchId: touch.identifier
@@ -941,6 +991,7 @@ function renderHistoryList() {
                     listEl: list,
                     filteredRoutes,
                     card,
+                    handleEl: dragHandle,
                     clientY: e.clientY,
                     inputMode: 'pointer',
                     pointerId: e.pointerId

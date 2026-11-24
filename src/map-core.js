@@ -308,6 +308,10 @@ function updateMapMarkersZoomScale() {
     const rawScale = Math.max(0.55, Math.min(1, Math.pow(1.25, currentZoom - 15.5)));
     mapEl.style.setProperty('--map-pin-scale', rawScale.toFixed(3));
 
+    // 1.5 📸 測速照相標記：依 zoom 動態放大／縮小（下限 0.55 倍、上限 1.35 倍）
+    const speedCamScale = Math.max(0.55, Math.min(1.35, Math.pow(1.22, currentZoom - 15.5)));
+    mapEl.style.setProperty('--speed-cam-scale', speedCamScale.toFixed(3));
+
     // 2. 🏢 社區大樓三段式隨 zoom 變形 (zoom < 14.2 遠景小圓點 / 14.2~15.6 中景 0.65x 水滴無標籤 / >= 15.6 近景完整顯示)
     let tierClass = 'zoom-tier-near';
     if (currentZoom < 14.2) {
@@ -1551,6 +1555,36 @@ function renderMapLayerMenuOptions() {
                 window.ApproachNav.toggleFreeNav();
             });
             targetFeatureContainer.appendChild(freeNavBtn);
+        }
+
+        // 🏢 5. 社區名稱開關（預設開啟；關閉時一併隱藏地圖上所有社區名稱文字與橘色水滴標記）
+        {
+            const isBuildingOn = (window.BuildingPinManager && typeof window.BuildingPinManager.isVisible === 'function')
+                ? Boolean(window.BuildingPinManager.isVisible())
+                : (localStorage.getItem('yingge_show_building_pins_v1') !== 'false');
+            const buildingBtn = document.createElement('button');
+            buildingBtn.type = 'button';
+            buildingBtn.id = 'mapLayerBuildingPinsToggleBtn';
+            buildingBtn.className = isBuildingOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-orange-50 border-2 border-orange-400 text-orange-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            buildingBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">🏢</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isBuildingOn ? 'text-orange-800' : 'text-gray-800'}">社區名稱</div>
+                        <div class="text-[10px] font-bold truncate ${isBuildingOn ? 'text-orange-600' : 'text-gray-400'}">${isBuildingOn ? '已顯示 · 社區名稱與橘色水滴標記' : '已隱藏 · 點擊顯示社區與橘色水滴'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isBuildingOn ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-600'}">${isBuildingOn ? '開' : '關'}</span>
+            `;
+            buildingBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (window.BuildingPinManager && typeof window.BuildingPinManager.toggle === 'function') {
+                    window.BuildingPinManager.toggle();
+                }
+            });
+            targetFeatureContainer.appendChild(buildingBtn);
         }
     }
 

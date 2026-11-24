@@ -69,6 +69,14 @@ html, body {
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
 
+/* 📸 測速照相標記：內層 .speed-cam-ring 隨地圖 zoom 等比例動態縮放（下限 0.55 倍、上限 1.35 倍），不改動外層 MapLibre Marker 座標定位 */
+.speed-camera-marker .speed-cam-ring {
+    transform: scale(var(--speed-cam-scale, 1));
+    transform-origin: center center;
+    transition: transform 0.1s ease-out;
+    will-change: transform;
+}
+
 /* ⚠️ 橘黃色語音／警示標記點：
    1. 最外層 .alert-compact-pin 為傳給 MapLibre Marker 的容器（anchor: 'bottom'），嚴禁設定任何 transform 或負 margin，避免覆寫 MapLibre 的 translate3d 經緯度定位！
    2. 內層 .alert-compact-scale-wrap 依地圖 zoom 等比例縮放（最小 0.55 倍），transform-origin: bottom center 對準底部尖端不位移。
@@ -1163,6 +1171,11 @@ input, textarea {
 }
 /* 右側功能按鈕列「一鍵收合／展開（預設關）」：非侵入式 CSS Class 切換，不改動各按鈕 id 與事件 */
 #rightMapToolbar.is-collapsed > :not(#rightToolbarToggleBtn):not(#followStopBtn) {
+    display: none !important;
+}
+
+/* 圖層功能表「社區名稱」開關關閉時：一併隱藏社區名稱文字標籤與橘色水滴標記 */
+body.hide-building-pins .shared-pin-wrapper.is-building-pin {
     display: none !important;
 }
 

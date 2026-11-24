@@ -129,6 +129,50 @@
         return Math.abs(((a - b) % 360 + 540) % 360 - 180);
     }
 
+    const MIN_SPEED_CAM_SCALE = 0.55;
+    const MAX_SPEED_CAM_SCALE = 1.35;
+    const BASE_SPEED_CAM_ZOOM = 15.5;
+    let boundZoomMapRef = null;
+
+    function getCurrentSpeedCamZoomScale() {
+        const z = (typeof map !== 'undefined' && map && typeof map.getZoom === 'function')
+            ? Number(map.getZoom())
+            : BASE_SPEED_CAM_ZOOM;
+        const safeZoom = isFinite(z) ? z : BASE_SPEED_CAM_ZOOM;
+        return Math.max(MIN_SPEED_CAM_SCALE, Math.min(MAX_SPEED_CAM_SCALE, Math.pow(1.22, safeZoom - BASE_SPEED_CAM_ZOOM)));
+    }
+
+    function applyZoomScaleToCameraRing(ringEl, scaleVal) {
+        if (!ringEl) return;
+        const s = (typeof scaleVal === 'number' && isFinite(scaleVal)) ? scaleVal : getCurrentSpeedCamZoomScale();
+        ringEl.style.transformOrigin = 'center center';
+        ringEl.style.transform = `scale(${s.toFixed(3)})`;
+    }
+
+    function syncSpeedCameraMarkersZoomScale() {
+        const s = getCurrentSpeedCamZoomScale();
+        if (typeof map !== 'undefined' && map && typeof map.getContainer === 'function') {
+            const mapEl = map.getContainer();
+            if (mapEl && mapEl.style) {
+                mapEl.style.setProperty('--speed-cam-scale', s.toFixed(3));
+            }
+        }
+        speedCameraMarkers.forEach((marker) => {
+            const el = (marker && typeof marker.getElement === 'function') ? marker.getElement() : null;
+            const ring = el ? el.querySelector('.speed-cam-ring') : null;
+            if (ring) {
+                applyZoomScaleToCameraRing(ring, s);
+            }
+        });
+    }
+
+    function ensureSpeedCamZoomListenerBound() {
+        if (typeof map === 'undefined' || !map || typeof map.on !== 'function') return;
+        if (boundZoomMapRef === map) return;
+        boundZoomMapRef = map;
+        map.on('zoom', syncSpeedCameraMarkersZoomScale);
+    }
+
     function updateMarkerVisualState(el, cam) {
         if (!el || !cam) return;
         const calOn = isCalibrationModeActive();
@@ -138,8 +182,9 @@
         const ring = el.querySelector('.speed-cam-ring');
         if (ring) {
             ring.className = calOn
-                ? 'speed-cam-ring relative flex items-center justify-center w-9 h-9 rounded-full bg-amber-50 border-[3px] border-amber-500 shadow-lg ring-2 ring-rose-500/50'
-                : 'speed-cam-ring relative flex items-center justify-center w-8 h-8 rounded-full bg-white border-[2.5px] border-rose-600 shadow-md';
+                ? 'speed-cam-ring relative flex items-center justify-center w-9 h-9 rounded-full bg-amber-50 border-[3px] border-amber-500 shadow-lg ring-2 ring-rose-500/50 transition-transform duration-100 ease-out'
+                : 'speed-cam-ring relative flex items-center justify-center w-8 h-8 rounded-full bg-white border-[2.5px] border-rose-600 shadow-md transition-transform duration-100 ease-out';
+            applyZoomScaleToCameraRing(ring);
         }
         const limitPill = el.querySelector('.speed-cam-limit-pill');
         if (limitPill) {
@@ -182,10 +227,12 @@
 
     function renderSpeedCameraMarkers() {
         if (typeof map === 'undefined' || !map) return;
+        ensureSpeedCamZoomListenerBound();
         if (!isSpeedCameraLayerVisible) {
             clearSpeedCameraMarkers();
             return;
         }
+        const currentScale = getCurrentSpeedCamZoomScale();
         const activeIdSet = new Set();
         activeSpeedCameras.forEach(cam => {
             activeIdSet.add(cam.id);
@@ -202,6 +249,8 @@
                 return;
             }
             const el = createSpeedCameraMarkerEl(cam);
+            const ring = el.querySelector('.speed-cam-ring');
+            if (ring) applyZoomScaleToCameraRing(ring, currentScale);
             const marker = new maplibregl.Marker({
                 element: el,
                 anchor: 'center',
@@ -221,6 +270,7 @@
                 cameraAlertState.delete(id);
             }
         }
+        syncSpeedCameraMarkersZoomScale();
     }
 
     // ☁️ 從 Firebase system_config/speed_cameras 同步全車隊測速照相點位

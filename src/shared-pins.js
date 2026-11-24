@@ -1520,7 +1520,72 @@ function createSharedPinMarkerElement(pin) {
         });
     }
 
+    if (isBuilding && !isBuildingPinsVisible) {
+        wrapper.style.setProperty('display', 'none', 'important');
+    }
+
     return wrapper;
+}
+
+const BUILDING_PINS_VISIBLE_STORAGE_KEY = 'yingge_show_building_pins_v1';
+let isBuildingPinsVisible = true;
+try {
+    if (localStorage.getItem(BUILDING_PINS_VISIBLE_STORAGE_KEY) === 'false') {
+        isBuildingPinsVisible = false;
+    }
+} catch (e) {}
+
+function applyBuildingPinsVisibilityState() {
+    if (document.body) {
+        document.body.classList.toggle('hide-building-pins', !isBuildingPinsVisible);
+    }
+    if (typeof pinsLayerGroup === 'object' && pinsLayerGroup) {
+        Object.values(pinsLayerGroup).forEach((entry) => {
+            if (!entry || !entry.el) return;
+            const isBuilding = entry.data?.pinType === 'building' || entry.el.classList.contains('is-building-pin');
+            if (!isBuilding) return;
+            if (isBuildingPinsVisible) {
+                entry.el.style.removeProperty('display');
+            } else {
+                entry.el.style.setProperty('display', 'none', 'important');
+            }
+        });
+    }
+}
+
+window.BuildingPinManager = {
+    isVisible() {
+        return Boolean(isBuildingPinsVisible);
+    },
+    setVisible(visible) {
+        isBuildingPinsVisible = Boolean(visible);
+        try {
+            localStorage.setItem(BUILDING_PINS_VISIBLE_STORAGE_KEY, isBuildingPinsVisible ? 'true' : 'false');
+        } catch (e) {}
+        applyBuildingPinsVisibilityState();
+        if (typeof renderMapLayerMenuOptions === 'function') {
+            renderMapLayerMenuOptions();
+        }
+        return isBuildingPinsVisible;
+    },
+    toggle() {
+        const next = !isBuildingPinsVisible;
+        this.setVisible(next);
+        try { if (typeof vibrate === 'function') vibrate(20); } catch (e) {}
+        if (typeof showNavAlert === 'function') {
+            showNavAlert(
+                '🏢',
+                next ? '社區名稱與橘色水滴標記已顯示' : '社區名稱與橘色水滴標記已隱藏',
+                next ? 'bg-orange-600' : 'bg-gray-700'
+            );
+        }
+        return next;
+    }
+};
+
+applyBuildingPinsVisibilityState();
+if (typeof renderMapLayerMenuOptions === 'function') {
+    renderMapLayerMenuOptions();
 }
 
 function upsertPinMarkerOnMap(pinId, pinData) {
@@ -1546,6 +1611,12 @@ function upsertPinMarkerOnMap(pinId, pinData) {
                 .setLngLat([lng, lat])
                 .addTo(map);
             pinsLayerGroup[pinId] = { marker, el, data: normalizedPin, signature };
+        } else if (normalizedPin.pinType === 'building' && pinsLayerGroup[pinId].el) {
+            if (isBuildingPinsVisible) {
+                pinsLayerGroup[pinId].el.style.removeProperty('display');
+            } else {
+                pinsLayerGroup[pinId].el.style.setProperty('display', 'none', 'important');
+            }
         }
     } else {
         const el = createSharedPinMarkerElement(normalizedPin);

@@ -123,13 +123,22 @@
     let isRightToolbarCollapsed = true; // 預設收合（關）
 
     // ==========================================
-    // 1. 右側功能按鈕列「一鍵收合／展開（預設關）」（非侵入式 CSS Class 切換）
+    // 1. 右側功能按鈕列「一鍵收合／展開（預設關）」（非侵入式 CSS Class ＋ 內聯顯隱同步切換）
     // ==========================================
     function setRightToolbarCollapsed(collapsed) {
         const toolbar = document.getElementById('rightMapToolbar');
         if (!toolbar) return;
         isRightToolbarCollapsed = Boolean(collapsed);
         toolbar.classList.toggle('is-collapsed', isRightToolbarCollapsed);
+
+        Array.from(toolbar.children).forEach((child) => {
+            if (!child || child.id === 'rightToolbarToggleBtn' || child.id === 'followStopBtn') return;
+            if (isRightToolbarCollapsed) {
+                child.style.setProperty('display', 'none', 'important');
+            } else {
+                child.style.removeProperty('display');
+            }
+        });
 
         if (isRightToolbarCollapsed) {
             document.getElementById('mapLayerMenuPanel')?.classList.add('hidden');
@@ -159,20 +168,33 @@
 
     function setupRightToolbarCollapseControl() {
         const toolbar = document.getElementById('rightMapToolbar');
-        if (!toolbar || document.getElementById('rightToolbarToggleBtn')) return;
+        if (!toolbar) return;
 
-        const btn = document.createElement('button');
-        btn.id = 'rightToolbarToggleBtn';
-        btn.type = 'button';
-        btn.innerHTML = '<i class="fa-solid fa-sliders text-sm"></i><span class="text-[9px] font-bold leading-none mt-0.5">工具列</span>';
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleRightToolbar();
-        });
-
-        toolbar.insertBefore(btn, toolbar.firstChild);
+        let btn = document.getElementById('rightToolbarToggleBtn');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = 'rightToolbarToggleBtn';
+            btn.type = 'button';
+            btn.innerHTML = '<i class="fa-solid fa-sliders text-sm"></i><span class="text-[9px] font-bold leading-none mt-0.5">工具列</span>';
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleRightToolbar();
+            });
+            toolbar.insertBefore(btn, toolbar.firstChild);
+        }
         rightToolbarToggleBtn = btn;
         setRightToolbarCollapsed(true);
+
+        // 進入或返回主畫面時確保維持預設收合狀態，僅在使用者主動點擊開關時展開
+        ['btnCloseWelcomeModal', 'btnSaveFleetUserName', 'closeHistory', 'topBackBtn', 'btnManualCancel', 'btnExitFurnitureMode'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el && !el.dataset.rightToolbarResetBound) {
+                el.dataset.rightToolbarResetBound = '1';
+                el.addEventListener('click', () => {
+                    setRightToolbarCollapsed(true);
+                });
+            }
+        });
     }
 
     // ==========================================

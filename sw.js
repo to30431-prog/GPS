@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.51';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.51';
+const CACHE_VERSION = 'v3.52';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.52';
 const CACHE_ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const CACHE_ASSETS = [
   './src/config-state.js',
   './src/carModels.js',
   './src/map-core.js',
+  './src/caution-editor.js',
   './src/route-editor.js',
   './src/navigation.js',
   './src/approach-nav.js',

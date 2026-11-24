@@ -49,6 +49,56 @@ if (musicToggleBtn) {
     };
 }
 
+// 入口 A（路線紀錄中「⚠️ 標註注意」）：立即鎖定當下 GPS 座標與時間戳記並開啟共用表單，背景 GPS 錄製 100% 不中斷
+const recordCautionBtn = document.getElementById('recordCautionBtn');
+if (recordCautionBtn) {
+    recordCautionBtn.onclick = () => {
+        if (!isRecording) return;
+        const lockedLng = (typeof lastValidGpsLng === 'number' && !isNaN(lastValidGpsLng))
+            ? lastValidGpsLng
+            : (Array.isArray(lastKnownLngLat) ? lastKnownLngLat[0] : null);
+        const lockedLat = (typeof lastValidGpsLat === 'number' && !isNaN(lastValidGpsLat))
+            ? lastValidGpsLat
+            : (Array.isArray(lastKnownLngLat) ? lastKnownLngLat[1] : null);
+        if (typeof lockedLng !== 'number' || typeof lockedLat !== 'number') {
+            alert('尚未取得有效 GPS 定位座標，請稍候再試！');
+            return;
+        }
+        const lockedTime = Date.now();
+        const lockedPtIdx = Math.max(0, routePoints.length - 1);
+        const lockedBearing = Number(currentHeading) || 0;
+        vibrate(35);
+
+        if (window.CautionEditor && typeof window.CautionEditor.openForm === 'function') {
+            window.CautionEditor.openForm({
+                title: '紀錄中：標註注意點',
+                initialNote: '',
+                initialPhoto: '',
+                lockedCoord: [lockedLng, lockedLat],
+                lockedTime,
+                onSave: ({ note, photo }) => {
+                    const newAlertEv = {
+                        type: 'alert',
+                        note,
+                        lng: lockedLng,
+                        lat: lockedLat,
+                        ptIdx: lockedPtIdx,
+                        bearing: lockedBearing,
+                        createdAt: lockedTime
+                    };
+                    if (photo) newAlertEv.photo = photo;
+                    musicEvents.push(newAlertEv);
+                    addPinMarker([lockedLng, lockedLat], `<div class="music-marker bg-amber-500 border-2 border-white shadow-lg text-white font-black"><i class="fa-solid fa-triangle-exclamation"></i> ${note.slice(0, 6)}</div>`);
+                    vibrate([40, 25, 40]);
+                    if (typeof showNavAlert === 'function') {
+                        showNavAlert('⚠️', `已標註注意點：${note}`, 'bg-amber-600');
+                    }
+                }
+            });
+        }
+    };
+}
+
 function restoreIdleRecordingUILayout() {
     document.getElementById('recordingTopRow')?.classList.add('hidden');
     document.getElementById('idleTopRow')?.classList.remove('hidden');
@@ -2869,6 +2919,7 @@ let manualFreehandPrevTailCoords = [];
 let manualFreehandIncomingUnitVec = null;
 
 const FREEHAND_SNAP_ENDPOINT_MAX_METERS = 20;
+const MANUAL_FREEHAND_MIN_STROKE_METERS = 8;
 const P2P_OSRM_MAX_DETOUR_RATIO = 2.2;
 
 const startManualDrawBtn = document.getElementById('startManualDrawBtn');
@@ -2911,6 +2962,12 @@ function updateManualToolModeUI() {
         manualDrawPromptBadge.classList.toggle('bg-indigo-600/95', !isFreehand);
     }
     if (isManualDrawingMode) {
+        if (isFreehand) {
+            try { map.dragPan.disable(); } catch (e) {}
+        } else {
+            try { map.dragPan.enable(); } catch (e) {}
+        }
+        ensureEditorMapZoomEnabled();
         document.getElementById('appStatusTitle').innerText = isFreehand ? '✏️ 手繪自由路線' : '📍 點到點拉線';
         if (manualDrawPromptText) {
             manualDrawPromptText.textContent = isFreehand
@@ -3384,8 +3441,12 @@ function cancelActiveManualFreehandStroke() {
     manualFreehandPrevTailCoords = [];
     manualFreehandIncomingUnitVec = null;
     updateFreehandTempLayer([]);
-    try { map.dragPan.enable(); } catch (e) {}
-    try { map.touchZoomRotate.enable(); } catch (e) {}
+    if (isManualDrawingMode && manualDrawToolMode === 'freehand') {
+        try { map.dragPan.disable(); } catch (e) {}
+    } else {
+        try { map.dragPan.enable(); } catch (e) {}
+    }
+    ensureEditorMapZoomEnabled();
 }
 
 function commitManualFreehandStroke() {
@@ -3399,7 +3460,12 @@ function commitManualFreehandStroke() {
     manualFreehandPrevTailCoords = [];
     manualFreehandIncomingUnitVec = null;
     updateFreehandTempLayer([]);
-    try { map.dragPan.enable(); } catch (e) {}
+    if (isManualDrawingMode && manualDrawToolMode === 'freehand') {
+        try { map.dragPan.disable(); } catch (e) {}
+    } else {
+        try { map.dragPan.enable(); } catch (e) {}
+    }
+    ensureEditorMapZoomEnabled();
 
     if (!isManualDrawingMode || rawCoords.length < 2) return;
 
@@ -3410,7 +3476,7 @@ function commitManualFreehandStroke() {
         if (finalFreehandCoords.length < 2) return;
     }
 
-    // 計算修剪後該筆自由繪製長度，過短（< 3m）視為誤觸或純折返抖動略過
+    // 最小有效筆畫門檻（< 8m 視為誤觸或純折返抖動自動取消）
     let strokeMeters = 0;
     for (let i = 1; i < finalFreehandCoords.length; i++) {
         strokeMeters += getDistanceKm(
@@ -3418,7 +3484,7 @@ function commitManualFreehandStroke() {
             finalFreehandCoords[i][0], finalFreehandCoords[i][1]
         ) * 1000;
     }
-    if (strokeMeters < 3) return;
+    if (strokeMeters < MANUAL_FREEHAND_MIN_STROKE_METERS) return;
 
     // 手繪自由畫路線存檔保護：
     // 嚴禁呼叫 OSRM Map Matching 或任何路網吸附演算法，僅做共線等距細分（直線 100% 維持筆直不扭曲，零偏移）
@@ -3657,11 +3723,14 @@ if (btnManualSave) {
         const savedItem = upsertLocalRouteFromCloud(newRoute);
         persistSavedRoutesToStorage();
 
-        // 退出手繪模式並進入該路線預覽詳情頁（可立即循跡導航、路線播放或進一步編輯）
+        // 退出手繪模式並進入該路線預覽詳情頁（完整還原 MapLibre 互動開關與清空暫存圖層）
         isManualDrawingMode = false;
         manualDrawSteps = [];
         isManualDrawFetching = false;
         manualDrawActionSeq++;
+        updateFreehandTempLayer([]);
+        try { map.dragPan.enable(); } catch (e) {}
+        ensureEditorMapZoomEnabled();
         if (manualDrawTopBanner) manualDrawTopBanner.classList.add('hidden');
         if (manualDrawUI) manualDrawUI.classList.add('hidden');
 
@@ -3732,24 +3801,34 @@ if (btnManualSave) {
         }
     }
 
-    let isManualMultiTouchGesture = false;
+    // 明確三態手勢狀態機：'idle' | 'drawing' | 'multiTouchGesture'
+    let manualFreehandGestureState = 'idle';
 
-    function resetManualMultiTouchState() {
-        isManualMultiTouchGesture = false;
+    function restoreManualFreehandMapControls() {
+        if (isManualDrawingMode && manualDrawToolMode === 'freehand') {
+            try { map.dragPan.disable(); } catch (err) {}
+        } else {
+            try { map.dragPan.enable(); } catch (err) {}
+        }
+        ensureEditorMapZoomEnabled();
     }
 
     function enterManualMultiTouchNav() {
-        isManualMultiTouchGesture = true;
+        manualFreehandGestureState = 'multiTouchGesture';
         if (isManualFreehandStrokeActive) {
-            cancelActiveManualFreehandStroke();
+            isManualFreehandStrokeActive = false;
+            manualFreehandStrokeCoords = [];
+            manualFreehandSnappedToPrevEnd = false;
+            manualFreehandPrevTailCoords = [];
+            manualFreehandIncomingUnitVec = null;
+            updateFreehandTempLayer([]);
         }
         try { map.dragPan.enable(); } catch (err) {}
-        try { map.touchZoomRotate.enable(); } catch (err) {}
+        ensureEditorMapZoomEnabled();
     }
 
     // 觸控：僅單指（e.touches.length === 1）且處於「✏️ 手繪自由路線」模式時拖曳畫橘色線；
-    // 一旦偵測雙指／多指（e.touches.length >= 2），絕不攔截事件、絕不呼叫 e.preventDefault() / stopPropagation() / map.panBy()，
-    // 讓 MapLibre 原生 touchZoomRotate 與 dragPan 同時流暢執行雙指捏合縮放與雙指平移！
+    // 一旦偵測雙指／多指（e.touches.length >= 2），立刻切換至 multiTouchGesture 取消未完成筆畫並鎖定，直到所有手指離開（touches.length === 0）才重置為 idle！
     canvasContainer.addEventListener('touchstart', (e) => {
         if (!isManualDrawingMode || manualDrawToolMode !== 'freehand') return;
         if (!e.touches || e.touches.length === 0) return;
@@ -3759,16 +3838,17 @@ if (btnManualSave) {
             return;
         }
 
-        // 若剛從雙指抬起一指，等待所有手指離開螢幕再允許下一筆單指繪圖
-        if (isManualMultiTouchGesture) return;
+        // 若剛從雙指抬起一指，鎖定直到所有手指離開螢幕（touches.length === 0）才允許重新起筆
+        if (manualFreehandGestureState === 'multiTouchGesture') return;
         if (isIgnoredDrawTarget(e.target)) return;
 
         const touch = e.touches[0];
         const coord = clientXYToLngLat(touch.clientX, touch.clientY);
         if (!coord) return;
 
-        // 僅記錄起點（若距前段終點 <= 20m 自動精準磁吸），保持 dragPan 與 touchZoomRotate 啟用，直到單指實際滑動（touchmove）才鎖定 dragPan
-        beginManualFreehandStroke(coord);
+        if (beginManualFreehandStroke(coord)) {
+            manualFreehandGestureState = 'drawing';
+        }
     }, { passive: true });
 
     canvasContainer.addEventListener('touchmove', (e) => {
@@ -3780,9 +3860,8 @@ if (btnManualSave) {
             return;
         }
 
-        if (isManualMultiTouchGesture || !isManualFreehandStrokeActive) return;
+        if (manualFreehandGestureState !== 'drawing' || !isManualFreehandStrokeActive) return;
 
-        // 確認為單指自由繪圖：此刻才暫時停用 dragPan 並攔截單指事件，畫出橘色線條
         try { map.dragPan.disable(); } catch (err) {}
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
@@ -3792,33 +3871,38 @@ if (btnManualSave) {
     }, { passive: false });
 
     canvasContainer.addEventListener('touchend', (e) => {
-        if (!isManualDrawingMode || manualDrawToolMode !== 'freehand') return;
         const remaining = e.touches ? e.touches.length : 0;
+        if (!isManualDrawingMode || manualDrawToolMode !== 'freehand') {
+            if (remaining === 0) manualFreehandGestureState = 'idle';
+            return;
+        }
 
-        if (isManualMultiTouchGesture) {
+        if (manualFreehandGestureState === 'multiTouchGesture') {
             if (remaining === 0) {
-                resetManualMultiTouchState();
+                manualFreehandGestureState = 'idle';
                 cancelActiveManualFreehandStroke();
+                restoreManualFreehandMapControls();
             }
             return;
         }
 
-        if (remaining === 0 && isManualFreehandStrokeActive) {
-            commitManualFreehandStroke();
+        if (remaining === 0) {
+            manualFreehandGestureState = 'idle';
+            if (isManualFreehandStrokeActive) {
+                commitManualFreehandStroke();
+            }
+            restoreManualFreehandMapControls();
         }
     }, { passive: true });
 
     canvasContainer.addEventListener('touchcancel', (e) => {
-        if (!isManualDrawingMode || manualDrawToolMode !== 'freehand') return;
         const remaining = e.touches ? e.touches.length : 0;
-        if (remaining === 0) {
-            resetManualMultiTouchState();
-        }
         if (isManualFreehandStrokeActive) {
             cancelActiveManualFreehandStroke();
-        } else {
-            try { map.dragPan.enable(); } catch (err) {}
-            try { map.touchZoomRotate.enable(); } catch (err) {}
+        }
+        if (remaining === 0) {
+            manualFreehandGestureState = 'idle';
+            restoreManualFreehandMapControls();
         }
     }, { passive: true });
 
@@ -4648,6 +4732,37 @@ function finishAlertModalCleanup(route) {
 }
 
 function openAlertModalForCreate(route, ptIndex) {
+    if (window.CautionEditor && typeof window.CautionEditor.openForm === 'function') {
+        const targetPt = route?.points?.[ptIndex];
+        if (!targetPt) return;
+        window.CautionEditor.openForm({
+            title: '新增黃色提醒事項',
+            initialNote: '注意路段',
+            initialPhoto: '',
+            lockedCoord: [targetPt.lng, targetPt.lat],
+            lockedTime: Date.now(),
+            onSave: ({ note, photo, lockedTime }) => {
+                route.events = route.events || [];
+                const newEv = {
+                    type: 'alert',
+                    note,
+                    lng: targetPt.lng,
+                    lat: targetPt.lat,
+                    ptIdx: ptIndex,
+                    bearing: targetPt.bearing || 0,
+                    createdAt: lockedTime
+                };
+                if (photo) newEv.photo = photo;
+                route.events.push(newEv);
+                finishAlertModalCleanup(route);
+            },
+            onCancel: () => {
+                finishAlertModalCleanup(route);
+            }
+        });
+        return;
+    }
+
     editAlertModalTitle.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> 新增黃色提醒事項';
     editAlertNoteInput.value = '注意路段';
     resetAlertPhotoInputs();
@@ -4683,6 +4798,41 @@ function openAlertModalForCreate(route, ptIndex) {
 function openAlertModalForEdit(route, eventIdx) {
     const ev = route.events && route.events[eventIdx];
     if (!ev) return;
+
+    if (window.CautionEditor && typeof window.CautionEditor.openForm === 'function') {
+        window.CautionEditor.openForm({
+            title: '編輯黃色提醒事項',
+            initialNote: ev.note || '注意路段',
+            initialPhoto: ev.photo || '',
+            lockedCoord: [ev.lng, ev.lat],
+            lockedTime: ev.createdAt || Date.now(),
+            onSave: ({ note, photo }) => {
+                if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+                    pushEditUndoSnapshot(route);
+                }
+                ev.note = note;
+                if (photo) {
+                    ev.photo = photo;
+                } else {
+                    delete ev.photo;
+                }
+                finishAlertModalCleanup(route);
+            },
+            onDelete: () => {
+                if (confirm(`確定要刪除【${ev.note || '提醒'}】這筆黃色提醒嗎？`)) {
+                    if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+                        pushEditUndoSnapshot(route);
+                    }
+                    route.events.splice(eventIdx, 1);
+                    finishAlertModalCleanup(route);
+                    return true;
+                }
+                return false;
+            },
+            onCancel: () => {}
+        });
+        return;
+    }
 
     editAlertModalTitle.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> 編輯黃色提醒事項';
     editAlertNoteInput.value = ev.note || '注意路段';

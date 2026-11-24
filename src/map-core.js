@@ -1239,6 +1239,32 @@ function renderMapLayerMenuOptions() {
             });
             targetFeatureContainer.appendChild(radioBtn);
         }
+
+        // 🧭 4. 自由導航開關（預設關閉；開啟時長按地圖可預覽路線並啟動導航）
+        if (window.ApproachNav && typeof window.ApproachNav.isFreeNavEnabled === 'function') {
+            const isFreeNavOn = Boolean(window.ApproachNav.isFreeNavEnabled());
+            const freeNavBtn = document.createElement('button');
+            freeNavBtn.type = 'button';
+            freeNavBtn.id = 'mapLayerFreeNavToggleBtn';
+            freeNavBtn.className = isFreeNavOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-cyan-50 border-2 border-cyan-400 text-cyan-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            freeNavBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">🧭</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isFreeNavOn ? 'text-cyan-800' : 'text-gray-800'}">自由導航</div>
+                        <div class="text-[10px] font-bold truncate ${isFreeNavOn ? 'text-cyan-600' : 'text-gray-400'}">${isFreeNavOn ? '已開啟 · 長按地圖設定目的地' : '已關閉 · 點擊開啟長按導航'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isFreeNavOn ? 'bg-cyan-600 text-white' : 'bg-gray-200 text-gray-600'}">${isFreeNavOn ? '開' : '關'}</span>
+            `;
+            freeNavBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                window.ApproachNav.toggleFreeNav();
+            });
+            targetFeatureContainer.appendChild(freeNavBtn);
+        }
     }
 
     // --------------------------------------------------

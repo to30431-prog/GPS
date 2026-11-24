@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.48';
+const APP_VERSION = 'v3.49';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.48
+// 確保畫面上所有版本號膠囊同步顯示為 v3.49
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -672,6 +672,8 @@ function handleIdleGpsPosition(pos) {
 
     // 🛡️ 重播期間鎖定車輛控制權：當 isReplaying === true 時，嚴禁真實 GPS 更新黃色垃圾車 Marker 的座標與角度
     if (isReplaying) return;
+
+    window.ApproachNav?.onIdleGpsUpdate?.(filtered);
 
     if (!isPowerSaveMapPaused()) {
         const acc = Math.round(filtered.accuracy);

@@ -1,10 +1,10 @@
 // ==========================================
 // [Module] src/approach-nav.js
-// 獨立「前往起點導航」模組 ＋ 右側功能按鈕列「一鍵收合／展開（預設關）」
-// - 手動啟動（防重繪吃點擊）：距起點 > 100m 時顯示左上角「前往起點 (XXXXm) · 按我導航」，事件綁定外層固定容器，刷新僅更新距離文字
-// - OSRM 分段轉彎引導：steps=true&overview=full、出發 bearings 容差 45°、起點緩衝半徑 30m、3.5s 逾時降級直線方位與距離、偏離 > 40m 且間隔 > 10s 靜默重算
-// - 頂部轉彎提示卡＋語音：currentStepIndex 單向推進＋每段播報旗標防重複；獨立圖層與狀態，不誤觸正式路線音樂與 END
-// - 接近起點 <= 80m 高優先級插播「即將抵達起始點，準備清運」（每趟僅一次）；抵達 <= 30m 或踩上正式路線 <= 20m 自動切回遵循畫面且不切斷抵達語音
+// 獨立「前往起點導航」＋「自由導航（長按地圖預覽／導航）」雙引擎（Valhalla 優先 → OSRM 無縫降級）模組
+// ＋ 右側功能按鈕列「一鍵收合／展開（預設關）」
+// - 統一雙引擎算路：Valhalla (auto, use_highways:0.3, precision 6 解碼) → 逾時 3.5s / CORS / 非200 / 解析失敗無縫降級 OSRM
+// - 繞路偵測（路線總距 / 直線距 > 1.8 顯示「疑似繞遠路」）＋ 極簡引擎標記（· V / · O）
+// - 頂部轉彎提示卡右側附「Google 導航」一鍵跳轉按鈕；完全不影響既有清運路線、雷達、家具與圖釘功能
 // ==========================================
 
 (function initApproachNavAndRightToolbarModule() {
@@ -12,7 +12,7 @@
 
     // --- 核心參數常數 ---
     const MANUAL_PROMPT_THRESHOLD_M = 100;
-    const OSRM_TIMEOUT_MS = 3500;
+    const ENGINE_TIMEOUT_MS = 3500;
     const OSRM_ORIGIN_RADIUS_M = 30;
     const OSRM_BEARING_TOLERANCE_DEG = 45;
     const OFF_ROUTE_RECALC_DIST_M = 40;
@@ -20,20 +20,32 @@
     const NEAR_START_VOICE_DIST_M = 80;
     const ARRIVE_START_SWITCH_DIST_M = 30;
     const ON_MAIN_ROUTE_SWITCH_DIST_M = 20;
+    const FREE_NAV_ARRIVE_DIST_M = 25;
+    const DETOUR_WARNING_RATIO = 1.8;
+    const FREE_NAV_LONG_PRESS_MS = 650;
+    const FREE_NAV_LONG_PRESS_MOVE_PX = 10;
 
+    const VALHALLA_API_URL = 'https://valhalla1.openstreetmap.de/route';
     const APPROACH_SOURCE_ID = 'approach-nav-route-source';
     const APPROACH_CASING_LAYER_ID = 'approach-nav-route-casing';
     const APPROACH_LINE_LAYER_ID = 'approach-nav-route-line';
 
     // --- 模組私有狀態（完全獨立，不汙染正式路線狀態） ---
+    let activeNavMode = null; // null | 'approach' | 'free'
     let activeTargetRoute = null;
-    let targetStartLngLat = null;
+    let targetStartLngLat = null; // 正式路線起點座標 [lng, lat]
+    let activeDestLngLat = null;  // 目前導航（前往起點或自由點）目的地座標 [lng, lat]
+    let activeDestLabel = '';
+
     let isFollowSessionActive = false;
     let isApproachPromptVisible = false;
-    let isApproachActive = false;
+    let isApproachActive = false; // 前往起點或自由導航「進行中」皆為 true（approach 模式下會隔離正式路線進度）
     let isApproachFallbackMode = false;
-    let isFetchingOsrm = false;
+    let isFetchingRoute = false;
     let fetchSeqId = 0;
+
+    let activeEngineCode = '';       // 'V' | 'O' | ''
+    let isDetourSuspected = false;
 
     let lastVehicleLngLat = null;
     let lastVehicleHeading = null;
@@ -47,12 +59,19 @@
     let lastFallbackSpokenTime = 0;
     let promptRefreshTimer = null;
 
+    // 自由導航專屬狀態（預設關閉）
+    let isFreeNavEnabled = false;
+    let freeNavPendingConfirmLngLat = null; // 長按確認彈窗目標 [lng, lat]
+    let freeNavPreviewRoute = null;         // 預覽中的路線規劃結果
+    let freeNavDestMarker = null;           // 地圖上自由導航目的地標記
+
     let cachedApproachGeoJSON = { type: 'FeatureCollection', features: [] };
 
     // DOM 元素參考（建立／綁定一次後永久複用，杜絕重繪吃點擊）
     let statusPillContainerEl = null;
     let statusTitleEl = null;
     let isStatusPillBound = false;
+
     let turnCardEl = null;
     let turnIconEl = null;
     let turnDistEl = null;
@@ -60,6 +79,17 @@
     let turnRoadEl = null;
     let turnStartRemEl = null;
     let turnModeBadgeEl = null;
+    let turnDetourBadgeEl = null;
+
+    let freeNavConfirmModalEl = null;
+    let freeNavConfirmCoordEl = null;
+    let freeNavPreviewBarEl = null;
+    let freeNavPreviewDistEl = null;
+    let freeNavPreviewDetourEl = null;
+    let freeNavPreviewCoordEl = null;
+    let freeNavPreviewStartBtn = null;
+    let freeNavPreviewGoogleBtn = null;
+
     let rightToolbarToggleBtn = null;
     let isRightToolbarCollapsed = true; // 預設收合（關）
 
@@ -73,7 +103,6 @@
         toolbar.classList.toggle('is-collapsed', isRightToolbarCollapsed);
 
         if (isRightToolbarCollapsed) {
-            // 收起工具列時同步收合圖層彈出選單，避免懸浮殘留
             document.getElementById('mapLayerMenuPanel')?.classList.add('hidden');
         }
 
@@ -114,14 +143,44 @@
 
         toolbar.insertBefore(btn, toolbar.firstChild);
         rightToolbarToggleBtn = btn;
-
-        // 預設關（收合狀態）
         setRightToolbarCollapsed(true);
     }
 
     // ==========================================
-    // 2. 幾何與方位輔助工具（完全自足，無額外依賴）
+    // 2. 幾何、座標驗證、Polyline6 解碼與方位輔助工具
     // ==========================================
+    function isValidLngLat(lng, lat) {
+        return (
+            typeof lng === 'number' && typeof lat === 'number' &&
+            isFinite(lng) && isFinite(lat) &&
+            !isNaN(lng) && !isNaN(lat) &&
+            lng >= -180 && lng <= 180 &&
+            lat >= -90 && lat <= 90 &&
+            (Math.abs(lng) > 0.001 || Math.abs(lat) > 0.001)
+        );
+    }
+
+    function resolveValidGpsOrigin() {
+        if (Array.isArray(lastVehicleLngLat) && lastVehicleLngLat.length >= 2 &&
+            isValidLngLat(lastVehicleLngLat[0], lastVehicleLngLat[1])) {
+            return { lng: lastVehicleLngLat[0], lat: lastVehicleLngLat[1] };
+        }
+        if (typeof lastValidGpsLng === 'number' && typeof lastValidGpsLat === 'number' &&
+            isValidLngLat(lastValidGpsLng, lastValidGpsLat)) {
+            return { lng: lastValidGpsLng, lat: lastValidGpsLat };
+        }
+        return null;
+    }
+
+    function notifyNoValidGps() {
+        const msg = '尚未取得有效 GPS 定位，請稍候定位完成後再試';
+        if (typeof showNavAlert === 'function') {
+            showNavAlert('📡', msg, 'bg-amber-600');
+        } else {
+            try { alert(msg); } catch (e) {}
+        }
+    }
+
     function calcDistMeters(lng1, lat1, lng2, lat2) {
         if (typeof getDistanceKm === 'function') {
             return getDistanceKm(lng1, lat1, lng2, lat2) * 1000;
@@ -132,6 +191,15 @@
         const a = Math.sin(dLat / 2) ** 2 +
             Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function calcPolylineLengthMeters(coords) {
+        if (!Array.isArray(coords) || coords.length < 2) return 0;
+        let totalM = 0;
+        for (let i = 1; i < coords.length; i++) {
+            totalM += calcDistMeters(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]);
+        }
+        return totalM;
     }
 
     function calcBearingDeg(lng1, lat1, lng2, lat2) {
@@ -181,8 +249,66 @@
         return ((Math.round(raw) % 360) + 360) % 360;
     }
 
+    // Valhalla Precision 6 (1e6) Encoded Polyline 解碼 → 回傳 GeoJSON [lng, lat] 座標陣列
+    function decodePolyline6(encoded) {
+        if (typeof encoded !== 'string' || !encoded.length) return [];
+        const coords = [];
+        let index = 0;
+        let lat = 0;
+        let lng = 0;
+        const len = encoded.length;
+
+        while (index < len) {
+            let b = 0;
+            let shift = 0;
+            let result = 0;
+            do {
+                if (index >= len) break;
+                b = encoded.charCodeAt(index++) - 63;
+                result |= (b & 0x1f) << shift;
+                shift += 5;
+            } while (b >= 0x20);
+            const dLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+            lat += dLat;
+
+            shift = 0;
+            result = 0;
+            do {
+                if (index >= len) break;
+                b = encoded.charCodeAt(index++) - 63;
+                result |= (b & 0x1f) << shift;
+                shift += 5;
+            } while (b >= 0x20);
+            const dLng = (result & 1) ? ~(result >> 1) : (result >> 1);
+            lng += dLng;
+
+            coords.push([Number((lng / 1e6).toFixed(6)), Number((lat / 1e6).toFixed(6))]);
+        }
+        return coords;
+    }
+
+    function openExternalGoogleMapsNav(destLngLat) {
+        if (!Array.isArray(destLngLat) || destLngLat.length < 2) return;
+        const lng = Number(destLngLat[0]);
+        const lat = Number(destLngLat[1]);
+        if (!isValidLngLat(lng, lat)) return;
+        const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+        try {
+            const win = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!win) window.location.href = url;
+        } catch (e) {
+            window.location.href = url;
+        }
+    }
+
+    function getEngineTagSuffix(engineCode) {
+        if (engineCode === 'V') return ' · V';
+        if (engineCode === 'O') return ' · O';
+        return '';
+    }
+
     // ==========================================
-    // 3. 獨立地圖圖層（approach-nav-route-*）
+    // 3. 獨立地圖圖層（approach-nav-route-*）與自由點目的地標記
     // ==========================================
     function ensureApproachMapLayers() {
         if (typeof map === 'undefined' || !map) return;
@@ -255,11 +381,38 @@
         } catch (e) {}
     }
 
-    // 切換底圖樣式後自動重建前往起點引導線圖層
+    function setFreeNavDestMarker(lngLat) {
+        clearFreeNavDestMarker();
+        if (typeof map === 'undefined' || !map || !Array.isArray(lngLat) || lngLat.length < 2) return;
+        try {
+            const el = document.createElement('div');
+            el.className = 'pointer-events-none flex flex-col items-center';
+            el.innerHTML = `
+                <div class="bg-cyan-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-lg border-2 border-white whitespace-nowrap mb-0.5">🧭 目的地</div>
+                <div class="w-4 h-4 rounded-full bg-cyan-500 border-[3px] border-white shadow-lg"></div>
+            `;
+            freeNavDestMarker = new maplibregl.Marker({
+                element: el,
+                anchor: 'bottom',
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            })
+                .setLngLat([lngLat[0], lngLat[1]])
+                .addTo(map);
+        } catch (e) {}
+    }
+
+    function clearFreeNavDestMarker() {
+        if (freeNavDestMarker) {
+            try { freeNavDestMarker.remove(); } catch (e) {}
+            freeNavDestMarker = null;
+        }
+    }
+
     function attachStyleDataListener() {
         if (typeof map === 'undefined' || !map) return;
         map.on('styledata', () => {
-            if (isApproachActive && cachedApproachGeoJSON.features.length > 0) {
+            if ((isApproachActive || freeNavPreviewRoute) && cachedApproachGeoJSON.features.length > 0) {
                 setTimeout(() => {
                     ensureApproachMapLayers();
                     try {
@@ -271,7 +424,7 @@
     }
 
     // ==========================================
-    // 4. 頂部既有狀態膠囊掛載（綁定一次於外層固定容器，不新增第二顆按鈕，防重繪吃點擊）
+    // 4. 頂部既有狀態膠囊掛載（綁定一次於外層固定容器，不新增第二顆按鈕）
     // ==========================================
     function ensureStatusPillApproachBinding() {
         if (isStatusPillBound && statusPillContainerEl && statusTitleEl) return;
@@ -283,11 +436,8 @@
         statusPillContainerEl = pillEl;
         isStatusPillBound = true;
 
-        // 點擊事件以 capture 階段永久綁定於既有的頂部狀態膠囊外層固定容器，
-        // 每秒與 GPS 刷新僅更新標題距離文字，絕不重繪容器或覆蓋按鈕事件
         statusPillContainerEl.addEventListener('click', (e) => {
             if (!isApproachPromptVisible || isApproachActive || !isFollowSessionActive || !targetStartLngLat) return;
-            // 保留版本號膠囊點擊開啟開發者模式不衝突
             if (e.target && e.target.closest && e.target.closest('#appVersionBadge')) return;
             e.preventDefault();
             e.stopPropagation();
@@ -310,13 +460,11 @@
         if (!statusPillContainerEl || !statusTitleEl) return;
         isApproachPromptVisible = true;
 
-        // 保留原本頂部狀態膠囊的樣式與位置，僅加上可點擊視覺提示
         statusPillContainerEl.classList.add('cursor-pointer', 'ring-2', 'ring-blue-500/70', 'active:scale-95', 'transition-transform');
         statusPillContainerEl.setAttribute('role', 'button');
         statusPillContainerEl.title = '點擊啟動前往起點導航';
         updateStatusPillPromptText(distM);
 
-        // 每秒僅更新距離數字（不重繪外層狀態膠囊、不覆蓋點擊事件）
         if (!promptRefreshTimer) {
             promptRefreshTimer = setInterval(() => {
                 if (!isApproachPromptVisible || isApproachActive || !isFollowSessionActive) {
@@ -344,37 +492,57 @@
         }
     }
 
+    // ==========================================
+    // 5. 頂部轉彎提示卡 DOM（右側新增精簡「Google 導航」按鈕於 ✕ 旁）
+    // ==========================================
     function ensureTurnCardDOM() {
         if (turnCardEl) return;
 
         const card = document.createElement('div');
         card.id = 'approachTurnCard';
-        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[350px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3.5 py-2.5 pointer-events-auto select-none';
+        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[375px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3 py-2.5 pointer-events-auto select-none';
         card.innerHTML = `
-            <div class="flex items-center gap-3">
-                <div id="approachTurnIconBox" class="w-12 h-12 rounded-xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center flex-shrink-0 text-cyan-300">
-                    <i id="approachTurnIcon" class="fa-solid fa-arrow-up text-2xl"></i>
+            <div class="flex items-center gap-2.5">
+                <div id="approachTurnIconBox" class="w-11 h-11 rounded-xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center flex-shrink-0 text-cyan-300">
+                    <i id="approachTurnIcon" class="fa-solid fa-arrow-up text-xl"></i>
                 </div>
                 <div class="flex-1 min-w-0">
                     <div class="flex items-baseline gap-1.5">
-                        <span id="approachTurnDist" class="text-xl font-black text-cyan-300 tracking-tight leading-none">-- 公尺</span>
-                        <span id="approachTurnAction" class="text-sm font-black text-white truncate">規劃中...</span>
+                        <span id="approachTurnDist" class="text-lg font-black text-cyan-300 tracking-tight leading-none whitespace-nowrap">-- 公尺</span>
+                        <span id="approachTurnAction" class="text-xs sm:text-sm font-black text-white truncate">規劃中...</span>
                     </div>
-                    <div id="approachTurnRoad" class="text-xs font-bold text-slate-200 truncate mt-1">正在計算前往起點路線</div>
-                    <div class="flex items-center gap-1.5 mt-1">
-                        <span id="approachStartRem" class="text-[10px] font-extrabold text-slate-400">距起點 -- 公尺</span>
-                        <span id="approachModeBadge" class="hidden text-[10px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/50 px-1.5 py-0.2 rounded-full">直線方位</span>
+                    <div id="approachTurnRoad" class="text-[11px] font-bold text-slate-200 truncate mt-0.5">正在計算導航路線</div>
+                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span id="approachStartRem" class="text-[10px] font-extrabold text-slate-400 whitespace-nowrap">距目標 -- 公尺</span>
+                        <span id="approachDetourBadge" class="hidden text-[9px] font-black bg-orange-500/30 text-orange-200 border border-orange-400/70 px-1.5 py-0.2 rounded-full whitespace-nowrap">疑似繞遠路</span>
+                        <span id="approachModeBadge" class="hidden text-[9px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/50 px-1.5 py-0.2 rounded-full whitespace-nowrap">直線方位</span>
                     </div>
                 </div>
-                <button id="approachCancelBtn" type="button" class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 flex items-center justify-center flex-shrink-0 active:scale-90" title="結束前往起點導航">
-                    <i class="fa-solid fa-xmark text-xs"></i>
-                </button>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    <button id="approachGoogleNavBtn" type="button" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-black px-2 py-1.5 rounded-xl shadow active:scale-95 transition-all flex items-center gap-1 whitespace-nowrap border border-blue-300/60" title="開啟 Google Maps 外部導航">
+                        <i class="fa-solid fa-diamond-turn-right text-[10px]"></i>
+                        <span>Google 導航</span>
+                    </button>
+                    <button id="approachCancelBtn" type="button" class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 flex items-center justify-center flex-shrink-0 active:scale-90" title="結束導航">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
             </div>
         `;
 
+        card.querySelector('#approachGoogleNavBtn')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dest = activeDestLngLat || targetStartLngLat;
+            openExternalGoogleMapsNav(dest);
+        });
+
         card.querySelector('#approachCancelBtn')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            exitApproachToWaitingOrFollow(false);
+            if (activeNavMode === 'free') {
+                stopFreeNavigationCompletely();
+            } else {
+                exitApproachToWaitingOrFollow(false);
+            }
         });
 
         document.body.appendChild(card);
@@ -385,20 +553,25 @@
         turnRoadEl = card.querySelector('#approachTurnRoad');
         turnStartRemEl = card.querySelector('#approachStartRem');
         turnModeBadgeEl = card.querySelector('#approachModeBadge');
+        turnDetourBadgeEl = card.querySelector('#approachDetourBadge');
     }
 
     function updateTurnCardUI({ iconClass, distText, actionText, roadText, startRemM, isFallback }) {
         ensureTurnCardDOM();
         if (!turnCardEl) return;
-        if (turnIconEl && iconClass) turnIconEl.className = `${iconClass} text-2xl`;
+        if (turnIconEl && iconClass) turnIconEl.className = `${iconClass} text-xl`;
         if (turnDistEl && distText !== undefined) turnDistEl.textContent = distText;
         if (turnActionEl && actionText !== undefined) turnActionEl.textContent = actionText;
         if (turnRoadEl && roadText !== undefined) turnRoadEl.textContent = roadText;
         if (turnStartRemEl && isFinite(startRemM)) {
-            turnStartRemEl.textContent = `距路線起點 ${formatDistanceText(startRemM)}`;
+            const labelPrefix = (activeNavMode === 'free') ? '距目的地' : '距路線起點';
+            turnStartRemEl.textContent = `${labelPrefix} ${formatDistanceText(startRemM)}${getEngineTagSuffix(activeEngineCode)}`;
         }
         if (turnModeBadgeEl) {
             turnModeBadgeEl.classList.toggle('hidden', !isFallback);
+        }
+        if (turnDetourBadgeEl) {
+            turnDetourBadgeEl.classList.toggle('hidden', !(isDetourSuspected && !isFallback));
         }
         turnCardEl.classList.remove('hidden');
     }
@@ -410,8 +583,216 @@
     }
 
     // ==========================================
-    // 5. OSRM Maneuver 轉中文指令與圖示
+    // 6. 自由導航：長按確認彈窗 ＋ 預覽控制列 DOM
     // ==========================================
+    function ensureFreeNavConfirmModalDOM() {
+        if (freeNavConfirmModalEl) return;
+
+        const modal = document.createElement('div');
+        modal.id = 'freeNavConfirmModal';
+        modal.className = 'hidden fixed inset-0 bg-black/55 z-[100002] flex items-center justify-center p-4 pointer-events-auto';
+        modal.innerHTML = `
+            <div class="bg-white w-full max-w-xs rounded-3xl p-4 shadow-2xl border-2 border-cyan-400 flex flex-col gap-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-black text-cyan-800 flex items-center gap-1.5">
+                        <span>🧭</span> 自由導航目的地
+                    </h3>
+                    <button type="button" id="btnCloseFreeNavConfirm" class="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center active:scale-90">
+                        <i class="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+                <div class="bg-cyan-50 border border-cyan-200 rounded-2xl px-3 py-2 text-center">
+                    <div class="text-[10px] font-extrabold text-cyan-700">目標座標</div>
+                    <div id="freeNavConfirmCoordText" class="text-xs font-black font-mono text-gray-800 mt-0.5">--</div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button type="button" id="btnCancelFreeNavConfirm" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-2.5 rounded-2xl text-xs active:scale-95">
+                        取消
+                    </button>
+                    <button type="button" id="btnConfirmFreeNavHere" class="bg-cyan-600 hover:bg-cyan-700 text-white font-black py-2.5 rounded-2xl text-xs shadow-md active:scale-95 flex items-center justify-center gap-1">
+                        <i class="fa-solid fa-location-arrow text-[11px]"></i> 導航到此
+                    </button>
+                </div>
+            </div>
+        `;
+
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeFreeNavConfirmModal();
+        });
+        modal.querySelector('#btnCloseFreeNavConfirm')?.addEventListener('click', closeFreeNavConfirmModal);
+        modal.querySelector('#btnCancelFreeNavConfirm')?.addEventListener('click', closeFreeNavConfirmModal);
+        modal.querySelector('#btnConfirmFreeNavHere')?.addEventListener('click', () => {
+            const target = freeNavPendingConfirmLngLat ? [...freeNavPendingConfirmLngLat] : null;
+            closeFreeNavConfirmModal();
+            if (target) {
+                planFreeNavPreviewTo(target[0], target[1]);
+            }
+        });
+
+        document.body.appendChild(modal);
+        freeNavConfirmModalEl = modal;
+        freeNavConfirmCoordEl = modal.querySelector('#freeNavConfirmCoordText');
+    }
+
+    function openFreeNavConfirmModal(lng, lat) {
+        ensureFreeNavConfirmModalDOM();
+        freeNavPendingConfirmLngLat = [Number(lng.toFixed(6)), Number(lat.toFixed(6))];
+        if (freeNavConfirmCoordEl) {
+            freeNavConfirmCoordEl.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        }
+        freeNavConfirmModalEl?.classList.remove('hidden');
+    }
+
+    function closeFreeNavConfirmModal() {
+        freeNavPendingConfirmLngLat = null;
+        freeNavConfirmModalEl?.classList.add('hidden');
+    }
+
+    function ensureFreeNavPreviewBarDOM() {
+        if (freeNavPreviewBarEl) return;
+
+        const bar = document.createElement('div');
+        bar.id = 'freeNavPreviewBar';
+        bar.className = 'hidden fixed bottom-4 left-3 right-3 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:w-full sm:max-w-md z-[62] bg-white/95 backdrop-blur-md rounded-3xl p-3.5 shadow-2xl border-2 border-cyan-400 pointer-events-auto flex flex-col gap-2.5';
+        bar.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="text-xs font-black text-cyan-800">🧭 自由導航預覽</span>
+                        <span id="freeNavPreviewDist" class="text-xs font-black bg-cyan-50 text-cyan-700 border border-cyan-200 px-2 py-0.5 rounded-full whitespace-nowrap">計算中...</span>
+                        <span id="freeNavPreviewDetour" class="hidden text-[10px] font-black bg-orange-100 text-orange-700 border border-orange-300 px-2 py-0.5 rounded-full whitespace-nowrap">疑似繞遠路</span>
+                    </div>
+                    <div id="freeNavPreviewCoord" class="text-[10px] font-bold font-mono text-gray-500 truncate mt-0.5">--</div>
+                </div>
+                <button type="button" id="btnFreeNavPreviewGoogle" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-black text-[11px] px-2.5 py-1.5 rounded-xl active:scale-95 whitespace-nowrap flex items-center gap-1 flex-shrink-0" title="開啟 Google Maps 外部導航">
+                    <i class="fa-solid fa-diamond-turn-right text-[10px]"></i> Google 導航
+                </button>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+                <button type="button" id="btnFreeNavPreviewCancel" class="col-span-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-2.5 rounded-2xl text-xs active:scale-95">
+                    取消
+                </button>
+                <button type="button" id="btnFreeNavPreviewStart" class="col-span-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-black py-2.5 rounded-2xl text-xs shadow-lg active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50">
+                    <i class="fa-solid fa-play text-[11px]"></i> 開始導航
+                </button>
+            </div>
+        `;
+
+        bar.querySelector('#btnFreeNavPreviewCancel')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            stopFreeNavigationCompletely();
+        });
+
+        bar.querySelector('#btnFreeNavPreviewGoogle')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dest = freeNavPreviewRoute?.destLngLat || activeDestLngLat;
+            openExternalGoogleMapsNav(dest);
+        });
+
+        bar.querySelector('#btnFreeNavPreviewStart')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            try {
+                if (typeof unlockSpeechSynthesis === 'function') unlockSpeechSynthesis();
+            } catch (err) {}
+            try { if (typeof vibrate === 'function') vibrate(35); } catch (err) {}
+            startFreeNavigationFromPreview();
+        });
+
+        document.body.appendChild(bar);
+        freeNavPreviewBarEl = bar;
+        freeNavPreviewDistEl = bar.querySelector('#freeNavPreviewDist');
+        freeNavPreviewDetourEl = bar.querySelector('#freeNavPreviewDetour');
+        freeNavPreviewCoordEl = bar.querySelector('#freeNavPreviewCoord');
+        freeNavPreviewStartBtn = bar.querySelector('#btnFreeNavPreviewStart');
+        freeNavPreviewGoogleBtn = bar.querySelector('#btnFreeNavPreviewGoogle');
+    }
+
+    function hideFreeNavPreviewBar() {
+        if (freeNavPreviewBarEl) {
+            freeNavPreviewBarEl.classList.add('hidden');
+        }
+    }
+
+    // ==========================================
+    // 7. Valhalla 與 OSRM Maneuver 統一轉換為頂部轉彎提示卡與語音格式
+    // ==========================================
+    function parseValhallaManeuver(m, coords) {
+        const type = Number(m?.type) || 0;
+        let actionText = '直行';
+        let iconClass = 'fa-solid fa-arrow-up';
+        let normType = 'turn';
+
+        switch (type) {
+            case 1: case 2: case 3:
+                actionText = '出發'; iconClass = 'fa-solid fa-arrow-up'; normType = 'depart'; break;
+            case 4: case 5: case 6:
+                actionText = (activeNavMode === 'free') ? '抵達目的地' : '抵達路線起點';
+                iconClass = 'fa-solid fa-flag-checkered'; normType = 'arrive'; break;
+            case 7: case 8:
+                actionText = '直行'; iconClass = 'fa-solid fa-arrow-up'; break;
+            case 9:
+                actionText = '靠右轉'; iconClass = 'fa-solid fa-arrow-up-right'; break;
+            case 10:
+                actionText = '右轉'; iconClass = 'fa-solid fa-arrow-right'; break;
+            case 11:
+                actionText = '大幅右轉'; iconClass = 'fa-solid fa-arrow-right'; break;
+            case 12: case 13:
+                actionText = '前方迴轉'; iconClass = 'fa-solid fa-rotate-left'; break;
+            case 14:
+                actionText = '大幅左轉'; iconClass = 'fa-solid fa-arrow-left'; break;
+            case 15:
+                actionText = '左轉'; iconClass = 'fa-solid fa-arrow-left'; break;
+            case 16:
+                actionText = '靠左轉'; iconClass = 'fa-solid fa-arrow-up-left'; break;
+            case 17:
+                actionText = '直行上匝道'; iconClass = 'fa-solid fa-road'; break;
+            case 18:
+                actionText = '靠右上匝道'; iconClass = 'fa-solid fa-arrow-up-right'; break;
+            case 19:
+                actionText = '靠左上匝道'; iconClass = 'fa-solid fa-arrow-up-left'; break;
+            case 20:
+                actionText = '靠右下匝道'; iconClass = 'fa-solid fa-arrow-up-right'; break;
+            case 21:
+                actionText = '靠左下匝道'; iconClass = 'fa-solid fa-arrow-up-left'; break;
+            case 22:
+                actionText = '保持直行'; iconClass = 'fa-solid fa-arrow-up'; break;
+            case 23:
+                actionText = '靠右行駛'; iconClass = 'fa-solid fa-arrow-up-right'; break;
+            case 24:
+                actionText = '靠左行駛'; iconClass = 'fa-solid fa-arrow-up-left'; break;
+            case 25: case 37: case 38:
+                actionText = '匯入主線'; iconClass = 'fa-solid fa-code-merge'; break;
+            case 26: {
+                const exitNum = Number(m?.roundabout_exit_count) || 0;
+                actionText = exitNum > 0 ? `第 ${exitNum} 出口駛出圓環` : '進入圓環';
+                iconClass = 'fa-solid fa-arrows-spin';
+                break;
+            }
+            case 27:
+                actionText = '駛出圓環'; iconClass = 'fa-solid fa-arrows-spin'; break;
+            default:
+                actionText = '直行'; iconClass = 'fa-solid fa-arrow-up'; break;
+        }
+
+        const beginIdx = Math.max(0, Math.min(coords.length - 1, Number(m?.begin_shape_index) || 0));
+        const endIdx = Math.max(beginIdx, Math.min(coords.length - 1, Number(m?.end_shape_index) || beginIdx));
+        const roadName = (Array.isArray(m?.street_names) && m.street_names.length > 0)
+            ? String(m.street_names[0] || '').trim()
+            : '';
+
+        return {
+            type: normType,
+            actionText,
+            iconClass,
+            roadName,
+            distance: (Number(m?.length) || 0) * 1000, // 公里 × 1000 轉公尺
+            maneuverLocation: coords[beginIdx] || coords[coords.length - 1],
+            stepCoords: coords.slice(beginIdx, endIdx + 1),
+            _preSpoken: false,
+            _turnSpoken: false
+        };
+    }
+
     function parseOsrmManeuver(step) {
         const m = step?.maneuver || {};
         const type = String(m.type || '').toLowerCase();
@@ -419,7 +800,10 @@
         const exitNum = Number(m.exit) || 0;
 
         if (type === 'arrive') {
-            return { actionText: '抵達路線起點', iconClass: 'fa-solid fa-flag-checkered' };
+            return {
+                actionText: (activeNavMode === 'free') ? '抵達目的地' : '抵達路線起點',
+                iconClass: 'fa-solid fa-flag-checkered'
+            };
         }
         if (type === 'roundabout' || type === 'rotary') {
             const exitText = exitNum > 0 ? `第 ${exitNum} 出口駛出圓環` : '進入圓環';
@@ -443,35 +827,174 @@
             if (mod.includes('right')) return { actionText: '靠右行駛', iconClass: 'fa-solid fa-arrow-up-right' };
             return { actionText: '保持直行', iconClass: 'fa-solid fa-arrow-up' };
         }
-        if (mod === 'uturn') {
-            return { actionText: '前方迴轉', iconClass: 'fa-solid fa-rotate-left' };
-        }
-        if (mod === 'sharp left') {
-            return { actionText: '大幅左轉', iconClass: 'fa-solid fa-arrow-left' };
-        }
-        if (mod === 'left') {
-            return { actionText: '左轉', iconClass: 'fa-solid fa-arrow-left' };
-        }
-        if (mod === 'slight left') {
-            return { actionText: '靠左轉', iconClass: 'fa-solid fa-arrow-up-left' };
-        }
-        if (mod === 'sharp right') {
-            return { actionText: '大幅右轉', iconClass: 'fa-solid fa-arrow-right' };
-        }
-        if (mod === 'right') {
-            return { actionText: '右轉', iconClass: 'fa-solid fa-arrow-right' };
-        }
-        if (mod === 'slight right') {
-            return { actionText: '靠右轉', iconClass: 'fa-solid fa-arrow-up-right' };
-        }
+        if (mod === 'uturn') return { actionText: '前方迴轉', iconClass: 'fa-solid fa-rotate-left' };
+        if (mod === 'sharp left') return { actionText: '大幅左轉', iconClass: 'fa-solid fa-arrow-left' };
+        if (mod === 'left') return { actionText: '左轉', iconClass: 'fa-solid fa-arrow-left' };
+        if (mod === 'slight left') return { actionText: '靠左轉', iconClass: 'fa-solid fa-arrow-up-left' };
+        if (mod === 'sharp right') return { actionText: '大幅右轉', iconClass: 'fa-solid fa-arrow-right' };
+        if (mod === 'right') return { actionText: '右轉', iconClass: 'fa-solid fa-arrow-right' };
+        if (mod === 'slight right') return { actionText: '靠右轉', iconClass: 'fa-solid fa-arrow-up-right' };
         return { actionText: '直行', iconClass: 'fa-solid fa-arrow-up' };
     }
 
     // ==========================================
-    // 6. 語音播報（含 80m 高優先級插播，切換時絕不切斷）
+    // 8. 統一雙引擎算路函式（Valhalla 第一順位 → OSRM 無縫降級）
+    //    前往起點、自由點導航預覽與偏離重算皆走此流程
+    // ==========================================
+    async function requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg = null) {
+        if (!isValidLngLat(originLng, originLat) || !isValidLngLat(destLng, destLat)) {
+            return { ok: false, noGps: true };
+        }
+
+        const straightDistanceMeters = calcDistMeters(originLng, originLat, destLng, destLat);
+        const validHeading = normalizeValidHeading(headingDeg);
+
+        // --- 第一順位：Valhalla 公開 API（3500ms 逾時、auto、use_highways: 0.3、kilometers、zh-TW） ---
+        try {
+            const originLoc = { lat: originLat, lon: originLng };
+            if (validHeading !== null) {
+                originLoc.heading = validHeading;
+                originLoc.heading_tolerance = OSRM_BEARING_TOLERANCE_DEG;
+            }
+            const payload = {
+                locations: [
+                    originLoc,
+                    { lat: destLat, lon: destLng }
+                ],
+                costing: 'auto',
+                costing_options: {
+                    auto: {
+                        use_highways: 0.3
+                    }
+                },
+                units: 'kilometers',
+                language: 'zh-TW'
+            };
+
+            const valRes = (typeof fetchWithTimeout === 'function')
+                ? await fetchWithTimeout(VALHALLA_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }, ENGINE_TIMEOUT_MS)
+                : await fetch(VALHALLA_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+            if (valRes && valRes.ok && valRes.status === 200) {
+                const valData = await valRes.json();
+                const leg = valData?.trip?.legs?.[0];
+                const shapeStr = leg?.shape;
+                const decodedCoords = decodePolyline6(shapeStr);
+                if (Array.isArray(decodedCoords) && decodedCoords.length >= 2) {
+                    const rawManeuvers = Array.isArray(leg?.maneuvers) ? leg.maneuvers : [];
+                    const steps = rawManeuvers.map((m, idx) => ({
+                        index: idx,
+                        ...parseValhallaManeuver(m, decodedCoords)
+                    }));
+                    const summaryKm = Number(leg?.summary?.length) || Number(valData?.trip?.summary?.length) || 0;
+                    const totalDistanceMeters = summaryKm > 0
+                        ? summaryKm * 1000
+                        : calcPolylineLengthMeters(decodedCoords);
+                    const detourRatio = straightDistanceMeters > 10
+                        ? (totalDistanceMeters / straightDistanceMeters)
+                        : 1;
+
+                    return {
+                        ok: true,
+                        engine: 'V',
+                        coords: decodedCoords,
+                        steps,
+                        totalDistanceMeters,
+                        straightDistanceMeters,
+                        detourRatio,
+                        isDetourSuspected: detourRatio > DETOUR_WARNING_RATIO
+                    };
+                }
+            }
+        } catch (err) {
+            // Valhalla 逾時、CORS 阻擋、HTTP 非 200 或解析失敗：靜默無縫降級至 OSRM
+        }
+
+        // --- 第二順位（無縫降級）：OSRM 算路接手 ---
+        const startTs = Date.now();
+        const candidateUrls = [];
+        if (validHeading !== null) {
+            candidateUrls.push(
+                `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?steps=true&overview=full&geometries=geojson&bearings=${validHeading},${OSRM_BEARING_TOLERANCE_DEG};&radiuses=${OSRM_ORIGIN_RADIUS_M};unlimited`
+            );
+        }
+        candidateUrls.push(
+            `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?steps=true&overview=full&geometries=geojson&radiuses=${OSRM_ORIGIN_RADIUS_M};unlimited`
+        );
+
+        for (const url of candidateUrls) {
+            const remainingMs = ENGINE_TIMEOUT_MS - (Date.now() - startTs);
+            if (remainingMs < 350) break;
+            try {
+                const res = (typeof fetchWithTimeout === 'function')
+                    ? await fetchWithTimeout(url, {}, remainingMs)
+                    : await fetch(url);
+                if (!res || !res.ok) continue;
+                const data = await res.json();
+                const osrmRoute = data?.routes?.[0];
+                const coords = osrmRoute?.geometry?.coordinates;
+                if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
+                    const rawSteps = osrmRoute.legs?.[0]?.steps || [];
+                    const steps = rawSteps.map((st, idx) => {
+                        const parsed = parseOsrmManeuver(st);
+                        const loc = Array.isArray(st.maneuver?.location) && st.maneuver.location.length >= 2
+                            ? st.maneuver.location
+                            : [destLng, destLat];
+                        return {
+                            index: idx,
+                            type: String(st.maneuver?.type || ''),
+                            actionText: parsed.actionText,
+                            iconClass: parsed.iconClass,
+                            roadName: String(st.name || st.ref || '').trim(),
+                            distance: Number(st.distance) || 0,
+                            maneuverLocation: loc,
+                            stepCoords: Array.isArray(st.geometry?.coordinates) ? st.geometry.coordinates : [],
+                            _preSpoken: false,
+                            _turnSpoken: false
+                        };
+                    });
+                    const totalDistanceMeters = Number(osrmRoute.distance) || calcPolylineLengthMeters(coords);
+                    const detourRatio = straightDistanceMeters > 10
+                        ? (totalDistanceMeters / straightDistanceMeters)
+                        : 1;
+
+                    return {
+                        ok: true,
+                        engine: 'O',
+                        coords,
+                        steps,
+                        totalDistanceMeters,
+                        straightDistanceMeters,
+                        detourRatio,
+                        isDetourSuspected: detourRatio > DETOUR_WARNING_RATIO
+                    };
+                }
+            } catch (e) {}
+        }
+
+        return {
+            ok: false,
+            engine: '',
+            straightDistanceMeters,
+            detourRatio: 1,
+            isDetourSuspected: false
+        };
+    }
+
+    // ==========================================
+    // 9. 語音播報（含 80m 高優先級插播，切回時絕不切斷）
     // ==========================================
     function enqueueRoutineApproachVoice(text) {
-        if (!text || hasSpokenNearStart80m) return;
+        if (!text) return;
+        if (activeNavMode === 'approach' && hasSpokenNearStart80m) return;
         if (typeof speakText === 'function') {
             speakText(text);
         } else if (window.VoiceQueue && typeof window.VoiceQueue.enqueue === 'function') {
@@ -486,7 +1009,6 @@
 
         try {
             if (window.VoiceQueue) {
-                // 清空排隊中的舊轉向提示，確保高優先級插播立即執行
                 window.VoiceQueue.queue.length = 0;
                 if (window.VoiceQueue.isSpeaking) {
                     if (window.VoiceQueue._watchdogTimer) {
@@ -509,126 +1031,74 @@
     }
 
     // ==========================================
-    // 7. OSRM 路線請求（3.5s 逾時降級直線方位與距離）
+    // 10. 進行中導航算路與單向推進引導（前往起點 & 自由導航共用）
     // ==========================================
-    async function fetchApproachOsrmRoute(originLng, originLat, destLng, destLat, headingDeg, isSilentRecalc = false) {
-        if (isFetchingOsrm) return;
-        isFetchingOsrm = true;
+    async function fetchAndApplyActiveNavigationRoute(originLng, originLat, destLng, destLat, headingDeg, isSilentRecalc = false) {
+        if (isFetchingRoute) return;
+        isFetchingRoute = true;
         lastRecalcTimestamp = Date.now();
         const mySeq = ++fetchSeqId;
 
-        const validHeading = normalizeValidHeading(headingDeg);
-        const startTs = Date.now();
+        const result = await requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg);
 
-        const candidateUrls = [];
-        if (validHeading !== null) {
-            candidateUrls.push(
-                `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?steps=true&overview=full&geometries=geojson&bearings=${validHeading},${OSRM_BEARING_TOLERANCE_DEG};&radiuses=${OSRM_ORIGIN_RADIUS_M};unlimited`
-            );
-        }
-        candidateUrls.push(
-            `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?steps=true&overview=full&geometries=geojson&radiuses=${OSRM_ORIGIN_RADIUS_M};unlimited`
-        );
-
-        let osrmRoute = null;
-
-        for (const url of candidateUrls) {
-            const remainingMs = OSRM_TIMEOUT_MS - (Date.now() - startTs);
-            if (remainingMs < 350) break;
-
-            try {
-                const res = (typeof fetchWithTimeout === 'function')
-                    ? await fetchWithTimeout(url, {}, remainingMs)
-                    : await fetch(url);
-                if (mySeq !== fetchSeqId || !isApproachActive) {
-                    isFetchingOsrm = false;
-                    return;
-                }
-                if (!res || !res.ok) continue;
-                const data = await res.json();
-                if (data?.code === 'Ok' && Array.isArray(data.routes) && data.routes.length > 0) {
-                    osrmRoute = data.routes[0];
-                    break;
-                }
-            } catch (err) {
-                // 單次請求逾時或失敗，依剩餘時間嘗試備援或降級直線
-            }
-        }
-
-        isFetchingOsrm = false;
+        isFetchingRoute = false;
         if (mySeq !== fetchSeqId || !isApproachActive) return;
 
-        if (osrmRoute && Array.isArray(osrmRoute.geometry?.coordinates) && osrmRoute.geometry.coordinates.length >= 2) {
+        if (result.ok && Array.isArray(result.coords) && result.coords.length >= 2) {
             isApproachFallbackMode = false;
-            approachPolylineCoords = osrmRoute.geometry.coordinates;
-
-            const rawSteps = osrmRoute.legs?.[0]?.steps || [];
-            approachSteps = rawSteps.map((st, idx) => {
-                const parsed = parseOsrmManeuver(st);
-                const loc = Array.isArray(st.maneuver?.location) && st.maneuver.location.length >= 2
-                    ? st.maneuver.location
-                    : [destLng, destLat];
-                return {
-                    index: idx,
-                    type: String(st.maneuver?.type || ''),
-                    actionText: parsed.actionText,
-                    iconClass: parsed.iconClass,
-                    roadName: String(st.name || st.ref || '').trim(),
-                    distance: Number(st.distance) || 0,
-                    maneuverLocation: loc,
-                    stepCoords: Array.isArray(st.geometry?.coordinates) ? st.geometry.coordinates : [],
-                    _preSpoken: false,
-                    _turnSpoken: false
-                };
-            });
-
-            // currentStepIndex 指向第一個前方轉向動作（略過起點 depart）
+            activeEngineCode = result.engine;
+            isDetourSuspected = Boolean(result.isDetourSuspected);
+            approachPolylineCoords = result.coords;
+            approachSteps = result.steps;
             currentStepIndex = (approachSteps.length > 1 && approachSteps[0].type === 'depart') ? 1 : 0;
 
             setApproachMapLine(approachPolylineCoords, false);
-            evaluateApproachGuidance(originLng, originLat, !isSilentRecalc);
+            evaluateActiveGuidance(originLng, originLat, !isSilentRecalc);
         } else {
-            // 3.5s 逾時或無路網結果：優雅降級為直線方位與距離提示
+            activeEngineCode = '';
+            isDetourSuspected = false;
             activateStraightLineFallback(originLng, originLat, !isSilentRecalc);
         }
     }
 
     function activateStraightLineFallback(curLng, curLat, announceNow = false) {
-        if (!targetStartLngLat) return;
+        const dest = activeDestLngLat || targetStartLngLat;
+        if (!dest) return;
         isApproachFallbackMode = true;
-        approachPolylineCoords = [[curLng, curLat], [targetStartLngLat[0], targetStartLngLat[1]]];
+        activeEngineCode = '';
+        isDetourSuspected = false;
+        approachPolylineCoords = [[curLng, curLat], [dest[0], dest[1]]];
         approachSteps = [];
         currentStepIndex = 0;
 
         setApproachMapLine(approachPolylineCoords, true);
 
-        const distM = calcDistMeters(curLng, curLat, targetStartLngLat[0], targetStartLngLat[1]);
-        const bearing = calcBearingDeg(curLng, curLat, targetStartLngLat[0], targetStartLngLat[1]);
+        const distM = calcDistMeters(curLng, curLat, dest[0], dest[1]);
+        const bearing = calcBearingDeg(curLng, curLat, dest[0], dest[1]);
         const dirZh = bearingToCompassZh(bearing);
+        const destName = activeDestLabel || activeTargetRoute?.name || '目的地';
 
         updateTurnCardUI({
             iconClass: 'fa-solid fa-compass',
             distText: formatDistanceText(distM),
             actionText: `往${dirZh}方前進`,
-            roadText: `直線前往「${activeTargetRoute?.name || '路線起點'}」`,
+            roadText: `直線前往「${destName}」`,
             startRemM: distM,
             isFallback: true
         });
 
         const now = Date.now();
-        if (announceNow || (now - lastFallbackSpokenTime > 20000 && !hasSpokenNearStart80m)) {
+        if (announceNow || (now - lastFallbackSpokenTime > 20000 && !(activeNavMode === 'approach' && hasSpokenNearStart80m))) {
             lastFallbackSpokenTime = now;
-            enqueueRoutineApproachVoice(`路網逾時，請往${dirZh}方前往起點，距離約 ${Math.round(distM)} 公尺`);
+            enqueueRoutineApproachVoice(`路網逾時，請往${dirZh}方前進，距離約 ${Math.round(distM)} 公尺`);
         }
     }
 
-    // ==========================================
-    // 8. 單向推進轉向提示與防跳針語音引擎
-    // ==========================================
-    function evaluateApproachGuidance(curLng, curLat, isInitialAfterFetch = false) {
-        if (!isApproachActive || !targetStartLngLat) return;
+    function evaluateActiveGuidance(curLng, curLat, isInitialAfterFetch = false) {
+        const dest = activeDestLngLat || targetStartLngLat;
+        if (!isApproachActive || !dest) return;
 
-        const distToStartM = calcDistMeters(curLng, curLat, targetStartLngLat[0], targetStartLngLat[1]);
+        const distToDestM = calcDistMeters(curLng, curLat, dest[0], dest[1]);
 
         if (isApproachFallbackMode || approachSteps.length === 0) {
             activateStraightLineFallback(curLng, curLat, false);
@@ -644,13 +1114,11 @@
                 curStep.maneuverLocation[0], curStep.maneuverLocation[1]
             );
 
-            // 若已通過目前轉彎點（<= 18m），推進至下一步
             if (dToCurManeuver <= 18) {
                 currentStepIndex++;
                 continue;
             }
 
-            // 若車輛已明顯進入下一段幾何線段（距下段 <= 18m 且比目前段更近）
             if (nextStep.stepCoords.length >= 2) {
                 const dToNextSeg = calcPointToPolylineDistM(curLng, curLat, nextStep.stepCoords);
                 const prevSegCoords = approachSteps[Math.max(0, currentStepIndex - 1)]?.stepCoords || [];
@@ -672,7 +1140,8 @@
             curLng, curLat,
             step.maneuverLocation[0], step.maneuverLocation[1]
         );
-        const roadLabel = step.roadName || (step.type === 'arrive' ? (activeTargetRoute?.name || '路線起點') : '前方道路');
+        const fallbackLabel = (activeNavMode === 'free') ? '目的地' : (activeTargetRoute?.name || '路線起點');
+        const roadLabel = step.roadName || (step.type === 'arrive' ? fallbackLabel : '前方道路');
         const roadVoiceSuffix = step.roadName ? `，進入 ${step.roadName}` : '';
 
         updateTurnCardUI({
@@ -680,30 +1149,28 @@
             distText: formatDistanceText(distToManeuverM),
             actionText: step.actionText,
             roadText: roadLabel,
-            startRemM: distToStartM,
+            startRemM: distToDestM,
             isFallback: false
         });
 
-        // 若已觸發 80m 抵達起點專屬語音，不再插播一般轉向語音
-        if (hasSpokenNearStart80m) return;
+        if (activeNavMode === 'approach' && hasSpokenNearStart80m) return;
 
-        // 剛規劃完成時：若第一個轉彎點在合理範圍內，播報一次出發引導
+        const startVoicePrefix = (activeNavMode === 'free') ? '開始導航' : '開始前往起點';
         if (isInitialAfterFetch && !step._preSpoken && !step._turnSpoken) {
             if (distToManeuverM <= 45) {
                 step._preSpoken = true;
                 step._turnSpoken = true;
-                enqueueRoutineApproachVoice(`開始前往起點，前方準備${step.actionText}${roadVoiceSuffix}`);
+                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方準備${step.actionText}${roadVoiceSuffix}`);
             } else {
                 step._preSpoken = true;
                 const rounded = distToManeuverM >= 1000
                     ? `${(distToManeuverM / 1000).toFixed(1)} 公里`
                     : `${Math.max(10, Math.round(distToManeuverM / 10) * 10)} 公尺`;
-                enqueueRoutineApproachVoice(`開始前往起點，前方 ${rounded} ${step.actionText}${roadVoiceSuffix}`);
+                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方 ${rounded} ${step.actionText}${roadVoiceSuffix}`);
             }
             return;
         }
 
-        // 每段各自獨立的雙層播報旗標，杜絕重複跳針
         if (distToManeuverM <= 150 && distToManeuverM > 45 && !step._preSpoken) {
             step._preSpoken = true;
             const roundedM = Math.max(50, Math.round(distToManeuverM / 10) * 10);
@@ -716,13 +1183,27 @@
     }
 
     // ==========================================
-    // 9. 啟動／自動切回／結束生命週期
+    // 11. 「前往起點導航」啟動／自動切回／結束生命週期
     // ==========================================
     function startApproachNavigation() {
         if (!isFollowSessionActive || !activeTargetRoute || !targetStartLngLat) return;
 
+        const origin = resolveValidGpsOrigin();
+        if (!origin) {
+            notifyNoValidGps();
+            return;
+        }
+
+        // 若有殘留自由導航預覽，先清理
+        clearFreeNavPreviewOnly();
+
+        activeNavMode = 'approach';
+        activeDestLngLat = [targetStartLngLat[0], targetStartLngLat[1]];
+        activeDestLabel = activeTargetRoute.name || '路線起點';
         isApproachActive = true;
         isApproachFallbackMode = false;
+        activeEngineCode = '';
+        isDetourSuspected = false;
         approachPolylineCoords = [];
         approachSteps = [];
         currentStepIndex = 0;
@@ -730,8 +1211,6 @@
         lastFallbackSpokenTime = 0;
 
         hidePromptButton();
-
-        // 進入前往起點導航時預設收合右側功能按鈕列（關），點按可展開或收起
         setRightToolbarCollapsed(true);
 
         // 保底確認正式清運路線維持完整原色（未走過進度 index = 0），不被誤染為灰色
@@ -749,34 +1228,19 @@
             titleEl.innerText = '前往起點導航中';
         }
 
-        const originLng = lastVehicleLngLat ? lastVehicleLngLat[0] : (Array.isArray(lastKnownLngLat) ? lastKnownLngLat[0] : null);
-        const originLat = lastVehicleLngLat ? lastVehicleLngLat[1] : (Array.isArray(lastKnownLngLat) ? lastKnownLngLat[1] : null);
-
-        if (typeof originLng !== 'number' || typeof originLat !== 'number') {
-            updateTurnCardUI({
-                iconClass: 'fa-solid fa-satellite-dish',
-                distText: '定位中',
-                actionText: '等待 GPS',
-                roadText: '取得目前位置後自動規劃前往起點路線',
-                startRemM: NaN,
-                isFallback: false
-            });
-            return;
-        }
-
-        const curDistM = calcDistMeters(originLng, originLat, targetStartLngLat[0], targetStartLngLat[1]);
+        const curDistM = calcDistMeters(origin.lng, origin.lat, targetStartLngLat[0], targetStartLngLat[1]);
         updateTurnCardUI({
             iconClass: 'fa-solid fa-spinner fa-spin',
             distText: formatDistanceText(curDistM),
             actionText: '規劃中...',
-            roadText: `正在規劃前往「${activeTargetRoute.name || '起點'}」`,
+            roadText: `正在規劃前往「${activeDestLabel}」`,
             startRemM: curDistM,
             isFallback: false
         });
 
-        fetchApproachOsrmRoute(
-            originLng,
-            originLat,
+        fetchAndApplyActiveNavigationRoute(
+            origin.lng,
+            origin.lat,
             targetStartLngLat[0],
             targetStartLngLat[1],
             lastVehicleHeading,
@@ -787,9 +1251,14 @@
     // 無縫切回遵循畫面（嚴禁呼叫 speechSynthesis.cancel() 或 VoiceQueue.clear()，保留抵達提示語音完整念完）
     function switchBackToFollowNavigation() {
         fetchSeqId++;
-        isFetchingOsrm = false;
+        isFetchingRoute = false;
         isApproachActive = false;
+        activeNavMode = null;
+        activeDestLngLat = null;
+        activeDestLabel = '';
         isApproachFallbackMode = false;
+        activeEngineCode = '';
+        isDetourSuspected = false;
         approachPolylineCoords = [];
         approachSteps = [];
         currentStepIndex = 0;
@@ -806,15 +1275,21 @@
 
     function exitApproachToWaitingOrFollow(forceFullStop = false) {
         fetchSeqId++;
-        isFetchingOsrm = false;
-        isApproachActive = false;
-        isApproachFallbackMode = false;
-        approachPolylineCoords = [];
-        approachSteps = [];
-        currentStepIndex = 0;
-
-        clearApproachMapLine();
-        hideTurnCardUI();
+        isFetchingRoute = false;
+        if (activeNavMode === 'approach') {
+            isApproachActive = false;
+            activeNavMode = null;
+            activeDestLngLat = null;
+            activeDestLabel = '';
+            isApproachFallbackMode = false;
+            activeEngineCode = '';
+            isDetourSuspected = false;
+            approachPolylineCoords = [];
+            approachSteps = [];
+            currentStepIndex = 0;
+            clearApproachMapLine();
+            hideTurnCardUI();
+        }
 
         if (forceFullStop) {
             isFollowSessionActive = false;
@@ -826,7 +1301,6 @@
             return;
         }
 
-        // 手動關閉前往起點引導卡片，若仍距起點 > 100m 則回到待命手動啟動狀態（頂部狀態膠囊恢復「前往起點 (XXXXm) · 按我導航」）
         if (isFollowSessionActive && isFinite(lastDistToStartM) && lastDistToStartM > MANUAL_PROMPT_THRESHOLD_M) {
             showPromptButton(lastDistToStartM);
         } else {
@@ -835,10 +1309,293 @@
     }
 
     // ==========================================
-    // 10. 對外掛載介面（供 navigation.js 最小限度呼叫）
+    // 12. 自由導航（功能開關 ＋ 長按地圖預覽 ＋ 開始導航 ＋ 完整清除）
+    // ==========================================
+    function clearFreeNavPreviewOnly() {
+        freeNavPreviewRoute = null;
+        hideFreeNavPreviewBar();
+        if (activeNavMode !== 'free') {
+            clearFreeNavDestMarker();
+            if (!isApproachActive) {
+                clearApproachMapLine();
+            }
+        }
+    }
+
+    function stopFreeNavigationCompletely() {
+        fetchSeqId++;
+        isFetchingRoute = false;
+        closeFreeNavConfirmModal();
+        freeNavPreviewRoute = null;
+        hideFreeNavPreviewBar();
+        clearFreeNavDestMarker();
+
+        if (activeNavMode === 'free' || !isFollowSessionActive) {
+            isApproachActive = false;
+            activeNavMode = null;
+            activeDestLngLat = null;
+            activeDestLabel = '';
+            isApproachFallbackMode = false;
+            activeEngineCode = '';
+            isDetourSuspected = false;
+            approachPolylineCoords = [];
+            approachSteps = [];
+            currentStepIndex = 0;
+            clearApproachMapLine();
+            hideTurnCardUI();
+        }
+    }
+
+    async function planFreeNavPreviewTo(destLng, destLat) {
+        // 先清除先前殘留的預覽線、標記與狀態
+        stopFreeNavigationCompletely();
+
+        const origin = resolveValidGpsOrigin();
+        if (!origin) {
+            notifyNoValidGps();
+            return;
+        }
+
+        const mySeq = ++fetchSeqId;
+        ensureFreeNavPreviewBarDOM();
+        setFreeNavDestMarker([destLng, destLat]);
+
+        if (freeNavPreviewDistEl) freeNavPreviewDistEl.textContent = '算路中...';
+        if (freeNavPreviewDetourEl) freeNavPreviewDetourEl.classList.add('hidden');
+        if (freeNavPreviewCoordEl) freeNavPreviewCoordEl.textContent = `目標：${destLat.toFixed(6)}, ${destLng.toFixed(6)}`;
+        if (freeNavPreviewStartBtn) freeNavPreviewStartBtn.disabled = true;
+        activeDestLngLat = [destLng, destLat];
+        freeNavPreviewBarEl?.classList.remove('hidden');
+
+        const result = await requestDualEngineRoute(origin.lng, origin.lat, destLng, destLat, lastVehicleHeading);
+        if (mySeq !== fetchSeqId) return;
+
+        if (result.ok && Array.isArray(result.coords) && result.coords.length >= 2) {
+            freeNavPreviewRoute = {
+                ...result,
+                destLngLat: [destLng, destLat],
+                isFallback: false
+            };
+            setApproachMapLine(result.coords, false);
+            if (freeNavPreviewDistEl) {
+                freeNavPreviewDistEl.textContent = `${formatDistanceText(result.totalDistanceMeters)}${getEngineTagSuffix(result.engine)}`;
+            }
+            if (freeNavPreviewDetourEl) {
+                freeNavPreviewDetourEl.classList.toggle('hidden', !result.isDetourSuspected);
+            }
+        } else {
+            // 雙引擎皆失敗時降級直線預覽，仍可開始直線導航或跳轉 Google Maps
+            const straightCoords = [[origin.lng, origin.lat], [destLng, destLat]];
+            const straightM = calcDistMeters(origin.lng, origin.lat, destLng, destLat);
+            freeNavPreviewRoute = {
+                ok: false,
+                engine: '',
+                coords: straightCoords,
+                steps: [],
+                totalDistanceMeters: straightM,
+                straightDistanceMeters: straightM,
+                detourRatio: 1,
+                isDetourSuspected: false,
+                destLngLat: [destLng, destLat],
+                isFallback: true
+            };
+            setApproachMapLine(straightCoords, true);
+            if (freeNavPreviewDistEl) {
+                freeNavPreviewDistEl.textContent = `${formatDistanceText(straightM)} · 直線`;
+            }
+            if (freeNavPreviewDetourEl) {
+                freeNavPreviewDetourEl.classList.add('hidden');
+            }
+        }
+
+        if (freeNavPreviewStartBtn) freeNavPreviewStartBtn.disabled = false;
+
+        // 適度縮放地圖視野涵蓋起點與目的地預覽線
+        try {
+            if (typeof map !== 'undefined' && map && Array.isArray(freeNavPreviewRoute.coords) && freeNavPreviewRoute.coords.length >= 2) {
+                if (typeof setCameraFollow === 'function') setCameraFollow(false);
+                const bounds = new maplibregl.LngLatBounds();
+                freeNavPreviewRoute.coords.forEach(c => bounds.extend([c[0], c[1]]));
+                map.fitBounds(bounds, { padding: { top: 90, bottom: 180, left: 45, right: 45 }, duration: 500 });
+            }
+        } catch (e) {}
+    }
+
+    function startFreeNavigationFromPreview() {
+        if (!freeNavPreviewRoute || !Array.isArray(freeNavPreviewRoute.destLngLat)) return;
+
+        const origin = resolveValidGpsOrigin();
+        if (!origin) {
+            notifyNoValidGps();
+            return;
+        }
+
+        const preview = freeNavPreviewRoute;
+        freeNavPreviewRoute = null;
+        hideFreeNavPreviewBar();
+
+        activeNavMode = 'free';
+        activeDestLngLat = [preview.destLngLat[0], preview.destLngLat[1]];
+        activeDestLabel = '自由目的地';
+        isApproachActive = true;
+        isApproachFallbackMode = Boolean(preview.isFallback);
+        activeEngineCode = preview.engine || '';
+        isDetourSuspected = Boolean(preview.isDetourSuspected);
+        approachPolylineCoords = Array.isArray(preview.coords) ? preview.coords.slice() : [];
+        approachSteps = Array.isArray(preview.steps) ? preview.steps : [];
+        currentStepIndex = (approachSteps.length > 1 && approachSteps[0].type === 'depart') ? 1 : 0;
+        lastRecalcTimestamp = Date.now();
+        lastFallbackSpokenTime = 0;
+
+        setRightToolbarCollapsed(true);
+        if (typeof setCameraFollow === 'function') setCameraFollow(true);
+        setApproachMapLine(approachPolylineCoords, isApproachFallbackMode);
+        evaluateActiveGuidance(origin.lng, origin.lat, true);
+    }
+
+    function isOtherMapInteractionModeActive() {
+        if (typeof isEditingMode !== 'undefined' && isEditingMode) return true;
+        if (typeof isManualDrawingMode !== 'undefined' && isManualDrawingMode) return true;
+        if (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) return true;
+        if (typeof isRecording !== 'undefined' && isRecording) return true;
+        if (typeof isReplaying !== 'undefined' && isReplaying) return true;
+        return false;
+    }
+
+    function setupFreeNavLongPressGesture() {
+        if (typeof map === 'undefined' || !map) return;
+        const canvasContainer = map.getCanvasContainer();
+        if (!canvasContainer) return;
+
+        let holdTimer = null;
+        let startX = 0;
+        let startY = 0;
+        let pendingLngLat = null;
+
+        function clearHold() {
+            if (holdTimer !== null) {
+                clearTimeout(holdTimer);
+                holdTimer = null;
+            }
+            pendingLngLat = null;
+        }
+
+        function isIgnoredTarget(targetEl) {
+            return Boolean(
+                targetEl && targetEl.closest &&
+                targetEl.closest('.shared-pin-wrapper, .music-marker, .fleet-truck-marker, .pin-s, .pin-e, .furniture-pin-wrapper, .furniture-popup-wrapper, .callout-box-marker, .callout-anchor-dot, .alert-compact-pin, .alert-popup-wrapper')
+            );
+        }
+
+        canvasContainer.addEventListener('touchstart', (e) => {
+            clearHold();
+            if (!isFreeNavEnabled || isOtherMapInteractionModeActive()) return;
+            if (!e.touches || e.touches.length !== 1) return;
+            if (isIgnoredTarget(e.target)) return;
+
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            const rect = canvasContainer.getBoundingClientRect();
+            pendingLngLat = map.unproject([touch.clientX - rect.left, touch.clientY - rect.top]);
+
+            holdTimer = setTimeout(() => {
+                holdTimer = null;
+                if (!isFreeNavEnabled || isOtherMapInteractionModeActive() || !pendingLngLat) return;
+                try { if (typeof vibrate === 'function') vibrate(45); } catch (err) {}
+                openFreeNavConfirmModal(pendingLngLat.lng, pendingLngLat.lat);
+            }, FREE_NAV_LONG_PRESS_MS);
+        }, { passive: true });
+
+        canvasContainer.addEventListener('touchmove', (e) => {
+            if (holdTimer === null) return;
+            if (!e.touches || e.touches.length !== 1) {
+                clearHold();
+                return;
+            }
+            const touch = e.touches[0];
+            if (Math.hypot(touch.clientX - startX, touch.clientY - startY) >= FREE_NAV_LONG_PRESS_MOVE_PX) {
+                clearHold();
+            }
+        }, { passive: true });
+
+        canvasContainer.addEventListener('touchend', clearHold, { passive: true });
+        canvasContainer.addEventListener('touchcancel', clearHold, { passive: true });
+
+        canvasContainer.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            clearHold();
+            if (!isFreeNavEnabled || isOtherMapInteractionModeActive()) return;
+            if (isIgnoredTarget(e.target)) return;
+
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = canvasContainer.getBoundingClientRect();
+            pendingLngLat = map.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+
+            holdTimer = setTimeout(() => {
+                holdTimer = null;
+                if (!isFreeNavEnabled || isOtherMapInteractionModeActive() || !pendingLngLat) return;
+                openFreeNavConfirmModal(pendingLngLat.lng, pendingLngLat.lat);
+            }, FREE_NAV_LONG_PRESS_MS);
+        });
+
+        canvasContainer.addEventListener('mousemove', (e) => {
+            if (holdTimer === null) return;
+            if (Math.hypot(e.clientX - startX, e.clientY - startY) >= FREE_NAV_LONG_PRESS_MOVE_PX) {
+                clearHold();
+            }
+        });
+
+        canvasContainer.addEventListener('mouseup', clearHold);
+        ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart', 'wheel'].forEach(evtName => {
+            map.on(evtName, clearHold);
+        });
+
+        map.on('contextmenu', (e) => {
+            clearHold();
+            if (!isFreeNavEnabled || isOtherMapInteractionModeActive()) return;
+            if (isIgnoredTarget(e.originalEvent?.target)) return;
+            if (e.originalEvent) e.originalEvent.preventDefault();
+            if (e.lngLat) {
+                try { if (typeof vibrate === 'function') vibrate(45); } catch (err) {}
+                openFreeNavConfirmModal(e.lngLat.lng, e.lngLat.lat);
+            }
+        });
+    }
+
+    function handleFreeNavLiveGps(lng, lat, heading) {
+        if (activeNavMode !== 'free' || !isApproachActive || !activeDestLngLat) return;
+        const distToDestM = calcDistMeters(lng, lat, activeDestLngLat[0], activeDestLngLat[1]);
+
+        if (distToDestM <= FREE_NAV_ARRIVE_DIST_M) {
+            if (typeof speakText === 'function') speakText('已抵達目的地');
+            if (typeof showNavAlert === 'function') showNavAlert('🏁', '已抵達自由導航目的地', 'bg-emerald-600');
+            try { if (typeof vibrate === 'function') vibrate([120, 60, 120]); } catch (e) {}
+            stopFreeNavigationCompletely();
+            return;
+        }
+
+        const now = Date.now();
+        if (!isFetchingRoute && (now - lastRecalcTimestamp) > OFF_ROUTE_RECALC_INTERVAL_MS) {
+            const distFromLineM = isApproachFallbackMode
+                ? Infinity
+                : calcPointToPolylineDistM(lng, lat, approachPolylineCoords);
+            if (isApproachFallbackMode || distFromLineM > OFF_ROUTE_RECALC_DIST_M) {
+                fetchAndApplyActiveNavigationRoute(lng, lat, activeDestLngLat[0], activeDestLngLat[1], heading, true);
+                return;
+            }
+        }
+
+        evaluateActiveGuidance(lng, lat, false);
+    }
+
+    // ==========================================
+    // 13. 對外掛載介面（供 navigation.js / map-core.js / config-state.js 最小限度呼叫）
     // ==========================================
     const ApproachNavAPI = {
         onFollowStart(route, currentLngLat) {
+            stopFreeNavigationCompletely();
             exitApproachToWaitingOrFollow(true);
             if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
 
@@ -847,15 +1604,21 @@
             targetStartLngLat = [Number(route.points[0].lng), Number(route.points[0].lat)];
             hasSpokenNearStart80m = false;
 
-            if (Array.isArray(currentLngLat) && currentLngLat.length >= 2 &&
-                typeof currentLngLat[0] === 'number' && typeof currentLngLat[1] === 'number') {
-                lastVehicleLngLat = [currentLngLat[0], currentLngLat[1]];
+            const validOrigin = resolveValidGpsOrigin();
+            const initOrigin = validOrigin || (
+                Array.isArray(currentLngLat) && currentLngLat.length >= 2 && isValidLngLat(currentLngLat[0], currentLngLat[1]) &&
+                typeof lastValidGpsLng === 'number' && typeof lastValidGpsLat === 'number'
+                    ? { lng: currentLngLat[0], lat: currentLngLat[1] }
+                    : null
+            );
+
+            if (initOrigin) {
+                lastVehicleLngLat = [initOrigin.lng, initOrigin.lat];
                 const distM = calcDistMeters(
-                    currentLngLat[0], currentLngLat[1],
+                    initOrigin.lng, initOrigin.lat,
                     targetStartLngLat[0], targetStartLngLat[1]
                 );
                 lastDistToStartM = distM;
-                // 距起點 > 100m：不自動啟動，僅於左上角顯示手動啟動按鈕
                 if (distM > MANUAL_PROMPT_THRESHOLD_M) {
                     showPromptButton(distM);
                 }
@@ -863,13 +1626,21 @@
         },
 
         onGpsUpdate(payload) {
-            if (!isFollowSessionActive || !payload || !targetStartLngLat) return;
+            if (!payload) return;
             const { lng, lat, heading, minDistToRoute, distToStart, hasAnnouncedStart } = payload;
-            if (typeof lng !== 'number' || typeof lat !== 'number') return;
+            if (!isValidLngLat(lng, lat)) return;
 
             lastVehicleLngLat = [lng, lat];
             const validH = normalizeValidHeading(heading);
             if (validH !== null) lastVehicleHeading = validH;
+
+            // 若目前處於自由導航進行中，獨立處理自由導航
+            if (activeNavMode === 'free' && isApproachActive) {
+                handleFreeNavLiveGps(lng, lat, lastVehicleHeading);
+                return;
+            }
+
+            if (!isFollowSessionActive || !targetStartLngLat) return;
 
             const curDistToStartM = (typeof distToStart === 'number' && isFinite(distToStart))
                 ? distToStart
@@ -890,7 +1661,6 @@
                     if (!isApproachPromptVisible) {
                         showPromptButton(curDistToStartM);
                     } else {
-                        // 僅更新頂部狀態膠囊的距離文字，絕不重繪外層容器或覆蓋點擊事件
                         updateStatusPillPromptText(curDistToStartM);
                     }
                 } else {
@@ -900,66 +1670,101 @@
             }
 
             // B. 「前往起點導航」進行中
-            // B1. 接近起點 <= 80m：每趟僅一次高優先級插播專屬語音
             if (!hasSpokenNearStart80m && curDistToStartM <= NEAR_START_VOICE_DIST_M) {
                 hasSpokenNearStart80m = true;
                 speakHighPriorityNearStartVoice();
             }
 
-            // B2. 抵達起點 <= 30m 或直接踩上正式路線 <= 20m：自動清除引導線與轉彎卡，無縫切回遵循畫面（不切斷語音）
             if (curDistToStartM <= ARRIVE_START_SWITCH_DIST_M || curMinDistRouteM <= ON_MAIN_ROUTE_SWITCH_DIST_M) {
                 switchBackToFollowNavigation();
                 return;
             }
 
-            // B3. 若尚未有路線資料（例如剛啟動時還沒定位），立即補發一次請求
-            if (!isFetchingOsrm && approachPolylineCoords.length < 2 && !isApproachFallbackMode) {
-                fetchApproachOsrmRoute(lng, lat, targetStartLngLat[0], targetStartLngLat[1], lastVehicleHeading, false);
+            if (!isFetchingRoute && approachPolylineCoords.length < 2 && !isApproachFallbackMode) {
+                fetchAndApplyActiveNavigationRoute(lng, lat, targetStartLngLat[0], targetStartLngLat[1], lastVehicleHeading, false);
                 return;
             }
 
-            // B4. 偏離引導線 > 40m 且距上次重算間隔 > 10s：靜默重算 OSRM
             const now = Date.now();
-            if (!isFetchingOsrm && (now - lastRecalcTimestamp) > OFF_ROUTE_RECALC_INTERVAL_MS) {
+            if (!isFetchingRoute && (now - lastRecalcTimestamp) > OFF_ROUTE_RECALC_INTERVAL_MS) {
                 const distFromApproachLineM = isApproachFallbackMode
                     ? Infinity
                     : calcPointToPolylineDistM(lng, lat, approachPolylineCoords);
                 if (isApproachFallbackMode || distFromApproachLineM > OFF_ROUTE_RECALC_DIST_M) {
-                    fetchApproachOsrmRoute(lng, lat, targetStartLngLat[0], targetStartLngLat[1], lastVehicleHeading, true);
+                    fetchAndApplyActiveNavigationRoute(lng, lat, targetStartLngLat[0], targetStartLngLat[1], lastVehicleHeading, true);
                     return;
                 }
             }
 
-            // B5. 正常單向推進轉彎卡片與語音提示
-            evaluateApproachGuidance(lng, lat, false);
+            evaluateActiveGuidance(lng, lat, false);
+        },
+
+        onIdleGpsUpdate(filtered) {
+            if (!filtered || !isValidLngLat(filtered.lng, filtered.lat)) return;
+            lastVehicleLngLat = [filtered.lng, filtered.lat];
+            const validH = normalizeValidHeading(filtered.heading);
+            if (validH !== null) lastVehicleHeading = validH;
+
+            if (activeNavMode === 'free' && isApproachActive) {
+                handleFreeNavLiveGps(filtered.lng, filtered.lat, lastVehicleHeading);
+            }
         },
 
         isActive() {
-            return Boolean(isApproachActive);
+            // 僅在「前往起點導航」進行中回傳 true 以隔離正式清運路線進度與灰線渲染
+            return Boolean(isApproachActive && activeNavMode === 'approach');
         },
 
         isPromptVisible() {
             return Boolean(isApproachPromptVisible && !isApproachActive);
         },
 
+        isFreeNavEnabled() {
+            return Boolean(isFreeNavEnabled);
+        },
+
+        toggleFreeNav() {
+            isFreeNavEnabled = !isFreeNavEnabled;
+            if (!isFreeNavEnabled) {
+                stopFreeNavigationCompletely();
+            }
+            try { if (typeof vibrate === 'function') vibrate(25); } catch (e) {}
+            if (typeof renderMapLayerMenuOptions === 'function') {
+                renderMapLayerMenuOptions();
+            }
+            if (typeof showNavAlert === 'function') {
+                showNavAlert(
+                    '🧭',
+                    isFreeNavEnabled ? '自由導航已開啟（長按地圖可設定目的地）' : '自由導航已關閉',
+                    isFreeNavEnabled ? 'bg-cyan-600' : 'bg-gray-700'
+                );
+            }
+            return isFreeNavEnabled;
+        },
+
         stop(isManualExit = true) {
+            if (isManualExit) {
+                stopFreeNavigationCompletely();
+            }
             exitApproachToWaitingOrFollow(Boolean(isManualExit));
         },
 
+        requestDualEngineRoute,
         setRightToolbarCollapsed,
         toggleRightToolbar
     };
 
     window.ApproachNav = ApproachNavAPI;
 
-    // 初始化右側工具列收合開關（預設關）與地圖樣式監聽
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setupRightToolbarCollapseControl();
-            attachStyleDataListener();
-        });
-    } else {
+    function bootModule() {
         setupRightToolbarCollapseControl();
         attachStyleDataListener();
+        setupFreeNavLongPressGesture();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootModule);
+    } else {
+        bootModule();
     }
 })();

@@ -1638,7 +1638,7 @@ async function fetchAndRenderSharedMapPins() {
 
     canvasContainer.addEventListener('touchstart', (e) => {
         clearLongPressTimer();
-        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || window.ApproachNav?.isFreeNavEnabled?.()) return;
         if (!e.touches || e.touches.length !== 1) return;
         if (isIgnoredMarkerTarget(e.target)) return;
 
@@ -1653,7 +1653,7 @@ async function fetchAndRenderSharedMapPins() {
 
         longPressTimer = setTimeout(() => {
             longPressTimer = null;
-            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || !pendingLngLat) return;
+            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || window.ApproachNav?.isFreeNavEnabled?.() || !pendingLngLat) return;
             try { navigator.vibrate?.(50); } catch (err) {}
             openLongPressPinTypeModal(pendingLngLat.lat, pendingLngLat.lng);
         }, LONG_PRESS_DURATION_MS);
@@ -1679,7 +1679,7 @@ async function fetchAndRenderSharedMapPins() {
     canvasContainer.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         clearLongPressTimer();
-        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || window.ApproachNav?.isFreeNavEnabled?.()) return;
         if (isIgnoredMarkerTarget(e.target)) return;
 
         startClientX = e.clientX;
@@ -1689,7 +1689,7 @@ async function fetchAndRenderSharedMapPins() {
 
         longPressTimer = setTimeout(() => {
             longPressTimer = null;
-            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || !pendingLngLat) return;
+            if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || window.ApproachNav?.isFreeNavEnabled?.() || !pendingLngLat) return;
             openLongPressPinTypeModal(pendingLngLat.lat, pendingLngLat.lng);
         }, LONG_PRESS_DURATION_MS);
     });
@@ -1711,7 +1711,7 @@ async function fetchAndRenderSharedMapPins() {
     // 桌面端支援右鍵 contextmenu 觸發
     map.on('contextmenu', (e) => {
         clearLongPressTimer();
-        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive)) return;
+        if (isEditingMode || isManualDrawingMode || (typeof isFurnitureModeActive !== 'undefined' && isFurnitureModeActive) || window.ApproachNav?.isFreeNavEnabled?.()) return;
         const origTarget = e.originalEvent?.target;
         if (isIgnoredMarkerTarget(origTarget)) {
             return;

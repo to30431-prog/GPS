@@ -148,26 +148,154 @@ let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureManualDraftGeoJSON = { type: 'FeatureCollection', features: [] };
 
-const map = new maplibregl.Map({
+// 記錄外部模組綁定於 map.on(...) 與 map.getCanvasContainer().addEventListener(...) 的監聽器，
+// 確保 WebGL Context Lost 真正重建 MapLibre 實例（map.remove() + new maplibregl.Map()）後自動無損重放所有互動與圖層同步事件
+const recordedExternalMapOnListeners = [];
+const recordedCanvasContainerListeners = [];
+let isInternalMapBinding = false;
+let hasBoundGlobalViewportResizeGuards = false;
+
+function installMapInstanceListenerRecorder(targetMap) {
+    if (!targetMap || targetMap.__listenerRecorderInstalled) return;
+    targetMap.__listenerRecorderInstalled = true;
+
+    const origOn = targetMap.on.bind(targetMap);
+    const origOff = targetMap.off.bind(targetMap);
+
+    targetMap.on = function patchedMapOn(type, layerOrListener, maybeListener) {
+        if (!isInternalMapBinding && typeof type === 'string' && type !== 'load') {
+            recordedExternalMapOnListeners.push({
+                type,
+                layerId: typeof layerOrListener === 'string' ? layerOrListener : null,
+                listener: typeof layerOrListener === 'function' ? layerOrListener : maybeListener
+            });
+        }
+        return maybeListener !== undefined
+            ? origOn(type, layerOrListener, maybeListener)
+            : origOn(type, layerOrListener);
+    };
+
+    targetMap.off = function patchedMapOff(type, layerOrListener, maybeListener) {
+        const targetListener = typeof layerOrListener === 'function' ? layerOrListener : maybeListener;
+        const targetLayer = typeof layerOrListener === 'string' ? layerOrListener : null;
+        for (let i = recordedExternalMapOnListeners.length - 1; i >= 0; i--) {
+            const entry = recordedExternalMapOnListeners[i];
+            if (entry.type === type && entry.layerId === targetLayer && entry.listener === targetListener) {
+                recordedExternalMapOnListeners.splice(i, 1);
+            }
+        }
+        return maybeListener !== undefined
+            ? origOff(type, layerOrListener, maybeListener)
+            : origOff(type, layerOrListener);
+    };
+
+    const canvasContainer = targetMap.getCanvasContainer?.();
+    if (canvasContainer && !canvasContainer.__listenerRecorderInstalled) {
+        canvasContainer.__listenerRecorderInstalled = true;
+        const origAdd = canvasContainer.addEventListener.bind(canvasContainer);
+        const origRemove = canvasContainer.removeEventListener.bind(canvasContainer);
+
+        canvasContainer.addEventListener = function patchedCanvasAdd(type, listener, options) {
+            if (!isInternalMapBinding && typeof type === 'string' && typeof listener === 'function') {
+                const exists = recordedCanvasContainerListeners.some(
+                    entry => entry.type === type && entry.listener === listener
+                );
+                if (!exists) {
+                    recordedCanvasContainerListeners.push({ type, listener, options });
+                }
+            }
+            return origAdd(type, listener, options);
+        };
+
+        canvasContainer.removeEventListener = function patchedCanvasRemove(type, listener, options) {
+            for (let i = recordedCanvasContainerListeners.length - 1; i >= 0; i--) {
+                const entry = recordedCanvasContainerListeners[i];
+                if (entry.type === type && entry.listener === listener) {
+                    recordedCanvasContainerListeners.splice(i, 1);
+                }
+            }
+            return origRemove(type, listener, options);
+        };
+    }
+}
+
+function replayExternalListenersToMapInstance(targetMap) {
+    if (!targetMap) return;
+    isInternalMapBinding = true;
+    try {
+        recordedExternalMapOnListeners.forEach(entry => {
+            if (!entry || !entry.type || typeof entry.listener !== 'function') return;
+            try {
+                if (entry.layerId) {
+                    targetMap.on(entry.type, entry.layerId, entry.listener);
+                } else {
+                    targetMap.on(entry.type, entry.listener);
+                }
+            } catch (e) {}
+        });
+        const canvasContainer = targetMap.getCanvasContainer?.();
+        if (canvasContainer) {
+            recordedCanvasContainerListeners.forEach(entry => {
+                if (!entry || !entry.type || typeof entry.listener !== 'function') return;
+                try {
+                    canvasContainer.addEventListener(entry.type, entry.listener, entry.options);
+                } catch (e) {}
+            });
+        }
+    } finally {
+        isInternalMapBinding = false;
+    }
+}
+
+function bindCoreMapInstanceListeners(targetMap) {
+    if (!targetMap) return;
+    isInternalMapBinding = true;
+    try {
+        // 攔截 MapLibre GL 背景圖磚／字型請求瞬斷或取消時的預設 console.error，避免離線或切換視窗時拋出未處理的 Failed to fetch
+        targetMap.on('error', (e) => {
+            const errMsg = String(e?.error?.message || e?.message || '');
+            if (
+                errMsg.includes('Failed to fetch') ||
+                errMsg.includes('AbortError') ||
+                errMsg.includes('Load failed') ||
+                errMsg.includes('NetworkError')
+            ) {
+                return;
+            }
+            console.warn('[MapLibre Warning]', errMsg || e);
+        });
+
+        targetMap.on('zoom', updateMapMarkersZoomScale);
+        targetMap.on('load', updateMapMarkersZoomScale);
+
+        targetMap.on('rotate', () => {
+            const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
+                ? vehicleVisualHeading
+                : currentHeading;
+            window.syncCarHeading?.(activeHeading, map ? map.getBearing() : 0);
+            window.syncAllFleetMarkersHeading?.(true);
+        });
+
+        targetMap.on('style.load', () => {
+            restoreCustomLayersAndAlignmentAfterStyleLoad();
+        });
+
+        ['dragstart', 'touchstart', 'wheel', 'rotatestart', 'pitchstart'].forEach(evt => {
+            targetMap.on(evt, (e) => { if (e.originalEvent) setCameraFollow(false); });
+        });
+    } finally {
+        isInternalMapBinding = false;
+    }
+}
+
+let map = new maplibregl.Map({
     container: 'map',
     style: currentMapLayerPreset.getStyle(),
     center: [121.346, 24.954],
     zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
-
-// 攔截 MapLibre GL 背景圖磚／字型請求瞬斷或取消時的預設 console.error，避免離線或切換視窗時拋出未處理的 Failed to fetch
-map.on('error', (e) => {
-    const errMsg = String(e?.error?.message || e?.message || '');
-    if (
-        errMsg.includes('Failed to fetch') ||
-        errMsg.includes('AbortError') ||
-        errMsg.includes('Load failed') ||
-        errMsg.includes('NetworkError')
-    ) {
-        return;
-    }
-    console.warn('[MapLibre Warning]', errMsg || e);
-});
+installMapInstanceListenerRecorder(map);
+bindCoreMapInstanceListeners(map);
 
 function updateMapMarkersZoomScale() {
     if (!map) return;
@@ -191,12 +319,10 @@ function updateMapMarkersZoomScale() {
         mapEl.classList.add(tierClass);
     }
 }
-map.on('zoom', updateMapMarkersZoomScale);
-map.on('load', updateMapMarkersZoomScale);
 updateMapMarkersZoomScale();
 
-setTimeout(() => { map.resize(); updateMapMarkersZoomScale(); }, 500);
-window.addEventListener('resize', () => map.resize());
+setTimeout(() => { if (map) { map.resize(); updateMapMarkersZoomScale(); } }, 500);
+window.addEventListener('resize', () => { if (map) map.resize(); });
 
 if (typeof injectCarAnimations === 'function') {
     injectCarAnimations();
@@ -863,9 +989,11 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
 }
 
 // ==========================================
-// 🛡️ WebGL Context Lost 偵測、前景恢復重繪與輕量「重整地圖」引擎
+// 🛡️ WebGL Context Lost 偵測、前景恢復重繪與真正 MapLibre 實例重建引擎
 // ==========================================
 let isMapWebglContextLost = false;
+let isRebuildingMapInstance = false;
+let mapRebuildSafetyUnlockTimer = null;
 let mapRefreshToastTimer = null;
 let mapWakeupResizeTimer = null;
 let mapWakeupSecondaryTimer = null;
@@ -894,20 +1022,24 @@ function showMapRefreshToast(message, durationMs = 2300) {
 function isMapWebglContextBroken() {
     if (isMapWebglContextLost) return true;
     try {
+        if (!map) return true;
+        const canvas = map.getCanvas?.();
+        if (!canvas || !canvas.isConnected || canvas.width === 0 || canvas.height === 0) return true;
         const gl = map?.painter?.context?.gl;
-        if (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()) {
+        if (!gl) return true;
+        if (typeof gl.isContextLost === 'function' && gl.isContextLost()) {
             return true;
         }
-    } catch (e) {}
+    } catch (e) {
+        return true;
+    }
     return false;
 }
 
 function isMapBaseStyleAbnormal() {
-    if (!map) return false;
+    if (!map) return true;
     if (isMapWebglContextBroken()) return true;
     try {
-        const canvas = map.getCanvas?.();
-        if (!canvas || canvas.width === 0 || canvas.height === 0) return true;
         if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return true;
         const style = map.getStyle?.();
         if (!style || !Array.isArray(style.layers) || style.layers.length === 0) return true;
@@ -920,64 +1052,156 @@ function isMapBaseStyleAbnormal() {
 }
 
 let lastMapStyleRebuildAt = 0;
-function rebuildMapStyleAndRestoreAllState(reason = 'webgl-recovery') {
-    if (!map || !currentMapLayerPreset) return;
+
+// 🔄 真正的 MapLibre 實例重建（map.remove() + new maplibregl.Map()）：
+// 徹底釋放壞死的 WebGL Context 並無損還原座標、底圖樣式、錄製/預覽/編輯路線、黃色提醒、車隊雷達、測速照相與純黑省電狀態
+function rebuildMapInstanceAndRestoreAllState(reason = 'webgl-recovery') {
+    if (!currentMapLayerPreset) return false;
+    if (isRebuildingMapInstance) return false;
+
     const now = Date.now();
     const isManualTrigger = (reason === 'toolbar-button' || reason === 'menu-button' || reason === 'manual');
-    if (!isManualTrigger && (now - lastMapStyleRebuildAt) < 1200) return;
+    if (!isManualTrigger && (now - lastMapStyleRebuildAt) < 1600) return false;
+
+    isRebuildingMapInstance = true;
     lastMapStyleRebuildAt = now;
+    if (mapRebuildSafetyUnlockTimer) {
+        clearTimeout(mapRebuildSafetyUnlockTimer);
+        mapRebuildSafetyUnlockTimer = null;
+    }
+    // 最長 4.5 秒自動解鎖，防止極端弱網環境下鎖死無法再次觸發
+    mapRebuildSafetyUnlockTimer = setTimeout(() => {
+        isRebuildingMapInstance = false;
+        mapRebuildSafetyUnlockTimer = null;
+    }, 4500);
 
     try {
         window.scrollTo(0, 0);
-        const savedCenter = map.getCenter?.();
-        const savedZoom = map.getZoom?.();
-        const savedBearing = map.getBearing?.();
-        const savedPitch = map.getPitch?.();
 
-        const restoreAllAfterReload = () => {
-            isMapWebglContextLost = false;
-            restoreCustomLayersAndAlignmentAfterStyleLoad();
-            if (savedCenter && typeof savedZoom === 'number' && !isNaN(savedZoom)) {
-                try {
-                    map.jumpTo({
-                        center: savedCenter,
-                        zoom: savedZoom,
-                        bearing: typeof savedBearing === 'number' ? savedBearing : 0,
-                        pitch: typeof savedPitch === 'number' ? savedPitch : 0
-                    });
-                } catch (e) {}
+        // 1. 完整保存當前視角與狀態
+        let savedCenter = [121.346, 24.954];
+        let savedZoom = 16;
+        let savedBearing = 0;
+        let savedPitch = 0;
+        try {
+            const c = map?.getCenter?.();
+            if (c && Number.isFinite(c.lng) && Number.isFinite(c.lat)) {
+                savedCenter = [c.lng, c.lat];
+            } else if (Array.isArray(lastKnownLngLat) && lastKnownLngLat.length >= 2) {
+                savedCenter = [lastKnownLngLat[0], lastKnownLngLat[1]];
             }
-            ensureDomMarkersIntactAfterStyleSwitch();
-            updateMapMarkersZoomScale();
-            map.resize();
-            map.triggerRepaint();
+            const z = map?.getZoom?.();
+            if (typeof z === 'number' && Number.isFinite(z)) savedZoom = z;
+            const b = map?.getBearing?.();
+            if (typeof b === 'number' && Number.isFinite(b)) savedBearing = b;
+            const p = map?.getPitch?.();
+            if (typeof p === 'number' && Number.isFinite(p)) savedPitch = p;
+        } catch (e) {}
+
+        const oldMap = map;
+        const containerEl = document.getElementById('map');
+
+        // 2. 徹底銷毀舊壞死 MapLibre 實例並清空殘留 canvas DOM
+        if (oldMap) {
+            try { oldMap.remove(); } catch (e) {}
+        }
+        if (containerEl) {
+            containerEl.innerHTML = '';
+        }
+
+        // 3. 重新建立全新的 MapLibre 實例（取得嶄新健康的 WebGL Context）
+        const nextMap = new maplibregl.Map({
+            container: 'map',
+            style: currentMapLayerPreset.getStyle(),
+            center: savedCenter,
+            zoom: savedZoom,
+            bearing: savedBearing,
+            pitch: savedPitch,
+            dragRotate: true,
+            touchZoomRotate: true
+        });
+        map = nextMap;
+
+        // 4. 掛載事件紀錄代理、核心監聽器、WebGL 監聽與自動重放所有外部模組監聽器
+        installMapInstanceListenerRecorder(nextMap);
+        bindCoreMapInstanceListeners(nextMap);
+        attachMapWebglAndViewportGuards(nextMap);
+        replayExternalListenersToMapInstance(nextMap);
+
+        let restoredOnce = false;
+        const restoreAllAfterInstanceLoad = () => {
+            if (map !== nextMap) return;
+            isMapWebglContextLost = false;
+            if (!restoredOnce) {
+                restoredOnce = true;
+                isRebuildingMapInstance = false;
+                if (mapRebuildSafetyUnlockTimer) {
+                    clearTimeout(mapRebuildSafetyUnlockTimer);
+                    mapRebuildSafetyUnlockTimer = null;
+                }
+            }
+            try {
+                restoreCustomLayersAndAlignmentAfterStyleLoad();
+                nextMap.jumpTo({
+                    center: savedCenter,
+                    zoom: savedZoom,
+                    bearing: savedBearing,
+                    pitch: savedPitch
+                });
+                ensureDomMarkersIntactAfterStyleSwitch();
+                if (typeof ensurePureBlackSystemBars === 'function') {
+                    ensurePureBlackSystemBars();
+                }
+                updateMapMarkersZoomScale();
+                nextMap.resize();
+                nextMap.triggerRepaint();
+            } catch (err) {
+                console.warn('[MapRecovery] 實例重建後還原圖層時發生例外:', err);
+            }
         };
 
-        map.once('style.load', restoreAllAfterReload);
-        map.setStyle(currentMapLayerPreset.getStyle(), { diff: false });
+        nextMap.once('load', restoreAllAfterInstanceLoad);
 
+        // 二次與三次補償（吸收弱網 style 載入較慢或系統列高度變化）
         setTimeout(() => {
-            if (!map) return;
+            if (map !== nextMap) return;
             restoreCustomLayersAndAlignmentAfterStyleLoad();
-            updateMapMarkersZoomScale();
-            map.resize();
-            map.triggerRepaint();
-        }, 350);
-
-        setTimeout(() => {
-            if (!map) return;
             ensureDomMarkersIntactAfterStyleSwitch();
             updateMapMarkersZoomScale();
-            map.resize();
-            map.triggerRepaint();
-        }, 900);
+            nextMap.resize();
+            nextMap.triggerRepaint();
+        }, 420);
+
+        setTimeout(() => {
+            if (map !== nextMap) return;
+            if (!restoredOnce) restoreAllAfterInstanceLoad();
+            else {
+                ensureDomMarkersIntactAfterStyleSwitch();
+                updateMapMarkersZoomScale();
+                nextMap.resize();
+                nextMap.triggerRepaint();
+            }
+        }, 1100);
+
+        return true;
     } catch (e) {
-        console.warn(`[MapRecovery:${reason}] 重建底圖樣式時發生例外:`, e);
+        isRebuildingMapInstance = false;
+        if (mapRebuildSafetyUnlockTimer) {
+            clearTimeout(mapRebuildSafetyUnlockTimer);
+            mapRebuildSafetyUnlockTimer = null;
+        }
+        console.warn(`[MapRecovery:${reason}] 重建 MapLibre 實例時發生例外:`, e);
+        return false;
     }
 }
 
+// 保持向下相容別名（既有呼叫點直接受惠於真正 MapLibre 實例重建）
+function rebuildMapStyleAndRestoreAllState(reason = 'webgl-recovery') {
+    return rebuildMapInstanceAndRestoreAllState(reason);
+}
+
 function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = false, reason = 'manual' } = {}) {
-    if (!map) return;
+    if (!map && !currentMapLayerPreset) return;
     try {
         window.scrollTo(0, 0);
         const refreshIcon = document.getElementById('refreshMapIcon');
@@ -988,20 +1212,28 @@ function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = fals
             }, 520);
         }
 
-        map.resize();
-
-        const shouldRebuild = Boolean(forceRebuildStyle || isMapBaseStyleAbnormal());
-        if (shouldRebuild) {
-            rebuildMapStyleAndRestoreAllState(reason);
-        } else {
-            restoreCustomLayersAndAlignmentAfterStyleLoad();
-            updateMapMarkersZoomScale();
-            map.triggerRepaint();
+        const shouldRebuildInstance = Boolean(forceRebuildStyle || isMapBaseStyleAbnormal());
+        if (shouldRebuildInstance) {
+            const started = rebuildMapInstanceAndRestoreAllState(reason);
+            if (showToast) {
+                showMapRefreshToast(
+                    started
+                        ? '🔄 已重建地圖引擎與圖層（完整保留路線、地標與車輛狀態）'
+                        : '⏳ 地圖引擎正在重建中，請稍候...'
+                );
+            }
+            return;
         }
+
+        map.resize();
+        restoreCustomLayersAndAlignmentAfterStyleLoad();
+        updateMapMarkersZoomScale();
+        map.triggerRepaint();
 
         // 二次穩定重算（吸收 iOS / Android 系統列或螢幕旋轉動畫完成後的高度差）
         setTimeout(() => {
             try {
+                if (!map || isRebuildingMapInstance) return;
                 window.scrollTo(0, 0);
                 map.resize();
                 ensureDomMarkersIntactAfterStyleSwitch();
@@ -1011,45 +1243,53 @@ function refreshMapCanvasAndLayers({ forceRebuildStyle = false, showToast = fals
         }, 260);
 
         if (showToast) {
-            showMapRefreshToast(
-                shouldRebuild
-                    ? '🔄 已重建底圖與圖層（保留目前路線、地標與車輛狀態）'
-                    : '🔄 地圖尺寸與圖層已重整（已保留目前路線狀態）'
-            );
+            showMapRefreshToast('🔄 地圖尺寸與圖層已重整（已保留目前路線狀態）');
         }
     } catch (e) {
         console.warn('輕量重整地圖時發生例外:', e);
     }
 }
 
-function attachMapWebglAndViewportGuards() {
-    if (!map) return;
-    const canvas = map.getCanvas?.();
+function attachMapWebglAndViewportGuards(targetMap = map) {
+    if (!targetMap) return;
+    const canvas = targetMap.getCanvas?.();
     if (canvas && !canvas.__webglGuardAttached) {
         canvas.__webglGuardAttached = true;
         canvas.addEventListener('webglcontextlost', (e) => {
             e.preventDefault();
             isMapWebglContextLost = true;
-            console.warn('[WebGL] 偵測到 webglcontextlost，待返回前景時自動重建底圖渲染');
+            console.warn('[WebGL] 偵測到 webglcontextlost，待返回前景時自動重建 MapLibre 實例');
         }, false);
 
         canvas.addEventListener('webglcontextrestored', () => {
             isMapWebglContextLost = false;
             setTimeout(() => {
-                rebuildMapStyleAndRestoreAllState('webglcontextrestored');
-            }, 150);
+                if (document.visibilityState === 'visible') {
+                    rebuildMapInstanceAndRestoreAllState('webglcontextrestored');
+                }
+            }, 160);
         }, false);
     }
 
-    map.on('webglcontextlost', () => {
-        isMapWebglContextLost = true;
-    });
-    map.on('webglcontextrestored', () => {
-        isMapWebglContextLost = false;
-        setTimeout(() => {
-            rebuildMapStyleAndRestoreAllState('map-webglcontextrestored');
-        }, 150);
-    });
+    isInternalMapBinding = true;
+    try {
+        targetMap.on('webglcontextlost', () => {
+            isMapWebglContextLost = true;
+        });
+        targetMap.on('webglcontextrestored', () => {
+            isMapWebglContextLost = false;
+            setTimeout(() => {
+                if (document.visibilityState === 'visible') {
+                    rebuildMapInstanceAndRestoreAllState('map-webglcontextrestored');
+                }
+            }, 160);
+        });
+    } finally {
+        isInternalMapBinding = false;
+    }
+
+    if (hasBoundGlobalViewportResizeGuards) return;
+    hasBoundGlobalViewportResizeGuards = true;
 
     const scheduleViewportMapResize = (source = 'resize') => {
         if (mapViewportResizeTimer) {
@@ -1057,7 +1297,7 @@ function attachMapWebglAndViewportGuards() {
         }
         mapViewportResizeTimer = setTimeout(() => {
             mapViewportResizeTimer = null;
-            if (document.visibilityState === 'visible') {
+            if (document.visibilityState === 'visible' && !isRebuildingMapInstance) {
                 refreshMapCanvasAndLayers({ forceRebuildStyle: false, showToast: false, reason: source });
             }
         }, 150);
@@ -1074,7 +1314,7 @@ function attachMapWebglAndViewportGuards() {
         });
     }
 }
-attachMapWebglAndViewportGuards();
+attachMapWebglAndViewportGuards(map);
 
 // ==========================================
 // 🗺️ 右上角「圖層」雙書籤分頁面板（🗺️ 地圖圖層 / ⚙️ 功能開關）渲染與切換邏輯
@@ -1314,11 +1554,18 @@ function switchMapBaseLayer(layerId) {
 
     renderMapLayerMenuOptions();
 
+    // 若目前 WebGL Context 已遺失或底圖異常，直接走完整 MapLibre 實例重建即可立即以新底圖復活
+    if (isMapWebglContextBroken()) {
+        rebuildMapInstanceAndRestoreAllState('layer-switch-recovery');
+        return;
+    }
+
     // 一律使用 { diff: false } 強制完整重載樣式，確保不同網格／向量底圖切換必定觸發 map.on('style.load') 並依序重建所有自訂路線、插針、社區與車隊雷達圖層
     try {
         map.setStyle(targetPreset.getStyle(), { diff: false });
     } catch (e) {
         console.error('切換底圖圖層時發生錯誤:', e);
+        rebuildMapInstanceAndRestoreAllState('layer-switch-error');
     }
 }
 
@@ -1408,7 +1655,7 @@ function positionMapLayerMenuPanel() {
     });
 })();
 
-map.on('load', () => {
+map.once('load', () => {
     // 外層 Marker 固定不旋轉 (rotation: 0, viewport)，統一交由內層 .vehicle-heading-rotator (window.syncCarHeading) 根據 heading 與 map.getBearing() 控制角度，避免重複旋轉疊加
     vehicleMarker = new maplibregl.Marker({ element: puckEl, rotationAlignment: 'viewport', pitchAlignment: 'viewport' })
         .setLngLat(lastKnownLngLat)
@@ -1427,32 +1674,16 @@ map.on('load', () => {
 
     startIdleGPS();
     navigator.geolocation?.getCurrentPosition(pos => {
-        if (!isReplaying) {
+        if (!isReplaying && map) {
             map.jumpTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 17 });
             window.syncCarHeading?.(currentHeading, map.getBearing());
         }
     });
 });
 
-map.on('rotate', () => {
-    const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
-        ? vehicleVisualHeading
-        : currentHeading;
-    window.syncCarHeading?.(activeHeading, map.getBearing());
-    window.syncAllFleetMarkersHeading?.(true);
-});
-
-map.on('style.load', () => {
-    restoreCustomLayersAndAlignmentAfterStyleLoad();
-});
-
 function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
 // --- 2. 視角操作 ---
-['dragstart', 'touchstart', 'wheel', 'rotatestart', 'pitchstart'].forEach(evt => {
-    map.on(evt, (e) => { if (e.originalEvent) setCameraFollow(false); });
-});
-
 function setCameraFollow(follow) {
     isFollowingCamera = follow;
     const btn = document.getElementById('locateBtn');

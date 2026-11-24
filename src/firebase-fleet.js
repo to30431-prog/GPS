@@ -2489,11 +2489,12 @@ async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
     mapWakeupResizeTimer = setTimeout(() => {
         mapWakeupResizeTimer = null;
         if (document.visibilityState === 'hidden') return;
+        if (typeof isRebuildingMapInstance !== 'undefined' && isRebuildingMapInstance) return;
         if (map) {
             window.scrollTo(0, 0);
             map.resize();
             if (typeof isMapBaseStyleAbnormal === 'function' ? isMapBaseStyleAbnormal() : isMapWebglContextBroken()) {
-                rebuildMapStyleAndRestoreAllState(`wakeup-${sourceEvent}`);
+                rebuildMapInstanceAndRestoreAllState(`wakeup-${sourceEvent}`);
             } else {
                 restoreCustomLayersAndAlignmentAfterStyleLoad();
                 updateMapMarkersZoomScale();
@@ -2502,14 +2503,15 @@ async function handlePageForegroundWakeup(sourceEvent = 'visibilitychange') {
         }
     }, 150);
 
-    // 二次穩定檢查（420ms）：吸收 iOS Safari / Android Chrome 切換 App 時頂部/底部系統列動畫收合延遲；若底圖仍未載入或異常則觸發完整底圖重載
+    // 二次穩定檢查（420ms）：吸收 iOS Safari / Android Chrome 切換 App 時頂部/底部系統列動畫收合延遲；若底圖仍黑屏或 WebGL 異常則觸發真正實例重建
     mapWakeupSecondaryTimer = setTimeout(() => {
         mapWakeupSecondaryTimer = null;
         if (document.visibilityState === 'hidden' || !map) return;
+        if (typeof isRebuildingMapInstance !== 'undefined' && isRebuildingMapInstance) return;
         window.scrollTo(0, 0);
         map.resize();
         if (typeof isMapBaseStyleAbnormal === 'function' && isMapBaseStyleAbnormal()) {
-            rebuildMapStyleAndRestoreAllState(`wakeup-late-${sourceEvent}`);
+            rebuildMapInstanceAndRestoreAllState(`wakeup-late-${sourceEvent}`);
         } else {
             ensureDomMarkersIntactAfterStyleSwitch();
             updateMapMarkersZoomScale();
@@ -2532,6 +2534,10 @@ document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
         handlePageForegroundWakeup('visibilitychange');
     }
+});
+
+window.addEventListener('pageshow', (e) => {
+    handlePageForegroundWakeup(e.persisted ? 'pageshow-bfcache' : 'pageshow');
 });
 
 window.addEventListener('focus', () => {

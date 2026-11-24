@@ -24,7 +24,11 @@
     const DETOUR_WARNING_RATIO = 1.8;
     const FREE_NAV_LONG_PRESS_MS = 650;
     const FREE_NAV_LONG_PRESS_MOVE_PX = 10;
-    const ROUTE_PREF_HIGHWAY_WEIGHT = { normal: 0.8, shortcut: 0.2 };
+    const MODE_SWITCH_COOLDOWN_MS = 800;
+    const ROUTE_PREF_OPTIONS = {
+        normal: { use_highways: 0.95, use_tolls: 0.5, shortest: false },
+        shortcut: { use_highways: 0.05, use_tolls: 0.0, shortest: true }
+    };
 
     const VALHALLA_API_URL = 'https://valhalla1.openstreetmap.de/route';
     const APPROACH_SOURCE_ID = 'approach-nav-route-source';
@@ -33,8 +37,9 @@
 
     // --- 模組私有狀態（完全獨立，不汙染正式路線狀態） ---
     let activeNavMode = null; // null | 'approach' | 'free'
-    let routePrefMode = 'normal'; // 'normal'（一般 use_highways=0.8）| 'shortcut'（捷徑 use_highways=0.2）
+    let routePrefMode = 'normal'; // 'normal'（一般主幹道）| 'shortcut'（捷徑）
     let isSwitchingRoutePref = false;
+    let lastModeSwitchClickTime = 0;
 
     let activeTargetRoute = null;
     let targetStartLngLat = null; // 正式路線起點座標 [lng, lat]
@@ -94,6 +99,7 @@
     let turnStartRemEl = null;
     let turnModeBadgeEl = null;
     let turnDetourBadgeEl = null;
+    let turnDetourRowEl = null;
 
     // 左下角行車儀表卡（時速 ＋ ETA）＆ 右下角導航懸浮控制區（一般/捷徑 ＋ 藍色 Google 導航）
     let drivingHudCardEl = null;
@@ -562,16 +568,19 @@
     }
 
     async function handleToggleRoutePrefMode() {
-        if (isSwitchingRoutePref || isFetchingRoute) return;
+        const now = Date.now();
+        if (isSwitchingRoutePref || isFetchingRoute || (now - lastModeSwitchClickTime) < MODE_SWITCH_COOLDOWN_MS) return;
+        lastModeSwitchClickTime = now;
+        const prevDistM = freeNavPreviewRoute?.totalDistanceMeters || activeRouteTotalDistM || 0;
         routePrefMode = (routePrefMode === 'normal') ? 'shortcut' : 'normal';
         try { if (typeof vibrate === 'function') vibrate(25); } catch (e) {}
 
-        // 情境 1：目前處於自由導航預覽階段 → 立即重算預覽路線
+        // 情境 1：目前處於自由導航預覽階段 → 立即重算預覽路線（帶入前次距離以觸發差異化備選）
         if (freeNavPreviewRoute && Array.isArray(freeNavPreviewRoute.destLngLat) && !isApproachActive) {
             isSwitchingRoutePref = true;
             syncRoutePrefToggleButtonsUI(true);
             try {
-                await planFreeNavPreviewTo(freeNavPreviewRoute.destLngLat[0], freeNavPreviewRoute.destLngLat[1], true);
+                await planFreeNavPreviewTo(freeNavPreviewRoute.destLngLat[0], freeNavPreviewRoute.destLngLat[1], true, prevDistM);
             } finally {
                 isSwitchingRoutePref = false;
                 syncRoutePrefToggleButtonsUI(false);
@@ -579,7 +588,7 @@
             return;
         }
 
-        // 情境 2：目前處於導航進行中（前往起點或自由導航）→ 立即重算導航路線
+        // 情境 2：目前處於導航進行中（前往起點或自由導航）→ 立即重算導航路線（帶入前次距離以觸發差異化備選）
         if (isApproachActive) {
             const dest = activeDestLngLat || targetStartLngLat;
             const origin = resolveValidGpsOrigin();
@@ -600,7 +609,8 @@
                     dest[0],
                     dest[1],
                     lastVehicleHeading,
-                    false
+                    false,
+                    prevDistM
                 );
             } finally {
                 isSwitchingRoutePref = false;
@@ -616,13 +626,15 @@
         if (!drivingHudCardEl) {
             const hud = document.createElement('div');
             hud.id = 'navDrivingHudCard';
-            hud.className = 'hidden fixed bottom-5 left-3.5 z-[61] bg-slate-900/92 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-slate-500/80 px-3.5 py-2 pointer-events-none select-none min-w-[126px]';
+            hud.className = 'hidden fixed bottom-5 left-3.5 z-[61] rounded-2xl px-3.5 py-2.5 pointer-events-none select-none min-w-[136px]';
+            // 高對比深色底與明確 inline 色彩，防止被任何地圖或既有樣式覆蓋導致字色過淡
+            hud.style.cssText = 'background: rgba(15, 23, 42, 0.95) !important; border: 2px solid rgba(148, 163, 184, 0.85) !important; color: #ffffff !important; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.48) !important; backdrop-filter: blur(8px);';
             hud.innerHTML = `
-                <div class="flex items-baseline gap-1 leading-none">
-                    <span id="navDrivingHudSpeed" class="text-2xl font-black font-mono text-cyan-300 tracking-tight">0</span>
-                    <span class="text-[11px] font-extrabold text-slate-300">km/h</span>
+                <div class="flex items-baseline gap-1.5 leading-tight">
+                    <span id="navDrivingHudSpeed" class="text-2xl font-black font-mono tracking-tight" style="color: #ffffff !important; text-shadow: 0 1px 3px rgba(0,0,0,0.7);">0</span>
+                    <span class="text-xs font-black" style="color: #38bdf8 !important;">km/h</span>
                 </div>
-                <div id="navDrivingHudEta" class="text-xs font-black text-emerald-300 font-mono mt-1 whitespace-nowrap">--:-- 抵達</div>
+                <div id="navDrivingHudEta" class="text-xs font-black font-mono mt-1 whitespace-nowrap" style="color: #4ade80 !important; text-shadow: 0 1px 2px rgba(0,0,0,0.6);">--:-- 抵達</div>
             `;
             document.body.appendChild(hud);
             drivingHudCardEl = hud;
@@ -740,26 +752,36 @@
 
         const card = document.createElement('div');
         card.id = 'approachTurnCard';
-        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[360px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3.5 py-2.5 pointer-events-auto select-none';
+        // 加大上方內距（pt-3.5）與行高，避免轉向／距離大字貼齊頂邊
+        card.className = 'hidden fixed top-[4.8rem] left-1/2 -translate-x-1/2 z-[58] w-[calc(100vw-116px)] max-w-[360px] bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border-2 border-cyan-400 px-3.5 pt-3.5 pb-2.5 pointer-events-auto select-none';
         card.innerHTML = `
             <div class="flex items-center gap-3">
                 <div id="approachTurnIconBox" class="w-12 h-12 rounded-xl bg-cyan-500/20 border border-cyan-400/60 flex items-center justify-center flex-shrink-0 text-cyan-300">
                     <i id="approachTurnIcon" class="fa-solid fa-arrow-up text-2xl"></i>
                 </div>
                 <div class="flex-1 min-w-0">
-                    <div class="flex items-baseline gap-1.5">
-                        <span id="approachTurnDist" class="text-xl font-black text-cyan-300 tracking-tight leading-none whitespace-nowrap">-- 公尺</span>
-                        <span id="approachTurnAction" class="text-sm font-black text-white truncate">規劃中...</span>
+                    <div class="flex items-baseline gap-1.5 leading-snug">
+                        <span id="approachTurnDist" class="text-xl font-black text-cyan-300 tracking-tight leading-snug whitespace-nowrap">-- 公尺</span>
+                        <span id="approachTurnAction" class="text-sm font-black text-white leading-snug truncate">規劃中...</span>
                     </div>
-                    <div id="approachTurnRoad" class="text-xs font-bold text-slate-200 truncate mt-1">正在計算導航路線</div>
+                    <div id="approachTurnRoad" class="text-xs font-bold text-slate-200 truncate mt-0.5">正在計算導航路線</div>
                     <div class="flex items-center gap-1.5 mt-1 flex-wrap">
-                        <span id="approachStartRem" class="text-[10px] font-extrabold text-slate-400 whitespace-nowrap">距目標 -- 公尺</span>
-                        <span id="approachDetourBadge" class="hidden text-[9px] font-black bg-orange-500/30 text-orange-200 border border-orange-400/70 px-1.5 py-0.2 rounded-full whitespace-nowrap">疑似繞遠路</span>
+                        <span id="approachStartRem" class="text-[10px] font-extrabold text-slate-300 whitespace-nowrap">距目標 -- 公尺</span>
                         <span id="approachModeBadge" class="hidden text-[9px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/50 px-1.5 py-0.2 rounded-full whitespace-nowrap">直線方位</span>
                     </div>
                 </div>
                 <button id="approachCancelBtn" type="button" class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 flex items-center justify-center flex-shrink-0 active:scale-90" title="結束導航">
                     <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
+            </div>
+            <!-- 第二層繞路修正出路：僅在重算後仍 > 1.8 倍時顯示「疑似繞遠路」＋ 一鍵「改用 Google 導航」 -->
+            <div id="approachDetourRow" class="hidden mt-2 pt-2 border-t border-slate-700/80 flex items-center justify-between gap-2">
+                <span id="approachDetourBadge" class="text-[11px] font-black text-orange-300 flex items-center gap-1 whitespace-nowrap">
+                    <span>⚠️</span> 疑似繞遠路
+                </span>
+                <button id="btnDetourSwitchGoogle" type="button" class="bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black px-2.5 py-1 rounded-xl shadow active:scale-95 transition-all flex items-center gap-1 whitespace-nowrap border border-blue-300/70">
+                    <i class="fa-solid fa-diamond-turn-right text-[10px]"></i>
+                    <span>改用 Google 導航</span>
                 </button>
             </div>
         `;
@@ -773,6 +795,12 @@
             }
         });
 
+        card.querySelector('#btnDetourSwitchGoogle')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dest = activeDestLngLat || targetStartLngLat;
+            openExternalGoogleMapsNav(dest);
+        });
+
         document.body.appendChild(card);
         turnCardEl = card;
         turnIconEl = card.querySelector('#approachTurnIcon');
@@ -782,12 +810,13 @@
         turnStartRemEl = card.querySelector('#approachStartRem');
         turnModeBadgeEl = card.querySelector('#approachModeBadge');
         turnDetourBadgeEl = card.querySelector('#approachDetourBadge');
+        turnDetourRowEl = card.querySelector('#approachDetourRow');
     }
 
     function updateTurnCardUI({ iconClass, distText, actionText, roadText, startRemM, isFallback }) {
         ensureTurnCardDOM();
         if (!turnCardEl) return;
-        if (turnIconEl && iconClass) turnIconEl.className = `${iconClass} text-xl`;
+        if (turnIconEl && iconClass) turnIconEl.className = `${iconClass} text-2xl`;
         if (turnDistEl && distText !== undefined) turnDistEl.textContent = distText;
         if (turnActionEl && actionText !== undefined) turnActionEl.textContent = actionText;
         if (turnRoadEl && roadText !== undefined) turnRoadEl.textContent = roadText;
@@ -798,8 +827,8 @@
         if (turnModeBadgeEl) {
             turnModeBadgeEl.classList.toggle('hidden', !isFallback);
         }
-        if (turnDetourBadgeEl) {
-            turnDetourBadgeEl.classList.toggle('hidden', !(isDetourSuspected && !isFallback));
+        if (turnDetourRowEl) {
+            turnDetourRowEl.classList.toggle('hidden', !(isDetourSuspected && !isFallback));
         }
         turnCardEl.classList.remove('hidden');
     }
@@ -1080,20 +1109,13 @@
 
     // ==========================================
     // 8. 統一雙引擎算路函式（Valhalla 第一順位 → OSRM 無縫降級）
-    //    前往起點、自由點導航預覽與偏離重算皆走此流程
+    //    - 「一般 / 捷徑」差異化：拉開參數權重；若重算距離與前次相同，自動嘗試較短距離偏好或另一引擎並取較短者
+    //    - 「疑似繞遠路（> 1.8x）」第一層自動修正：自動嘗試替代權重／另一引擎重算，能縮短則直接替換
     // ==========================================
-    async function requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg = null) {
-        if (!isValidLngLat(originLng, originLat) || !isValidLngLat(destLng, destLat)) {
-            return { ok: false, noGps: true };
-        }
-
-        const straightDistanceMeters = calcDistMeters(originLng, originLat, destLng, destLat);
-        const validHeading = normalizeValidHeading(headingDeg);
-        const useHighwaysWeight = ROUTE_PREF_HIGHWAY_WEIGHT[routePrefMode] ?? 0.8;
-
-        // --- 第一順位：Valhalla 公開 API（3500ms 逾時、auto、一般=0.8/捷徑=0.2、kilometers、zh-TW） ---
+    async function fetchValhallaRouteCandidate(originLng, originLat, destLng, destLat, headingDeg, autoOptions, straightDistanceMeters) {
         try {
             const originLoc = { lat: originLat, lon: originLng };
+            const validHeading = normalizeValidHeading(headingDeg);
             if (validHeading !== null) {
                 originLoc.heading = validHeading;
                 originLoc.heading_tolerance = OSRM_BEARING_TOLERANCE_DEG;
@@ -1105,9 +1127,7 @@
                 ],
                 costing: 'auto',
                 costing_options: {
-                    auto: {
-                        use_highways: useHighwaysWeight
-                    }
+                    auto: autoOptions
                 },
                 units: 'kilometers',
                 language: 'zh-TW'
@@ -1159,11 +1179,14 @@
                 }
             }
         } catch (err) {
-            // Valhalla 逾時、CORS 阻擋、HTTP 非 200 或解析失敗：靜默無縫降級至 OSRM
+            // 逾時、CORS 或解析失敗靜默返回 null
         }
+        return null;
+    }
 
-        // --- 第二順位（無縫降級）：OSRM 算路接手 ---
+    async function fetchOsrmRouteCandidate(originLng, originLat, destLng, destLat, headingDeg, straightDistanceMeters, relaxHeading = false) {
         const startTs = Date.now();
+        const validHeading = relaxHeading ? null : normalizeValidHeading(headingDeg);
         const candidateUrls = [];
         if (validHeading !== null) {
             candidateUrls.push(
@@ -1199,7 +1222,7 @@
                             iconClass: parsed.iconClass,
                             roadName: String(st.name || st.ref || '').trim(),
                             distance: Number(st.distance) || 0,
-                            durationSec: Number(st.duration) || 0, // 秒
+                            durationSec: Number(st.duration) || 0,
                             maneuverLocation: loc,
                             stepCoords: Array.isArray(st.geometry?.coordinates) ? st.geometry.coordinates : [],
                             _preSpoken: false,
@@ -1226,15 +1249,73 @@
                 }
             } catch (e) {}
         }
+        return null;
+    }
 
-        return {
-            ok: false,
-            engine: '',
-            totalDurationSec: Math.round(straightDistanceMeters / (25 / 3.6)),
-            straightDistanceMeters,
-            detourRatio: 1,
-            isDetourSuspected: false
-        };
+    async function requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg = null, options = {}) {
+        if (!isValidLngLat(originLng, originLat) || !isValidLngLat(destLng, destLat)) {
+            return { ok: false, noGps: true };
+        }
+
+        const straightDistanceMeters = calcDistMeters(originLng, originLat, destLng, destLat);
+        const prefAutoOptions = ROUTE_PREF_OPTIONS[routePrefMode] || ROUTE_PREF_OPTIONS.normal;
+        const prevDistanceMeters = Number(options?.prevDistanceMeters) || 0;
+
+        // 1. 第一順位：Valhalla；失敗立即無縫降級 OSRM
+        let bestResult = await fetchValhallaRouteCandidate(
+            originLng, originLat, destLng, destLat, headingDeg, prefAutoOptions, straightDistanceMeters
+        );
+        if (!bestResult) {
+            bestResult = await fetchOsrmRouteCandidate(
+                originLng, originLat, destLng, destLat, headingDeg, straightDistanceMeters, false
+            );
+        }
+
+        if (!bestResult) {
+            return {
+                ok: false,
+                engine: '',
+                totalDurationSec: Math.round(straightDistanceMeters / (25 / 3.6)),
+                straightDistanceMeters,
+                detourRatio: 1,
+                isDetourSuspected: false
+            };
+        }
+
+        const isSameAsPrevious = prevDistanceMeters > 0 && Math.abs(bestResult.totalDistanceMeters - prevDistanceMeters) < 15;
+        const needsDetourRetry = Boolean(bestResult.isDetourSuspected);
+
+        // 2. 模式切換距離相同 OR 疑似繞遠路（> 1.8x）：自動嘗試較短距離偏好與另一引擎，並取較短距離路線
+        if (isSameAsPrevious || needsDetourRetry) {
+            const altCandidates = [];
+            const shorterValhallaOpts = { use_highways: 0.0, use_tolls: 0.0, shortest: true, maneuver_penalty: 0 };
+
+            if (bestResult.engine === 'V') {
+                // 先試極致最短距離偏好（放寬出發方向角避免被迫繞圈）與 OSRM 另一引擎
+                const [altVal, altOsrm] = await Promise.all([
+                    fetchValhallaRouteCandidate(originLng, originLat, destLng, destLat, null, shorterValhallaOpts, straightDistanceMeters),
+                    fetchOsrmRouteCandidate(originLng, originLat, destLng, destLat, null, straightDistanceMeters, true)
+                ]);
+                if (altVal) altCandidates.push(altVal);
+                if (altOsrm) altCandidates.push(altOsrm);
+            } else {
+                // 主結果為 OSRM 時，補試放寬方向角 OSRM 與 Valhalla 最短偏好
+                const [altOsrmRelaxed, altVal] = await Promise.all([
+                    fetchOsrmRouteCandidate(originLng, originLat, destLng, destLat, null, straightDistanceMeters, true),
+                    fetchValhallaRouteCandidate(originLng, originLat, destLng, destLat, null, shorterValhallaOpts, straightDistanceMeters)
+                ]);
+                if (altOsrmRelaxed) altCandidates.push(altOsrmRelaxed);
+                if (altVal) altCandidates.push(altVal);
+            }
+
+            for (const cand of altCandidates) {
+                if (cand && cand.ok && cand.totalDistanceMeters + 15 < bestResult.totalDistanceMeters) {
+                    bestResult = cand;
+                }
+            }
+        }
+
+        return bestResult;
     }
 
     // ==========================================
@@ -1307,13 +1388,13 @@
         return Math.max(0, Math.round(distToDestM / (25 / 3.6)));
     }
 
-    async function fetchAndApplyActiveNavigationRoute(originLng, originLat, destLng, destLat, headingDeg, isSilentRecalc = false) {
+    async function fetchAndApplyActiveNavigationRoute(originLng, originLat, destLng, destLat, headingDeg, isSilentRecalc = false, prevDistanceMeters = 0) {
         if (isFetchingRoute) return;
         isFetchingRoute = true;
         lastRecalcTimestamp = Date.now();
         const mySeq = ++fetchSeqId;
 
-        const result = await requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg);
+        const result = await requestDualEngineRoute(originLng, originLat, destLng, destLat, headingDeg, { prevDistanceMeters });
 
         isFetchingRoute = false;
         if (mySeq !== fetchSeqId || !isApproachActive) return;
@@ -1631,7 +1712,7 @@
         }
     }
 
-    async function planFreeNavPreviewTo(destLng, destLat, isPrefToggle = false) {
+    async function planFreeNavPreviewTo(destLng, destLat, isPrefToggle = false, prevDistanceMeters = 0) {
         // 先清除先前殘留的預覽線、標記與狀態（切換模式重算時保留目的地標記與預覽列防閃爍）
         if (!isPrefToggle) {
             stopFreeNavigationCompletely();
@@ -1655,7 +1736,7 @@
         activeDestLngLat = [destLng, destLat];
         freeNavPreviewBarEl?.classList.remove('hidden');
 
-        const result = await requestDualEngineRoute(origin.lng, origin.lat, destLng, destLat, lastVehicleHeading);
+        const result = await requestDualEngineRoute(origin.lng, origin.lat, destLng, destLat, lastVehicleHeading, { prevDistanceMeters });
         if (mySeq !== fetchSeqId) return;
 
         if (result.ok && Array.isArray(result.coords) && result.coords.length >= 2) {

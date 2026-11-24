@@ -8,16 +8,16 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
-    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.52)">
+    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.53)">
     <meta property="og:title" content="鶯歌清運路線助手 Pro Max">
-    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.52)">
+    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.53)">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=3.52">
+    <link rel="stylesheet" href="style.css?v=3.53">
     <link rel="manifest" href="manifest.json">
 </head>
 <body class="bg-black relative" style="background-color: #000000;">
@@ -110,23 +110,23 @@
     </div>
 
     <!-- 頂部導航狀態與工具列 -->
-    <div id="topNavHeaderBar" class="absolute top-6 left-4 right-4 flex justify-between items-start ui-layer transition-all duration-200">
-        <div class="flex flex-col gap-1.5 items-start pointer-events-auto">
-            <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                <button id="topBackBtn" class="hidden bg-white w-11 h-11 rounded-2xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999]">
-                    <i class="fa-solid fa-chevron-left text-lg"></i>
+    <div id="topNavHeaderBar" class="absolute top-4 left-3 right-3 sm:left-4 sm:right-4 flex justify-between items-start gap-2 ui-layer transition-all duration-200">
+        <div class="flex flex-col gap-1 items-start pointer-events-auto min-w-0 flex-1 max-w-[calc(100vw-76px)]">
+            <div class="flex items-center gap-1.5 flex-nowrap w-full min-w-0">
+                <button id="topBackBtn" class="hidden bg-white w-9 h-9 sm:w-10 sm:h-10 rounded-xl shadow-lg text-blue-600 flex items-center justify-center active:scale-95 relative z-[99999] flex-shrink-0">
+                    <i class="fa-solid fa-chevron-left text-base"></i>
                 </button>
-                <div class="bg-white/95 backdrop-blur px-3.5 sm:px-4 py-2.5 rounded-2xl shadow-lg text-gray-800 font-extrabold text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2">
-                    <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-green-500 flex-shrink-0"></span>
-                    <span id="appStatusTitle" class="cursor-pointer select-none whitespace-nowrap">鶯歌清運路線助手 Pro Max</span>
-                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[10px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.52</span>
+                <div id="topStatusPill" class="bg-white/95 backdrop-blur px-2.5 py-1.5 rounded-xl shadow-lg text-gray-800 font-extrabold text-[11px] sm:text-xs flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden whitespace-nowrap">
+                    <span id="statusDot" class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                    <span id="appStatusTitle" class="cursor-pointer select-none whitespace-nowrap truncate min-w-0">鶯歌清運路線助手 Pro Max</span>
+                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[9px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.53</span>
                 </div>
                 <!-- 🚛 家具模式專屬：左上角「家具模式」徽章旁一鍵「返回一般清運」按鈕 -->
-                <button id="btnExitFurnitureMode" type="button" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-3 py-2.5 rounded-2xl shadow-lg border-2 border-white/90 active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 relative z-[70]" title="結束家具模式並返回一般清運模式">
+                <button id="btnExitFurnitureMode" type="button" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] px-2.5 py-1.5 rounded-xl shadow-lg border-2 border-white/90 active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 relative z-[70]" title="結束家具模式並返回一般清運模式">
                     <span>🚛 返回一般清運</span>
                 </button>
             </div>
-            <button id="fleetUserBadgeBtn" type="button" class="bg-white/95 backdrop-blur px-3 py-1.5 rounded-xl shadow-md text-xs font-extrabold text-emerald-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all" title="點擊修改您的車隊顯示名稱">
+            <button id="fleetUserBadgeBtn" type="button" class="bg-white/95 backdrop-blur px-2.5 py-1 rounded-xl shadow-md text-[11px] font-extrabold text-emerald-800 border border-emerald-200 flex items-center gap-1.5 active:scale-95 transition-all" title="點擊修改您的車隊顯示名稱">
                 <i class="fa-solid fa-truck-fast text-emerald-600"></i>
                 <span id="fleetUserBadgeText">設定名稱</span>
                 <i class="fa-solid fa-pen text-[10px] text-gray-400 ml-0.5"></i>
@@ -1358,7 +1358,7 @@
                     <h3 class="text-base sm:text-lg font-black text-amber-700 flex items-center gap-2">
                         <span>🛠️</span> 開發者模式控制中心
                     </h3>
-                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.52)</p>
+                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.53)</p>
                 </div>
                 <button type="button" id="btnCloseAdminSettings" class="w-8 h-8 rounded-full bg-white text-gray-500 hover:bg-gray-100 flex items-center justify-center active:scale-90 shadow-sm border border-amber-200 flex-shrink-0">
                     <i class="fa-solid fa-xmark"></i>
@@ -1752,21 +1752,21 @@
     </div>
 
     <!-- 模組化核心腳本（依相依順序載入，避免循環依賴） -->
-    <script src="src/config-state.js?v=3.52"></script>
-    <script src="src/carModels.js?v=3.52"></script>
-    <script src="src/map-core.js?v=3.52"></script>
-    <script src="src/caution-editor.js?v=3.52"></script>
-    <script src="src/route-editor.js?v=3.52"></script>
-    <script src="src/navigation.js?v=3.52"></script>
-    <script src="src/approach-nav.js?v=3.52"></script>
-    <script src="src/firebase-fleet.js?v=3.52"></script>
-    <script src="src/shared-pins.js?v=3.52"></script>
-    <script src="src/firebase-auth.js?v=3.52"></script>
-    <script src="src/ai-settings.js?v=3.52"></script>
-    <script src="src/furniture-osrm.js?v=3.52"></script>
-    <script src="src/bgm-player.js?v=3.52"></script>
-    <script src="src/speed-cameras.js?v=3.52"></script>
-    <script src="src/fleet-radio-ptt.js?v=3.52"></script>
-    <script src="src/main.js?v=3.52"></script>
+    <script src="src/config-state.js?v=3.53"></script>
+    <script src="src/carModels.js?v=3.53"></script>
+    <script src="src/map-core.js?v=3.53"></script>
+    <script src="src/caution-editor.js?v=3.53"></script>
+    <script src="src/route-editor.js?v=3.53"></script>
+    <script src="src/navigation.js?v=3.53"></script>
+    <script src="src/approach-nav.js?v=3.53"></script>
+    <script src="src/firebase-fleet.js?v=3.53"></script>
+    <script src="src/shared-pins.js?v=3.53"></script>
+    <script src="src/firebase-auth.js?v=3.53"></script>
+    <script src="src/ai-settings.js?v=3.53"></script>
+    <script src="src/furniture-osrm.js?v=3.53"></script>
+    <script src="src/bgm-player.js?v=3.53"></script>
+    <script src="src/speed-cameras.js?v=3.53"></script>
+    <script src="src/fleet-radio-ptt.js?v=3.53"></script>
+    <script src="src/main.js?v=3.53"></script>
 </body>
 </html>

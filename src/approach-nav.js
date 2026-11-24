@@ -455,10 +455,23 @@
     // ==========================================
     // 4. 頂部既有狀態膠囊掛載（綁定一次於外層固定容器，不新增第二顆按鈕）
     // ==========================================
+    let lastStatusPillClickTime = 0;
+
+    function dismissResidualAdminOverlay() {
+        const pwdModal = document.getElementById('adminPasswordModal');
+        if (pwdModal && !pwdModal.classList.contains('hidden')) {
+            pwdModal.classList.add('hidden');
+        }
+        const pwdInput = document.getElementById('adminPasswordInput');
+        if (pwdInput && document.activeElement === pwdInput) {
+            try { pwdInput.blur(); } catch (e) {}
+        }
+    }
+
     function ensureStatusPillApproachBinding() {
         if (isStatusPillBound && statusPillContainerEl && statusTitleEl) return;
         const titleEl = document.getElementById('appStatusTitle');
-        const pillEl = titleEl?.parentElement;
+        const pillEl = document.getElementById('topStatusPill') || titleEl?.parentElement;
         if (!titleEl || !pillEl) return;
 
         statusTitleEl = titleEl;
@@ -467,9 +480,18 @@
 
         statusPillContainerEl.addEventListener('click', (e) => {
             if (!isApproachPromptVisible || isApproachActive || !isFollowSessionActive || !targetStartLngLat) return;
-            if (e.target && e.target.closest && e.target.closest('#appVersionBadge')) return;
+            // 徹底阻斷事件冒泡與同層開發者模式監聽，並防連點
             e.preventDefault();
             e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+
+            const now = Date.now();
+            window._suppressAdminModalUntil = now + 1500;
+            dismissResidualAdminOverlay();
+
+            if (now - lastStatusPillClickTime < 800) return;
+            lastStatusPillClickTime = now;
+
             try {
                 if (typeof unlockSpeechSynthesis === 'function') unlockSpeechSynthesis();
             } catch (err) {}
@@ -488,6 +510,12 @@
         ensureStatusPillApproachBinding();
         if (!statusPillContainerEl || !statusTitleEl) return;
         isApproachPromptVisible = true;
+
+        // 顯示「按我導航」期間暫時停用版本號點擊並隱藏版本號，杜絕誤觸開發者密碼視窗
+        const verBadge = document.getElementById('appVersionBadge');
+        if (verBadge) {
+            verBadge.classList.add('hidden', 'pointer-events-none');
+        }
 
         statusPillContainerEl.classList.add('cursor-pointer', 'ring-2', 'ring-blue-500/70', 'active:scale-95', 'transition-transform');
         statusPillContainerEl.setAttribute('role', 'button');
@@ -513,6 +541,10 @@
         if (promptRefreshTimer) {
             clearInterval(promptRefreshTimer);
             promptRefreshTimer = null;
+        }
+        const verBadge = document.getElementById('appVersionBadge');
+        if (verBadge) {
+            verBadge.classList.remove('hidden', 'pointer-events-none');
         }
         if (statusPillContainerEl) {
             statusPillContainerEl.classList.remove('cursor-pointer', 'ring-2', 'ring-blue-500/70', 'active:scale-95', 'transition-transform');

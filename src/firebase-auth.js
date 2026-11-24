@@ -320,12 +320,24 @@ fetchAndRenderFleetRadar = async function() {
     checkAndApplyRadarInterval();
 };
 
+function isAdminModalSuppressedByNav() {
+    if (typeof window._suppressAdminModalUntil === 'number' && Date.now() < window._suppressAdminModalUntil) {
+        return true;
+    }
+    if (window.ApproachNav) {
+        if (typeof window.ApproachNav.isPromptVisible === 'function' && window.ApproachNav.isPromptVisible()) return true;
+        if (typeof window.ApproachNav.isActive === 'function' && window.ApproachNav.isActive()) return true;
+    }
+    return false;
+}
+
 // --- 10.7 點擊版本號（或標題連續點擊 5 次）觸發開發者模式驗證 ---
 (function setupAdminTitleTrigger() {
     const versionBadgeEl = document.getElementById('appVersionBadge');
     if (versionBadgeEl) {
         versionBadgeEl.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (isAdminModalSuppressedByNav()) return;
             openAdminPasswordModal();
         });
     }
@@ -338,6 +350,10 @@ fetchAndRenderFleetRadar = async function() {
 
     titleEl.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (isAdminModalSuppressedByNav()) {
+            tapCount = 0;
+            return;
+        }
         tapCount++;
         if (tapTimer) clearTimeout(tapTimer);
         tapTimer = setTimeout(() => { tapCount = 0; }, 3000);
@@ -391,6 +407,7 @@ function setLocalUserPermissionRole(newRole) {
 }
 
 function openAdminPasswordModal() {
+    if (isAdminModalSuppressedByNav()) return;
     const modal = document.getElementById('adminPasswordModal');
     const input = document.getElementById('adminPasswordInput');
     const errorEl = document.getElementById('adminPasswordError');

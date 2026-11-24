@@ -39,19 +39,20 @@
     } catch (e) {}
 
     let isRecordingPtt = false;
+    let isAcquiringMic = false;
     let isRecorderCapturing = false;
     let isUploadingPtt = false;
     let uploadingStartedAt = 0;
     let recordingSessionId = 0;
     let activeMediaRecorder = null;
-    let warmMediaStream = null;
-    let isWarmingMicStream = false;
+    let activeMicStream = null;
     let recordedChunks = [];
     let recordStartAt = 0;
     let recordTickTimer = null;
     let recordMaxTimer = null;
     let activePointerId = null;
     let cancelUploadFlag = false;
+    let audioCtxIdleSuspendTimer = null;
 
     let pollTimer = null;
     let isPollingMeta = false;
@@ -238,7 +239,20 @@
         }
     }
 
-    // 🔔 極短清脆無線電提示音（開始收音：高音短嗶；結束送出：低音確認嗶）
+    function scheduleIdleAudioCtxSuspend() {
+        if (audioCtxIdleSuspendTimer) {
+            clearTimeout(audioCtxIdleSuspendTimer);
+            audioCtxIdleSuspendTimer = null;
+        }
+        audioCtxIdleSuspendTimer = setTimeout(() => {
+            audioCtxIdleSuspendTimer = null;
+            if (!isRecordingPtt && !isPlayingAudio && unlockAudioCtx && unlockAudioCtx.state === 'running') {
+                unlockAudioCtx.suspend().catch(() => {});
+            }
+        }, 400);
+    }
+
+    // 🔔 極短清脆無線電提示音（開始收音：高音短嗶；結束送出：低音確認嗶；播畢後自動釋放 AudioContext 避免佔用音訊通道）
     function playPttCueTone(kind = 'start') {
         try {
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -266,12 +280,16 @@
             gain.connect(unlockAudioCtx.destination);
             osc.start(now);
             osc.stop(now + 0.085);
+            scheduleIdleAudioCtxSuspend();
         } catch (e) {}
     }
 
-    // 🎚️ 與 BGM 播放器協調音訊焦點（對講錄音或播放期間平滑壓低 BGM，結束後自動恢復，不卡死音訊通道）
+    // 🎚️ 與 BGM 播放器協調音訊焦點（對講錄音或播放期間平滑壓低 BGM，結束後自動恢復媒體音訊通道）
     function syncAudioFocusWithBgm() {
         const shouldDuck = Boolean(isRecordingPtt || isPlayingAudio);
+        if (!shouldDuck) {
+            scheduleIdleAudioCtxSuspend();
+        }
         if (shouldDuck === isBgmDuckedByRadio) return;
         isBgmDuckedByRadio = shouldDuck;
         try {
@@ -284,13 +302,11 @@
         } catch (e) {}
     }
 
+    // 僅解鎖一般媒體自動播放權限，絕不在任何頁面互動時預開麥克風
     ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evtName => {
         window.addEventListener(evtName, function onInteractUnlock() {
             unlockBrowserAudio();
-            if (isRadioEnabled && !isMediaStreamAlive(warmMediaStream)) {
-                tryPrewarmGrantedMicStream();
-            }
-            if (isAudioUnlocked && !pendingAutoplayRetryItem && isMediaStreamAlive(warmMediaStream)) {
+            if (isAudioUnlocked && !pendingAutoplayRetryItem) {
                 window.removeEventListener(evtName, onInteractUnlock);
             }
         }, { passive: true });
@@ -342,8 +358,8 @@
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
-            // 切至背景時安全中止進行中的發話與手勢，但保留已暖機的麥克風串流（由系統自行管理，切回前景若失效再自動重建）
-            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
+            // 切至背景時立刻中止發話、停止所有麥克風音軌（track.stop()）並重置手勢狀態，避免系統持續佔用麥克風或鎖定通話音量
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
             return;
         }
         if (document.visibilityState === 'visible' && isRadioEnabled) {
@@ -352,9 +368,6 @@
                 requestRadioWakeLock();
             }
             ensureRadioConnectionActive();
-            if (!isMediaStreamAlive(warmMediaStream)) {
-                tryPrewarmGrantedMicStream();
-            }
             if (!isPlayingAudio && playbackQueue.length > 0) {
                 processPlaybackQueue();
             }
@@ -370,15 +383,15 @@
 
     window.addEventListener('offline', () => {
         if (isRecordingPtt) {
-            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: false });
-            flashRadioToast('⚠️ 網路中斷，已取消本次對講錄音', 'error', 2200);
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
+            flashRadioToast('⚠️ 網路中斷，已取消本次對講並釋放麥克風', 'error', 2200);
         } else {
-            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
         }
     });
 
     window.addEventListener('blur', () => {
-        resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
+        resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
     });
 
     const releaseAllOnPageUnload = () => {
@@ -501,26 +514,30 @@
         if (!pttBtnEl) return;
         const shouldShow = isRadioEnabled && isOnMapMainScreen();
         pttBtnEl.classList.toggle('hidden', !shouldShow);
-        if (!shouldShow && (isRecordingPtt || gestureMode !== 'idle' || activePointers.size > 0)) {
-            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
+        if (!shouldShow && (isRecordingPtt || isAcquiringMic || activeMicStream || gestureMode !== 'idle' || activePointers.size > 0)) {
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
         }
     }
 
-    function isMediaStreamAlive(stream) {
-        if (!stream || !stream.active) return false;
-        const tracks = stream.getAudioTracks ? stream.getAudioTracks() : [];
-        return tracks.length > 0 && tracks.some(track => track.readyState === 'live');
+    function stopTracksOnStream(stream) {
+        if (!stream) return;
+        try {
+            const tracks = typeof stream.getTracks === 'function' ? stream.getTracks() : [];
+            tracks.forEach(track => {
+                try { track.onended = null; track.onmute = null; track.onunmute = null; } catch (_) {}
+                try { track.stop(); } catch (_) {}
+            });
+        } catch (e) {}
     }
 
-    function releaseWarmMicStream() {
-        if (warmMediaStream) {
-            try {
-                warmMediaStream.getTracks().forEach(track => {
-                    try { track.onended = null; track.onmute = null; track.onunmute = null; } catch (_) {}
-                    try { track.stop(); } catch (_) {}
-                });
-            } catch (e) {}
-            warmMediaStream = null;
+    // 🛑 立刻完整停止並釋放麥克風所有音訊軌道（track.stop()），確保系統麥克風提示立刻消失、退出通話音量模式
+    function stopAndReleaseMicStream(extraStream = null) {
+        if (extraStream && extraStream !== activeMicStream) {
+            stopTracksOnStream(extraStream);
+        }
+        if (activeMicStream) {
+            stopTracksOnStream(activeMicStream);
+            activeMicStream = null;
         }
     }
 
@@ -538,18 +555,9 @@
         return '⚠️ 麥克風啟動異常，請再按住重試';
     }
 
-    // 🎙️ 麥克風串流暖機複用池：授權後常駐暖機，僅於頁面關閉或手動停用對講時釋放；若系統休眠導致失效則自動重建
-    async function acquireMicStream() {
-        if (isMediaStreamAlive(warmMediaStream)) {
-            try {
-                warmMediaStream.getAudioTracks().forEach(track => {
-                    track.enabled = true;
-                });
-            } catch (e) {}
-            return warmMediaStream;
-        }
-
-        releaseWarmMicStream();
+    // 🎙️ 僅在使用者按住對講鍵說話時才請求麥克風串流（嚴禁預開或常駐佔用）
+    async function acquireOnDemandMicStream() {
+        stopAndReleaseMicStream();
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -561,8 +569,8 @@
         const tracks = stream.getAudioTracks ? stream.getAudioTracks() : [];
         tracks.forEach(track => {
             track.onended = () => {
-                if (warmMediaStream === stream) {
-                    warmMediaStream = null;
+                if (activeMicStream === stream) {
+                    activeMicStream = null;
                 }
                 if (isRecordingPtt) {
                     resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
@@ -571,26 +579,8 @@
             };
         });
 
-        warmMediaStream = stream;
+        activeMicStream = stream;
         return stream;
-    }
-
-    // 若使用者先前已授予麥克風權限，於互動／啟動時靜默預熱串流（不主動彈出權限視窗）
-    async function tryPrewarmGrantedMicStream() {
-        if (!isRadioEnabled || isWarmingMicStream || isMediaStreamAlive(warmMediaStream)) return;
-        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') return;
-        if (!navigator.permissions || typeof navigator.permissions.query !== 'function') return;
-        isWarmingMicStream = true;
-        try {
-            const status = await navigator.permissions.query({ name: 'microphone' });
-            if (status && status.state === 'granted' && isRadioEnabled && !isMediaStreamAlive(warmMediaStream)) {
-                await acquireMicStream();
-            }
-        } catch (e) {
-            // 部分瀏覽器不支援 permissions.query('microphone')，改由首次按住 PTT 時取得並常駐暖機
-        } finally {
-            isWarmingMicStream = false;
-        }
     }
 
     function detachAndDestroyRecorder(recorder) {
@@ -603,7 +593,7 @@
         } catch (e) {}
     }
 
-    function cleanupRecorderState(releaseMicNow = false) {
+    function cleanupRecorderState(extraStream = null) {
         if (recordTickTimer) {
             clearInterval(recordTickTimer);
             recordTickTimer = null;
@@ -617,14 +607,14 @@
             activeMediaRecorder = null;
         }
         recordedChunks.length = 0;
+        isAcquiringMic = false;
         isRecorderCapturing = false;
-        if (releaseMicNow || !isRadioEnabled) {
-            releaseWarmMicStream();
-        }
+        // 每次錄音結束、取消或異常，一律立即停止並釋放麥克風軌道
+        stopAndReleaseMicStream(extraStream);
     }
 
-    // 🛡️ 統一手勢與 PTT 發話狀態重置（確保異常中斷後絕不殘留發話或拖曳旗標）
-    function resetAllPttGestureAndRecordingState({ cancelRecording = true, persistLayout = false, releaseMic = false } = {}) {
+    // 🛡️ 統一手勢與 PTT 發話狀態重置（確保任何中斷或結束都立即釋放麥克風並重置所有旗標）
+    function resetAllPttGestureAndRecordingState({ cancelRecording = true, persistLayout = false, releaseMic = true } = {}) {
         if (persistLayout && isManipulatingPttLayout()) {
             savePttLayout();
         }
@@ -637,11 +627,11 @@
         if (isRecordingPtt) {
             stopPttRecording(cancelRecording);
         } else {
-            cleanupRecorderState(releaseMic);
+            cleanupRecorderState();
         }
 
         if (releaseMic) {
-            releaseWarmMicStream();
+            stopAndReleaseMicStream();
         }
 
         updatePttButtonVisual(isUploadingPtt ? 'uploading' : 'idle');
@@ -795,10 +785,10 @@
         hideRadioToast();
     }
 
-    // 🎙️ 開始按住錄音（確認 MediaRecorder 真正啟動收音後才發出提示音與紅燈「請說話」，消除起音截斷）
+    // 🎙️ 開始按住錄音（按住才請求麥克風，啟動期間顯示防呆提示，確認 MediaRecorder 真正收音後才亮紅「請說話」，放開立刻 track.stop()）
     async function startPttRecording() {
         recoverStuckNetworkFlags();
-        if (!isRadioEnabled || isRecordingPtt || isUploadingPtt || isRestrictedByGate()) return;
+        if (!isRadioEnabled || isRecordingPtt || isAcquiringMic || isUploadingPtt || isRestrictedByGate()) return;
         if (!navigator.onLine) {
             flashRadioToast('⚠️ 目前離線，無法發送對講語音', 'error', 2000);
             gestureMode = 'idle';
@@ -821,22 +811,27 @@
 
         const mySessionId = ++recordingSessionId;
         isRecordingPtt = true;
+        isAcquiringMic = true;
         isRecorderCapturing = false;
         cancelUploadFlag = false;
         recordedChunks.length = 0;
         recordStartAt = Date.now();
-        updatePttButtonVisual('preparing', '準備中');
+        updatePttButtonVisual('preparing', '啟動中');
         syncAudioFocusWithBgm();
         requestRadioWakeLock();
 
+        let acquiredStream = null;
         try {
-            const stream = await acquireMicStream();
+            acquiredStream = await acquireOnDemandMicStream();
+            isAcquiringMic = false;
 
-            // 若使用者在取得麥克風權限前就已經放開、取消或切換為拖曳／縮放，立即安全中止
-            if (!isRecordingPtt || mySessionId !== recordingSessionId) {
-                cleanupRecorderState(false);
+            // 若使用者在取得麥克風串流前就已經放開、取消、切背景或切換為拖曳／縮放，立即停止所有剛取得的音軌（track.stop()）且絕不送出
+            if (!isRecordingPtt || mySessionId !== recordingSessionId || document.visibilityState === 'hidden') {
+                cleanupRecorderState(acquiredStream);
+                isRecordingPtt = false;
                 updatePttButtonVisual('idle');
                 syncAudioFocusWithBgm();
+                if (!isPlayingAudio) releaseRadioWakeLock();
                 return;
             }
 
@@ -845,7 +840,7 @@
                 ? { mimeType, audioBitsPerSecond: RECORDER_AUDIO_BPS }
                 : { audioBitsPerSecond: RECORDER_AUDIO_BPS };
 
-            const recorder = new MediaRecorder(stream, recorderOpts);
+            const recorder = new MediaRecorder(acquiredStream, recorderOpts);
             activeMediaRecorder = recorder;
 
             recorder.onstart = () => {
@@ -879,23 +874,25 @@
 
             recorder.onerror = () => {
                 if (mySessionId !== recordingSessionId) return;
-                cleanupRecorderState(true);
+                cleanupRecorderState(acquiredStream);
                 isRecordingPtt = false;
                 gestureMode = 'idle';
                 activePointers.clear();
                 updatePttButtonVisual('idle');
                 syncAudioFocusWithBgm();
                 if (!isPlayingAudio) releaseRadioWakeLock();
-                flashRadioToast('⚠️ 錄音裝置異常，已自動重設請重試', 'error', 2400);
+                flashRadioToast('⚠️ 錄音裝置異常，已釋放麥克風請重試', 'error', 2400);
             };
 
             recorder.onstop = () => {
-                const durationMs = isRecorderCapturing ? (Date.now() - recordStartAt) : 0;
+                const wasCapturing = isRecorderCapturing;
+                const durationMs = wasCapturing ? (Date.now() - recordStartAt) : 0;
                 const finalChunks = recordedChunks.slice();
                 const finalMime = recorder.mimeType || mimeType || 'audio/webm';
                 const shouldSkip = cancelUploadFlag || mySessionId !== recordingSessionId;
 
-                cleanupRecorderState(false);
+                // 錄音一結束立刻停止並釋放所有麥克風音軌（track.stop()），退出系統通話音訊通道
+                cleanupRecorderState(acquiredStream);
                 isRecordingPtt = false;
                 syncAudioFocusWithBgm();
 
@@ -906,9 +903,9 @@
                     return;
                 }
 
-                if (durationMs < MIN_RECORD_MS || finalChunks.length === 0) {
+                if (!wasCapturing || durationMs < MIN_RECORD_MS || finalChunks.length === 0) {
                     updatePttButtonVisual('idle');
-                    flashRadioToast('⏱️ 按住時間過短，請聽到提示音後說話', 'error', 1600);
+                    flashRadioToast('⏱️ 尚未收音完成，請按住待「請說話」亮起後說話', 'error', 1800);
                     if (!isPlayingAudio) releaseRadioWakeLock();
                     if (!isPlayingAudio && playbackQueue.length > 0) processPlaybackQueue();
                     return;
@@ -922,7 +919,7 @@
             // 使用 150ms 短取樣間隔，確保開頭語音即時寫入 chunk 不漏字
             recorder.start(RECORDER_TIMESLICE_MS);
         } catch (err) {
-            cleanupRecorderState(true);
+            cleanupRecorderState(acquiredStream);
             isRecordingPtt = false;
             gestureMode = 'idle';
             activePointers.clear();
@@ -934,11 +931,13 @@
     }
 
     function stopPttRecording(cancelWithoutSending = false) {
-        if (!isRecordingPtt) return;
-        cancelUploadFlag = Boolean(cancelWithoutSending);
+        if (!isRecordingPtt && !isAcquiringMic && !activeMicStream) return;
+        const wasAcquiringOnly = isAcquiringMic && !isRecorderCapturing;
+        cancelUploadFlag = Boolean(cancelWithoutSending || wasAcquiringOnly);
         isRecordingPtt = false;
+        isAcquiringMic = false;
         activePointerId = null;
-        if (cancelWithoutSending) {
+        if (cancelUploadFlag) {
             recordingSessionId += 1;
         }
 
@@ -946,14 +945,17 @@
             try {
                 activeMediaRecorder.stop();
             } catch (e) {
-                cleanupRecorderState(true);
+                cleanupRecorderState();
                 updatePttButtonVisual('idle');
                 syncAudioFocusWithBgm();
             }
         } else {
-            cleanupRecorderState(false);
+            cleanupRecorderState();
             updatePttButtonVisual('idle');
             syncAudioFocusWithBgm();
+            if (wasAcquiringOnly && !cancelWithoutSending) {
+                flashRadioToast('⏱️ 麥克風尚未就緒，請按住稍候再說話', 'error', 1600);
+            }
             if (!isPlayingAudio) releaseRadioWakeLock();
         }
     }
@@ -1581,7 +1583,6 @@
 
         if (isRadioEnabled) {
             unlockBrowserAudio();
-            tryPrewarmGrantedMicStream();
             startRadioPolling();
         } else {
             resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
@@ -1598,21 +1599,15 @@
         setRadioEnabled(!isRadioEnabled);
     }
 
-    // 啟動掛載
+    // 啟動掛載（僅啟動輕量接收輪詢，嚴禁預開麥克風）
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             mountFleetRadioUI();
-            if (isRadioEnabled) {
-                tryPrewarmGrantedMicStream();
-                startRadioPolling();
-            }
+            if (isRadioEnabled) startRadioPolling();
         });
     } else {
         mountFleetRadioUI();
-        if (isRadioEnabled) {
-            tryPrewarmGrantedMicStream();
-            startRadioPolling();
-        }
+        if (isRadioEnabled) startRadioPolling();
     }
 
     window.FleetRadioPTT = {

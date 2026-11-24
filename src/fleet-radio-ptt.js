@@ -7,16 +7,23 @@
 (function initFleetRadioPTTModule() {
     const STORAGE_KEY_ENABLED = 'yingge_fleet_radio_ptt_enabled_v1';
     const STORAGE_KEY_LAYOUT = 'yingge_fleet_radio_ptt_layout_v1';
-    const MAX_RECORD_MS = 8000;          // 最長 8 秒自動截斷
-    const MIN_RECORD_MS = 350;           // 短於 0.35 秒視為誤觸不發送
-    const MAX_PLAYBACK_AGE_MS = 20000;   // 嚴格僅自動播放 20 秒內的最新語音
-    const POLL_INTERVAL_MS = 1500;       // 輕量 meta.json 輪詢間隔（支援極致省電黑屏持續接收）
+    const STORAGE_KEY_CLIENT_ID = 'yingge_fleet_radio_client_id_v1';
+    const MAX_RECORD_MS = 8000;            // 最長 8 秒自動截斷
+    const MIN_RECORD_MS = 350;             // 短於 0.35 秒視為誤觸不發送
+    const RECORDER_TIMESLICE_MS = 150;     // 縮短取樣間隔至 150ms，確保開頭語音即時寫入 chunk
+    const RECORDER_AUDIO_BPS = 16000;      // 16kbps 語音最佳化壓縮，縮小行動網路封包
+    const MAX_PLAYBACK_AGE_MS = 30000;     // 允許 30 秒內訊息播放（容忍行動裝置時鐘誤差）
+    const CLOCK_SKEW_TOLERANCE_MS = 15000; // 容忍發送端時鐘超前 15 秒
+    const EXPIRED_CLOUD_CLEANUP_MS = 60000;// 雲端語音超過 60 秒自動清理 audio.json
+    const CLOUD_CLEANUP_COOLDOWN_MS = 45000;
+    const POLL_INTERVAL_MS = 1500;         // 輕量 meta.json 輪詢間隔（支援極致省電黑屏持續接收）
     const MAX_AUDIO_DATAURL_LEN = 350000;
-    const MIC_IDLE_RELEASE_MS = 45000;   // 麥克風串流閒置 45 秒後自動釋放（兼顧低延遲與省電）
-    const POLL_STUCK_TIMEOUT_MS = 12000; // 輪詢旗標逾時自癒門檻
+    const POLL_STUCK_TIMEOUT_MS = 12000;   // 輪詢旗標逾時自癒門檻
     const UPLOAD_STUCK_TIMEOUT_MS = 20000; // 上傳旗標逾時自癒門檻
+    const PLAYBACK_READY_TIMEOUT_MS = 1200;// 等待音訊緩衝就緒上限
     const PLAYBACK_MIN_WATCHDOG_MS = 12000;
     const PLAYBACK_MAX_WATCHDOG_MS = 18000;
+    const MAX_DEDUP_CACHE_SIZE = 32;
     const BASE_BTN_SIZE = 56;
     const MIN_SCALE = 1.0;
     const MAX_SCALE = 4.0;
@@ -32,12 +39,13 @@
     } catch (e) {}
 
     let isRecordingPtt = false;
+    let isRecorderCapturing = false;
     let isUploadingPtt = false;
     let uploadingStartedAt = 0;
     let recordingSessionId = 0;
     let activeMediaRecorder = null;
     let warmMediaStream = null;
-    let micIdleReleaseTimer = null;
+    let isWarmingMicStream = false;
     let recordedChunks = [];
     let recordStartAt = 0;
     let recordTickTimer = null;
@@ -48,9 +56,12 @@
     let pollTimer = null;
     let isPollingMeta = false;
     let pollingStartedAt = 0;
-    let lastHandledMsgId = '';
+    let lastCloudCleanupAt = 0;
+    const handledMessageIds = new Map(); // msgId -> handledAtMs（防重複觸發且避免單筆覆寫漏收）
     let playbackQueue = [];
+    let pendingAutoplayRetryItem = null;
     let isPlayingAudio = false;
+    let activePlaybackObjectUrl = null;
     let playbackWatchdogTimer = null;
     let toastHideTimer = null;
     let isBgmDuckedByRadio = false;
@@ -58,6 +69,7 @@
     let unlockAudioCtx = null;
     let isAudioUnlocked = false;
     let radioWakeLock = null;
+    let fallbackRadioClientId = '';
 
     let pttBtnEl = null;
     let pttIconEl = null;
@@ -95,14 +107,48 @@
     }
 
     function getCurrentDeviceId() {
-        if (typeof fleetDeviceId === 'string' && fleetDeviceId) return fleetDeviceId;
-        return localStorage.getItem('deviceId') || localStorage.getItem('fleet_device_id') || 'unknown_dev';
+        if (typeof fleetDeviceId === 'string' && fleetDeviceId.trim()) return fleetDeviceId.trim();
+        try {
+            const fromStorage = (localStorage.getItem('deviceId') || localStorage.getItem('fleet_device_id') || '').trim();
+            if (fromStorage) return fromStorage;
+            if (!fallbackRadioClientId) {
+                const existing = (localStorage.getItem(STORAGE_KEY_CLIENT_ID) || '').trim();
+                if (existing) {
+                    fallbackRadioClientId = existing;
+                } else {
+                    fallbackRadioClientId = `radio_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+                    localStorage.setItem(STORAGE_KEY_CLIENT_ID, fallbackRadioClientId);
+                }
+            }
+            return fallbackRadioClientId;
+        } catch (e) {
+            if (!fallbackRadioClientId) {
+                fallbackRadioClientId = `radio_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+            }
+            return fallbackRadioClientId;
+        }
     }
 
     function getCurrentSenderName() {
         if (typeof fleetUserName === 'string' && fleetUserName.trim()) return fleetUserName.trim();
-        const stored = (localStorage.getItem('fleet_user_name') || '').trim();
-        return stored || '車隊隊員';
+        try {
+            const stored = (localStorage.getItem('fleet_user_name') || '').trim();
+            if (stored) return stored;
+        } catch (e) {}
+        return '車隊隊員';
+    }
+
+    function hasHandledMessage(msgId) {
+        return Boolean(msgId && handledMessageIds.has(msgId));
+    }
+
+    function markMessageHandled(msgId) {
+        if (!msgId) return;
+        handledMessageIds.set(msgId, Date.now());
+        if (handledMessageIds.size > MAX_DEDUP_CACHE_SIZE) {
+            const oldestKey = handledMessageIds.keys().next().value;
+            if (oldestKey) handledMessageIds.delete(oldestKey);
+        }
     }
 
     function isRestrictedByGate() {
@@ -142,7 +188,7 @@
         return true;
     }
 
-    // 🔓 瀏覽器音訊自動播放解鎖（於首次使用者互動時預熱 AudioContext 與共用 Audio 元素）
+    // 🔓 瀏覽器音訊自動播放解鎖（於首次使用者互動時預熱 AudioContext 與共用 Audio 元素，並自動補播先前被阻擋的語音）
     function unlockBrowserAudio() {
         if (!sharedAudioEl) {
             sharedAudioEl = new Audio();
@@ -173,10 +219,54 @@
                             sharedAudioEl.volume = 1.0;
                         }
                         isAudioUnlocked = true;
+                        flushPendingAutoplayItem();
                     }).catch(() => {});
                 }
             } catch (e) {}
+        } else if (isAudioUnlocked) {
+            flushPendingAutoplayItem();
         }
+    }
+
+    function flushPendingAutoplayItem() {
+        if (!pendingAutoplayRetryItem || isPlayingAudio || isRecordingPtt || !isRadioEnabled) return;
+        const item = pendingAutoplayRetryItem;
+        pendingAutoplayRetryItem = null;
+        if ((Date.now() - (item.receivedAt || 0)) <= MAX_PLAYBACK_AGE_MS) {
+            playbackQueue.unshift(item);
+            processPlaybackQueue();
+        }
+    }
+
+    // 🔔 極短清脆無線電提示音（開始收音：高音短嗶；結束送出：低音確認嗶）
+    function playPttCueTone(kind = 'start') {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            if (!unlockAudioCtx) unlockAudioCtx = new AudioCtx();
+            if (unlockAudioCtx.state === 'suspended') {
+                unlockAudioCtx.resume().catch(() => {});
+            }
+            if (unlockAudioCtx.state !== 'running') return;
+            const now = unlockAudioCtx.currentTime;
+            const osc = unlockAudioCtx.createOscillator();
+            const gain = unlockAudioCtx.createGain();
+            osc.type = 'sine';
+            if (kind === 'start') {
+                osc.frequency.setValueAtTime(880, now);
+                osc.frequency.exponentialRampToValueAtTime(1046, now + 0.055);
+            } else {
+                osc.frequency.setValueAtTime(740, now);
+                osc.frequency.exponentialRampToValueAtTime(520, now + 0.06);
+            }
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
+            osc.connect(gain);
+            gain.connect(unlockAudioCtx.destination);
+            osc.start(now);
+            osc.stop(now + 0.085);
+        } catch (e) {}
     }
 
     // 🎚️ 與 BGM 播放器協調音訊焦點（對講錄音或播放期間平滑壓低 BGM，結束後自動恢復，不卡死音訊通道）
@@ -197,7 +287,10 @@
     ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(evtName => {
         window.addEventListener(evtName, function onInteractUnlock() {
             unlockBrowserAudio();
-            if (isAudioUnlocked) {
+            if (isRadioEnabled && !isMediaStreamAlive(warmMediaStream)) {
+                tryPrewarmGrantedMicStream();
+            }
+            if (isAudioUnlocked && !pendingAutoplayRetryItem && isMediaStreamAlive(warmMediaStream)) {
                 window.removeEventListener(evtName, onInteractUnlock);
             }
         }, { passive: true });
@@ -249,8 +342,8 @@
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
-            // 切至背景時安全中止進行中的發話與手勢並釋放閒置麥克風，避免切回前景卡在發話或拖曳中
-            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
+            // 切至背景時安全中止進行中的發話與手勢，但保留已暖機的麥克風串流（由系統自行管理，切回前景若失效再自動重建）
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
             return;
         }
         if (document.visibilityState === 'visible' && isRadioEnabled) {
@@ -259,6 +352,9 @@
                 requestRadioWakeLock();
             }
             ensureRadioConnectionActive();
+            if (!isMediaStreamAlive(warmMediaStream)) {
+                tryPrewarmGrantedMicStream();
+            }
             if (!isPlayingAudio && playbackQueue.length > 0) {
                 processPlaybackQueue();
             }
@@ -285,9 +381,12 @@
         resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
     });
 
-    window.addEventListener('pagehide', () => {
+    const releaseAllOnPageUnload = () => {
         resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
-    });
+        revokeActivePlaybackObjectUrl();
+    };
+    window.addEventListener('pagehide', releaseAllOnPageUnload);
+    window.addEventListener('beforeunload', releaseAllOnPageUnload);
 
     // 🎙️ 挑選瀏覽器支援的最佳低流量壓縮音訊格式
     function pickSupportedAudioMimeType() {
@@ -348,21 +447,29 @@
         return gestureMode === 'drag' || gestureMode === 'pinch-resize' || gestureMode === 'handle-resize';
     }
 
-    // 🎨 更新懸浮 PTT 按鈕視覺狀態（平時半透明，按住錄音 100% 不透明亮紅高亮＋即時秒數，拖曳／縮放時亮青色外框提示）
+    // 🎨 更新懸浮 PTT 按鈕視覺狀態（平時半透明，準備麥克風時亮琥珀色，真正開始收音後 100% 不透明亮紅高亮＋即時秒數，拖曳／縮放時亮青色外框提示）
     function updatePttButtonVisual(state = 'idle', secText = '') {
         if (!pttBtnEl || !pttIconEl || !pttLabelEl) return;
         if (state === 'idle' && isManipulatingPttLayout()) {
             state = gestureMode === 'drag' ? 'dragging' : 'resizing';
             secText = gestureMode === 'drag' ? '移動中' : `${pttScale.toFixed(1)}x`;
         }
-        if (state === 'recording') {
+        if (state === 'preparing') {
+            pttBtnEl.style.opacity = '0.95';
+            pttBtnEl.style.background = '#b45309';
+            pttBtnEl.style.borderColor = '#fde68a';
+            pttBtnEl.style.boxShadow = '0 0 0 4px rgba(245, 158, 11, 0.35), 0 8px 18px rgba(180, 83, 9, 0.45)';
+            pttBtnEl.style.transform = 'scale(1.03)';
+            pttIconEl.textContent = '⏳';
+            pttLabelEl.textContent = secText || '準備中';
+        } else if (state === 'recording') {
             pttBtnEl.style.opacity = '1';
             pttBtnEl.style.background = '#dc2626';
             pttBtnEl.style.borderColor = '#ffffff';
             pttBtnEl.style.boxShadow = '0 0 0 6px rgba(239, 68, 68, 0.38), 0 10px 24px rgba(220, 38, 38, 0.5)';
             pttBtnEl.style.transform = 'scale(1.08)';
             pttIconEl.textContent = '🔴';
-            pttLabelEl.textContent = secText || '0.0s';
+            pttLabelEl.textContent = secText || '請說話';
         } else if (state === 'uploading') {
             pttBtnEl.style.opacity = '0.95';
             pttBtnEl.style.background = '#d97706';
@@ -405,35 +512,16 @@
         return tracks.length > 0 && tracks.some(track => track.readyState === 'live');
     }
 
-    function clearMicIdleReleaseTimer() {
-        if (micIdleReleaseTimer) {
-            clearTimeout(micIdleReleaseTimer);
-            micIdleReleaseTimer = null;
-        }
-    }
-
     function releaseWarmMicStream() {
-        clearMicIdleReleaseTimer();
         if (warmMediaStream) {
             try {
                 warmMediaStream.getTracks().forEach(track => {
-                    try { track.onended = null; track.onmute = null; } catch (_) {}
+                    try { track.onended = null; track.onmute = null; track.onunmute = null; } catch (_) {}
                     try { track.stop(); } catch (_) {}
                 });
             } catch (e) {}
             warmMediaStream = null;
         }
-    }
-
-    function scheduleMicIdleRelease() {
-        clearMicIdleReleaseTimer();
-        if (!warmMediaStream) return;
-        micIdleReleaseTimer = setTimeout(() => {
-            micIdleReleaseTimer = null;
-            if (!isRecordingPtt) {
-                releaseWarmMicStream();
-            }
-        }, MIC_IDLE_RELEASE_MS);
     }
 
     function describeMicError(err) {
@@ -450,9 +538,8 @@
         return '⚠️ 麥克風啟動異常，請再按住重試';
     }
 
-    // 🎙️ 麥克風串流保活池：有效時重複使用（免重複建銷延遲），異常或中斷時自動釋放並重建
+    // 🎙️ 麥克風串流暖機複用池：授權後常駐暖機，僅於頁面關閉或手動停用對講時釋放；若系統休眠導致失效則自動重建
     async function acquireMicStream() {
-        clearMicIdleReleaseTimer();
         if (isMediaStreamAlive(warmMediaStream)) {
             try {
                 warmMediaStream.getAudioTracks().forEach(track => {
@@ -476,7 +563,6 @@
             track.onended = () => {
                 if (warmMediaStream === stream) {
                     warmMediaStream = null;
-                    clearMicIdleReleaseTimer();
                 }
                 if (isRecordingPtt) {
                     resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
@@ -489,6 +575,34 @@
         return stream;
     }
 
+    // 若使用者先前已授予麥克風權限，於互動／啟動時靜默預熱串流（不主動彈出權限視窗）
+    async function tryPrewarmGrantedMicStream() {
+        if (!isRadioEnabled || isWarmingMicStream || isMediaStreamAlive(warmMediaStream)) return;
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') return;
+        if (!navigator.permissions || typeof navigator.permissions.query !== 'function') return;
+        isWarmingMicStream = true;
+        try {
+            const status = await navigator.permissions.query({ name: 'microphone' });
+            if (status && status.state === 'granted' && isRadioEnabled && !isMediaStreamAlive(warmMediaStream)) {
+                await acquireMicStream();
+            }
+        } catch (e) {
+            // 部分瀏覽器不支援 permissions.query('microphone')，改由首次按住 PTT 時取得並常駐暖機
+        } finally {
+            isWarmingMicStream = false;
+        }
+    }
+
+    function detachAndDestroyRecorder(recorder) {
+        if (!recorder) return;
+        try {
+            recorder.onstart = null;
+            recorder.ondataavailable = null;
+            recorder.onerror = null;
+            recorder.onstop = null;
+        } catch (e) {}
+    }
+
     function cleanupRecorderState(releaseMicNow = false) {
         if (recordTickTimer) {
             clearInterval(recordTickTimer);
@@ -498,11 +612,14 @@
             clearTimeout(recordMaxTimer);
             recordMaxTimer = null;
         }
-        activeMediaRecorder = null;
-        if (releaseMicNow || !isRadioEnabled || document.visibilityState === 'hidden') {
+        if (activeMediaRecorder) {
+            detachAndDestroyRecorder(activeMediaRecorder);
+            activeMediaRecorder = null;
+        }
+        recordedChunks.length = 0;
+        isRecorderCapturing = false;
+        if (releaseMicNow || !isRadioEnabled) {
             releaseWarmMicStream();
-        } else {
-            scheduleMicIdleRelease();
         }
     }
 
@@ -540,11 +657,32 @@
         });
     }
 
-    // ☁️ 上傳語音廣播至 Firebase（先寫 audio.json 再寫 meta.json，確保接收端讀到 meta 時音訊已就緒）
+    function dataUrlToBlob(dataUrl, fallbackMime = 'audio/webm') {
+        try {
+            const str = String(dataUrl || '');
+            const commaIdx = str.indexOf(',');
+            if (commaIdx < 0) return null;
+            const header = str.slice(0, commaIdx);
+            const base64 = str.slice(commaIdx + 1);
+            const mimeMatch = /data:([^;]+);base64/i.exec(header);
+            const mime = (mimeMatch && mimeMatch[1]) ? mimeMatch[1] : fallbackMime;
+            const binary = atob(base64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return new Blob([bytes], { type: mime });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // ☁️ 上傳語音廣播至 Firebase（先寫 audio.json 再寫 meta.json，嚴格確認兩筆皆寫入成功後才顯示「已發送」）
     async function uploadVoiceBroadcast(blob, durationMs, mimeType) {
         if (!navigator.onLine) {
             updatePttButtonVisual('idle');
-            flashRadioToast('⚠️ 目前離線，無法發送對講語音', 'error', 2200);
+            flashRadioToast('⚠️ 目前離線，無法發送對講語音', 'error', 2400);
             return;
         }
         isUploadingPtt = true;
@@ -561,9 +699,6 @@
             const senderId = getCurrentDeviceId();
             const senderName = getCurrentSenderName();
 
-            // 標記本機發送的 ID，避免本機重複播放
-            lastHandledMsgId = msgId;
-
             const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
             const metaUrl = `${getRadioCloudBaseUrl()}/meta.json`;
 
@@ -578,9 +713,13 @@
                 })
             };
             const resAudio = (typeof fetchWithTimeout === 'function')
-                ? await fetchWithTimeout(audioUrl, putAudioOpts, 8000)
+                ? await fetchWithTimeout(audioUrl, putAudioOpts, 8000, '音訊上傳逾時')
                 : await fetch(audioUrl, putAudioOpts);
-            if (!resAudio.ok) throw new Error(`HTTP ${resAudio.status}`);
+            if (!resAudio.ok) throw new Error(`音訊寫入失敗 (HTTP ${resAudio.status})`);
+            const audioSaved = await resAudio.json().catch(() => null);
+            if (!audioSaved || audioSaved.id !== msgId) {
+                throw new Error('雲端音訊寫入驗證失敗');
+            }
 
             const putMetaOpts = {
                 method: 'PUT',
@@ -591,17 +730,25 @@
                     senderName,
                     durationMs: Math.round(durationMs),
                     mimeType: mimeType || blob.type || 'audio/webm',
-                    createdAt: now
+                    createdAt: now,
+                    audioCleared: false
                 })
             };
             const resMeta = (typeof fetchWithTimeout === 'function')
-                ? await fetchWithTimeout(metaUrl, putMetaOpts, 5000)
+                ? await fetchWithTimeout(metaUrl, putMetaOpts, 5000, '廣播通知寫入逾時')
                 : await fetch(metaUrl, putMetaOpts);
-            if (!resMeta.ok) throw new Error(`HTTP ${resMeta.status}`);
+            if (!resMeta.ok) throw new Error(`通知寫入失敗 (HTTP ${resMeta.status})`);
+            const metaSaved = await resMeta.json().catch(() => null);
+            if (!metaSaved || metaSaved.id !== msgId) {
+                throw new Error('雲端廣播通知驗證失敗');
+            }
 
-            flashRadioToast(`📡 已廣播語音（${(durationMs / 1000).toFixed(1)} 秒）`, 'sent', 1600);
+            // 確認雲端兩筆皆成功寫入後，才標記已處理（避免本機重播）並顯示「已發送」
+            markMessageHandled(msgId);
+            playPttCueTone('end');
+            flashRadioToast(`📡 已發送語音廣播（${(durationMs / 1000).toFixed(1)} 秒）`, 'sent', 1800);
         } catch (err) {
-            flashRadioToast(`⚠️ 語音傳送失敗：${err?.message || '網路異常'}`, 'error', 2400);
+            flashRadioToast(`⚠️ 語音廣播傳送失敗：${err?.message || '網路異常'}`, 'error', 2800);
         } finally {
             isUploadingPtt = false;
             uploadingStartedAt = 0;
@@ -618,22 +765,37 @@
         }
     }
 
+    function revokeActivePlaybackObjectUrl() {
+        if (activePlaybackObjectUrl) {
+            try { URL.revokeObjectURL(activePlaybackObjectUrl); } catch (e) {}
+            activePlaybackObjectUrl = null;
+        }
+    }
+
+    function resetSharedAudioElement() {
+        if (!sharedAudioEl) return;
+        try {
+            sharedAudioEl.onended = null;
+            sharedAudioEl.onerror = null;
+            sharedAudioEl.onstalled = null;
+            sharedAudioEl.onabort = null;
+            sharedAudioEl.oncanplaythrough = null;
+            sharedAudioEl.onloadeddata = null;
+            if (!sharedAudioEl.paused) sharedAudioEl.pause();
+            sharedAudioEl.removeAttribute('src');
+            sharedAudioEl.load();
+        } catch (e) {}
+        revokeActivePlaybackObjectUrl();
+    }
+
     function abortCurrentPlaybackForPtt() {
         clearPlaybackWatchdog();
-        if (sharedAudioEl) {
-            try {
-                sharedAudioEl.onended = null;
-                sharedAudioEl.onerror = null;
-                sharedAudioEl.onstalled = null;
-                sharedAudioEl.onabort = null;
-                if (!sharedAudioEl.paused) sharedAudioEl.pause();
-            } catch (e) {}
-        }
+        resetSharedAudioElement();
         isPlayingAudio = false;
         hideRadioToast();
     }
 
-    // 🎙️ 開始按住錄音
+    // 🎙️ 開始按住錄音（確認 MediaRecorder 真正啟動收音後才發出提示音與紅燈「請說話」，消除起音截斷）
     async function startPttRecording() {
         recoverStuckNetworkFlags();
         if (!isRadioEnabled || isRecordingPtt || isUploadingPtt || isRestrictedByGate()) return;
@@ -659,12 +821,12 @@
 
         const mySessionId = ++recordingSessionId;
         isRecordingPtt = true;
+        isRecorderCapturing = false;
         cancelUploadFlag = false;
-        recordedChunks = [];
+        recordedChunks.length = 0;
         recordStartAt = Date.now();
-        updatePttButtonVisual('recording', '0.0s');
+        updatePttButtonVisual('preparing', '準備中');
         syncAudioFocusWithBgm();
-        try { navigator.vibrate?.(30); } catch (e) {}
         requestRadioWakeLock();
 
         try {
@@ -680,12 +842,34 @@
 
             const mimeType = pickSupportedAudioMimeType();
             const recorderOpts = mimeType
-                ? { mimeType, audioBitsPerSecond: 16000 }
-                : { audioBitsPerSecond: 16000 };
+                ? { mimeType, audioBitsPerSecond: RECORDER_AUDIO_BPS }
+                : { audioBitsPerSecond: RECORDER_AUDIO_BPS };
 
             const recorder = new MediaRecorder(stream, recorderOpts);
             activeMediaRecorder = recorder;
-            recordStartAt = Date.now();
+
+            recorder.onstart = () => {
+                if (!isRecordingPtt || mySessionId !== recordingSessionId) return;
+                isRecorderCapturing = true;
+                recordStartAt = Date.now();
+                updatePttButtonVisual('recording', '請說話');
+                playPttCueTone('start');
+                try { navigator.vibrate?.(30); } catch (e) {}
+
+                recordTickTimer = setInterval(() => {
+                    if (!isRecordingPtt || mySessionId !== recordingSessionId) return;
+                    const elapsed = (Date.now() - recordStartAt) / 1000;
+                    const sec = Math.min(MAX_RECORD_MS / 1000, elapsed);
+                    updatePttButtonVisual('recording', elapsed < 0.35 ? '請說話' : `${sec.toFixed(1)}s`);
+                }, 100);
+
+                // 達最長 8 秒上限自動停止並上傳
+                recordMaxTimer = setTimeout(() => {
+                    if (isRecordingPtt && mySessionId === recordingSessionId) {
+                        stopPttRecording(false);
+                    }
+                }, MAX_RECORD_MS);
+            };
 
             recorder.ondataavailable = (e) => {
                 if (mySessionId === recordingSessionId && e.data && e.data.size > 0) {
@@ -706,7 +890,7 @@
             };
 
             recorder.onstop = () => {
-                const durationMs = Date.now() - recordStartAt;
+                const durationMs = isRecorderCapturing ? (Date.now() - recordStartAt) : 0;
                 const finalChunks = recordedChunks.slice();
                 const finalMime = recorder.mimeType || mimeType || 'audio/webm';
                 const shouldSkip = cancelUploadFlag || mySessionId !== recordingSessionId;
@@ -715,31 +899,28 @@
                 isRecordingPtt = false;
                 syncAudioFocusWithBgm();
 
-                if (shouldSkip || durationMs < MIN_RECORD_MS || finalChunks.length === 0) {
+                if (shouldSkip) {
                     updatePttButtonVisual('idle');
                     if (!isPlayingAudio) releaseRadioWakeLock();
                     if (!isPlayingAudio && playbackQueue.length > 0) processPlaybackQueue();
                     return;
                 }
 
+                if (durationMs < MIN_RECORD_MS || finalChunks.length === 0) {
+                    updatePttButtonVisual('idle');
+                    flashRadioToast('⏱️ 按住時間過短，請聽到提示音後說話', 'error', 1600);
+                    if (!isPlayingAudio) releaseRadioWakeLock();
+                    if (!isPlayingAudio && playbackQueue.length > 0) processPlaybackQueue();
+                    return;
+                }
+
                 const audioBlob = new Blob(finalChunks, { type: finalMime });
+                finalChunks.length = 0;
                 uploadVoiceBroadcast(audioBlob, Math.min(durationMs, MAX_RECORD_MS), finalMime);
             };
 
-            recorder.start(200);
-
-            recordTickTimer = setInterval(() => {
-                if (!isRecordingPtt || mySessionId !== recordingSessionId) return;
-                const sec = Math.min(MAX_RECORD_MS / 1000, (Date.now() - recordStartAt) / 1000);
-                updatePttButtonVisual('recording', `${sec.toFixed(1)}s`);
-            }, 100);
-
-            // 達最長 8 秒上限自動停止並上傳
-            recordMaxTimer = setTimeout(() => {
-                if (isRecordingPtt && mySessionId === recordingSessionId) {
-                    stopPttRecording(false);
-                }
-            }, MAX_RECORD_MS);
+            // 使用 150ms 短取樣間隔，確保開頭語音即時寫入 chunk 不漏字
+            recorder.start(RECORDER_TIMESLICE_MS);
         } catch (err) {
             cleanupRecorderState(true);
             isRecordingPtt = false;
@@ -777,10 +958,10 @@
         }
     }
 
-    // 🔊 依序自動播放收到的隊員語音（含防卡死看門狗與 BGM 音訊焦點協作）
+    // 🔊 單例播放佇列：轉為 Blob ObjectURL、等待緩衝就緒後播放、播畢立即 revokeObjectURL 釋放記憶體，並確保視覺＋音訊雙重容錯
     function processPlaybackQueue() {
         if (isPlayingAudio || isRecordingPtt || playbackQueue.length === 0 || !isRadioEnabled) {
-            if (!isPlayingAudio) {
+            if (!isPlayingAudio && !toastHideTimer) {
                 hideRadioToast();
                 syncAudioFocusWithBgm();
             }
@@ -801,22 +982,30 @@
             sharedAudioEl = new Audio();
             sharedAudioEl.setAttribute('playsinline', '');
             sharedAudioEl.setAttribute('webkit-playsinline', '');
+            sharedAudioEl.preload = 'auto';
         }
 
         let finished = false;
-        const finishOne = () => {
+        let readyFallbackTimer = null;
+        let playTriggered = false;
+
+        const finishOne = (fallbackNotice = '') => {
             if (finished) return;
             finished = true;
-            clearPlaybackWatchdog();
-            if (sharedAudioEl) {
-                sharedAudioEl.onended = null;
-                sharedAudioEl.onerror = null;
-                sharedAudioEl.onstalled = null;
-                sharedAudioEl.onabort = null;
+            if (readyFallbackTimer) {
+                clearTimeout(readyFallbackTimer);
+                readyFallbackTimer = null;
             }
+            clearPlaybackWatchdog();
+            resetSharedAudioElement();
             isPlayingAudio = false;
+
+            if (fallbackNotice) {
+                flashRadioToast(fallbackNotice, 'playing', 3000);
+            }
+
             if (playbackQueue.length === 0 || isRecordingPtt || !isRadioEnabled) {
-                hideRadioToast();
+                if (!fallbackNotice) hideRadioToast();
                 syncAudioFocusWithBgm();
                 if (!isRecordingPtt && !isUploadingPtt) releaseRadioWakeLock();
             } else {
@@ -829,27 +1018,98 @@
         const watchdogMs = Math.min(PLAYBACK_MAX_WATCHDOG_MS, Math.max(PLAYBACK_MIN_WATCHDOG_MS, estDuration + 6000));
         clearPlaybackWatchdog();
         playbackWatchdogTimer = setTimeout(() => {
-            try { if (sharedAudioEl && !sharedAudioEl.paused) sharedAudioEl.pause(); } catch (e) {}
             finishOne();
         }, watchdogMs);
 
-        sharedAudioEl.onended = finishOne;
-        sharedAudioEl.onerror = finishOne;
-        sharedAudioEl.onstalled = finishOne;
-        sharedAudioEl.onabort = finishOne;
-        sharedAudioEl.volume = 1.0;
-        sharedAudioEl.src = item.dataUrl;
+        // 轉為 Blob + ObjectURL，減輕 Base64 重複解碼壓力並確保播畢可完整釋放記憶體
+        revokeActivePlaybackObjectUrl();
+        const blob = dataUrlToBlob(item.dataUrl, item.mimeType || 'audio/webm');
+        let mediaSrc = item.dataUrl;
+        if (blob) {
+            try {
+                activePlaybackObjectUrl = URL.createObjectURL(blob);
+                mediaSrc = activePlaybackObjectUrl;
+            } catch (e) {
+                activePlaybackObjectUrl = null;
+            }
+        }
 
-        const playPromise = sharedAudioEl.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch(() => {
-                // 若瀏覽器尚未解鎖自動播放，靜默結束不卡住佇列
-                finishOne();
-            });
+        const startPlayingWhenReady = () => {
+            if (finished || playTriggered || !sharedAudioEl) return;
+            playTriggered = true;
+            if (readyFallbackTimer) {
+                clearTimeout(readyFallbackTimer);
+                readyFallbackTimer = null;
+            }
+            sharedAudioEl.oncanplaythrough = null;
+            sharedAudioEl.onloadeddata = null;
+
+            const playPromise = sharedAudioEl.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch((err) => {
+                    const errName = String(err?.name || '');
+                    if (errName === 'NotAllowedError') {
+                        // 瀏覽器尚未解鎖自動播放：保留最新語音待點擊畫面即補播，並顯示清楚視覺提示
+                        pendingAutoplayRetryItem = { ...item, receivedAt: Date.now() };
+                        finishOne(`🔇 收到 ${item.senderName} 對講語音（點擊畫面立即播放）`);
+                    } else {
+                        finishOne(`📻 收到 ${item.senderName} 對講語音（裝置無法解碼此音訊）`);
+                    }
+                });
+            }
+        };
+
+        sharedAudioEl.onended = () => finishOne();
+        sharedAudioEl.onerror = () => finishOne(`📻 收到 ${item.senderName} 對講語音（音訊編碼不相容）`);
+        sharedAudioEl.onstalled = () => {
+            // 僅在尚未開始播放時才加速看門狗，避免誤殺正常短停頓
+            if (!playTriggered) startPlayingWhenReady();
+        };
+        sharedAudioEl.onabort = () => finishOne();
+        sharedAudioEl.oncanplaythrough = startPlayingWhenReady;
+        sharedAudioEl.onloadeddata = startPlayingWhenReady;
+        sharedAudioEl.volume = 1.0;
+        sharedAudioEl.src = mediaSrc;
+        try { sharedAudioEl.load(); } catch (e) {}
+
+        // 若 1.2 秒內瀏覽器尚未觸發 canplaythrough/loadeddata，仍嘗試直接播放避免卡住
+        readyFallbackTimer = setTimeout(startPlayingWhenReady, PLAYBACK_READY_TIMEOUT_MS);
+    }
+
+    // 🧹 自動清理過期雲端語音節點（超過 60 秒即清除大型 audio.json，維持長期通話同步高速輕量）
+    async function cleanupExpiredCloudAudioIfNeeded(meta) {
+        if (!meta || meta.audioCleared === true || !navigator.onLine) return;
+        const now = Date.now();
+        if ((now - lastCloudCleanupAt) < CLOUD_CLEANUP_COOLDOWN_MS) return;
+        const createdAt = Number(meta.createdAt || 0);
+        if (!createdAt || (now - createdAt) < EXPIRED_CLOUD_CLEANUP_MS) return;
+
+        lastCloudCleanupAt = now;
+        try {
+            const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
+            const metaUrl = `${getRadioCloudBaseUrl()}/meta.json`;
+            const delOpts = { method: 'DELETE' };
+            if (typeof fetchWithTimeout === 'function') {
+                await fetchWithTimeout(audioUrl, delOpts, 4000);
+            } else {
+                await fetch(audioUrl, delOpts);
+            }
+            const patchMetaOpts = {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audioCleared: true })
+            };
+            if (typeof fetchWithTimeout === 'function') {
+                await fetchWithTimeout(metaUrl, patchMetaOpts, 4000);
+            } else {
+                await fetch(metaUrl, patchMetaOpts);
+            }
+        } catch (e) {
+            // 清理失敗靜默略過，不影響正常收發
         }
     }
 
-    // 📡 輪詢 Firebase meta.json（僅 20 秒內且非本機發送之新訊息才拉取 audio.json 播放）
+    // 📡 輪詢 Firebase meta.json（容錯欄位解析、時鐘誤差容忍、音訊拉取成功後才標記已讀避免漏收）
     async function pollLatestRadioMeta(isInitialSeed = false) {
         recoverStuckNetworkFlags();
         if (!isRadioEnabled || !navigator.onLine || isPollingMeta || isRestrictedByGate()) return;
@@ -862,50 +1122,64 @@
                 : await fetch(metaUrl, { cache: 'no-store' });
             if (!res.ok) return;
             const meta = await res.json();
-            if (!meta || typeof meta !== 'object' || !meta.id) return;
+            if (!meta || typeof meta !== 'object') return;
+
+            const createdAt = Number(meta.createdAt || 0);
+            const senderId = String(meta.senderId || '').trim();
+            const msgId = String(meta.id || (createdAt ? `legacy_${createdAt}_${senderId || 'anon'}` : '')).trim();
+            if (!msgId) return;
 
             const now = Date.now();
-            const createdAt = Number(meta.createdAt || 0);
-            const ageMs = now - createdAt;
+            const ageMs = createdAt ? (now - createdAt) : 0;
+            const isExpired = !createdAt || ageMs > MAX_PLAYBACK_AGE_MS || ageMs < -CLOCK_SKEW_TOLERANCE_MS;
+            const isFromSelf = Boolean(senderId && senderId === getCurrentDeviceId());
 
-            // 剛開啟 App 或開啟無線電時，若訊息已超過 20 秒或視為歷史舊訊則直接標記已讀不播放
+            // 若雲端節點已過期超過 60 秒，順手清理大型 audio.json 避免累積拖慢同步
+            if (createdAt && (now - createdAt) > EXPIRED_CLOUD_CLEANUP_MS && meta.audioCleared !== true) {
+                cleanupExpiredCloudAudioIfNeeded(meta);
+            }
+
+            // 剛開啟 App 或開啟無線電時，若訊息已過期或為本機舊訊則直接標記已讀不播放
             if (isInitialSeed) {
-                if (!createdAt || ageMs > MAX_PLAYBACK_AGE_MS || meta.senderId === getCurrentDeviceId()) {
-                    lastHandledMsgId = meta.id;
+                if (isExpired || isFromSelf || meta.audioCleared === true) {
+                    markMessageHandled(msgId);
                     return;
                 }
             }
 
-            if (meta.id === lastHandledMsgId) return;
-            lastHandledMsgId = meta.id;
+            if (hasHandledMessage(msgId)) return;
 
-            // 排除發送者本機重複播放
-            if (meta.senderId && meta.senderId === getCurrentDeviceId()) return;
+            // 排除發送者本機重複播放、已清理節點或過期舊訊
+            if (isFromSelf || isExpired || meta.audioCleared === true) {
+                markMessageHandled(msgId);
+                return;
+            }
 
-            // 嚴格時間戳記過濾：僅自動播放 20 秒內送出的最新訊息
-            if (!createdAt || ageMs > MAX_PLAYBACK_AGE_MS) return;
-
-            // 拉取對應音訊檔並加入播放佇列
+            // 拉取對應音訊檔（成功取得並入列後才 markMessageHandled，避免瞬斷永久漏收）
             const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
             const audioRes = (typeof fetchWithTimeout === 'function')
                 ? await fetchWithTimeout(audioUrl, { cache: 'no-store' }, 6000)
                 : await fetch(audioUrl, { cache: 'no-store' });
             if (!audioRes.ok) return;
             const audioPayload = await audioRes.json();
-            if (!audioPayload || audioPayload.id !== meta.id || !audioPayload.dataUrl) return;
+            if (!audioPayload || typeof audioPayload !== 'object' || !audioPayload.dataUrl) return;
+            if (audioPayload.id && meta.id && audioPayload.id !== meta.id) return;
+
+            markMessageHandled(msgId);
 
             // 再次確認下載完後仍未超過過期緩衝
-            if ((Date.now() - createdAt) > (MAX_PLAYBACK_AGE_MS + 8000)) return;
+            if ((Date.now() - createdAt) > (MAX_PLAYBACK_AGE_MS + 10000)) return;
 
             playbackQueue.push({
-                id: meta.id,
+                id: msgId,
                 senderName: String(meta.senderName || '車隊隊員').trim() || '車隊隊員',
                 durationMs: Number(meta.durationMs || MAX_RECORD_MS),
+                mimeType: String(audioPayload.mimeType || meta.mimeType || 'audio/webm'),
                 dataUrl: audioPayload.dataUrl
             });
             processPlaybackQueue();
         } catch (e) {
-            // 弱訊號或逾時靜默略過
+            // 弱訊號或逾時靜默略過，下次輪詢自動重試
         } finally {
             isPollingMeta = false;
             pollingStartedAt = 0;
@@ -926,15 +1200,8 @@
         }
         clearPlaybackWatchdog();
         playbackQueue = [];
-        if (sharedAudioEl) {
-            try {
-                sharedAudioEl.onended = null;
-                sharedAudioEl.onerror = null;
-                sharedAudioEl.onstalled = null;
-                sharedAudioEl.onabort = null;
-                if (!sharedAudioEl.paused) sharedAudioEl.pause();
-            } catch (e) {}
-        }
+        pendingAutoplayRetryItem = null;
+        resetSharedAudioElement();
         isPlayingAudio = false;
         isPollingMeta = false;
         pollingStartedAt = 0;
@@ -1314,6 +1581,7 @@
 
         if (isRadioEnabled) {
             unlockBrowserAudio();
+            tryPrewarmGrantedMicStream();
             startRadioPolling();
         } else {
             resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
@@ -1334,11 +1602,17 @@
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             mountFleetRadioUI();
-            if (isRadioEnabled) startRadioPolling();
+            if (isRadioEnabled) {
+                tryPrewarmGrantedMicStream();
+                startRadioPolling();
+            }
         });
     } else {
         mountFleetRadioUI();
-        if (isRadioEnabled) startRadioPolling();
+        if (isRadioEnabled) {
+            tryPrewarmGrantedMicStream();
+            startRadioPolling();
+        }
     }
 
     window.FleetRadioPTT = {

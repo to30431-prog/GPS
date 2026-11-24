@@ -6,11 +6,17 @@
 
 (function initFleetRadioPTTModule() {
     const STORAGE_KEY_ENABLED = 'yingge_fleet_radio_ptt_enabled_v1';
+    const STORAGE_KEY_LAYOUT = 'yingge_fleet_radio_ptt_layout_v1';
     const MAX_RECORD_MS = 8000;          // 最長 8 秒自動截斷
     const MIN_RECORD_MS = 350;           // 短於 0.35 秒視為誤觸不發送
     const MAX_PLAYBACK_AGE_MS = 20000;   // 嚴格僅自動播放 20 秒內的最新語音
     const POLL_INTERVAL_MS = 1500;       // 輕量 meta.json 輪詢間隔（支援極致省電黑屏持續接收）
     const MAX_AUDIO_DATAURL_LEN = 350000;
+    const BASE_BTN_SIZE = 56;
+    const MIN_SCALE = 1.0;
+    const MAX_SCALE = 4.0;
+    const DRAG_THRESHOLD_PX = 10;
+    const VIEWPORT_MARGIN_PX = 8;
 
     // 狀態變數（完全封裝於獨立模組）
     let isRadioEnabled = true;
@@ -44,9 +50,30 @@
     let pttBtnEl = null;
     let pttIconEl = null;
     let pttLabelEl = null;
+    let pttResizeHandleEl = null;
     let toastEl = null;
     let visibilityObserver = null;
     let visibilitySyncTimer = null;
+
+    // 懸浮按鈕位置與縮放狀態（支援自由拖動 ＋ 1.0x～4.0x 縮放並持久化）
+    let pttScale = 1.0;
+    let pttPosLeft = 14;
+    let pttPosTop = 320;
+    let gestureMode = 'idle'; // 'idle' | 'ptt' | 'drag' | 'pinch-resize' | 'handle-resize'
+    const activePointers = new Map();
+    let dragPointerId = null;
+    let dragStartPointerX = 0;
+    let dragStartPointerY = 0;
+    let dragStartLeft = 14;
+    let dragStartTop = 320;
+    let pinchStartDist = 1;
+    let pinchStartScale = 1.0;
+    let pinchAnchorCenterX = 0;
+    let pinchAnchorCenterY = 0;
+    let handlePointerId = null;
+    let handleStartX = 0;
+    let handleStartY = 0;
+    let handleStartScale = 1.0;
 
     function getRadioCloudBaseUrl() {
         const base = (typeof FIREBASE_BASE_URL === 'string' && FIREBASE_BASE_URL)
@@ -226,9 +253,17 @@
         }, durationMs);
     }
 
-    // 🎨 更新懸浮 PTT 按鈕視覺狀態（平時半透明，按住錄音 100% 不透明亮紅高亮＋即時秒數）
+    function isManipulatingPttLayout() {
+        return gestureMode === 'drag' || gestureMode === 'pinch-resize' || gestureMode === 'handle-resize';
+    }
+
+    // 🎨 更新懸浮 PTT 按鈕視覺狀態（平時半透明，按住錄音 100% 不透明亮紅高亮＋即時秒數，拖曳／縮放時亮青色外框提示）
     function updatePttButtonVisual(state = 'idle', secText = '') {
         if (!pttBtnEl || !pttIconEl || !pttLabelEl) return;
+        if (state === 'idle' && isManipulatingPttLayout()) {
+            state = gestureMode === 'drag' ? 'dragging' : 'resizing';
+            secText = gestureMode === 'drag' ? '移動中' : `${pttScale.toFixed(1)}x`;
+        }
         if (state === 'recording') {
             pttBtnEl.style.opacity = '1';
             pttBtnEl.style.background = '#dc2626';
@@ -245,6 +280,14 @@
             pttBtnEl.style.transform = 'scale(1)';
             pttIconEl.textContent = '📡';
             pttLabelEl.textContent = '傳送中';
+        } else if (state === 'dragging' || state === 'resizing') {
+            pttBtnEl.style.opacity = '0.92';
+            pttBtnEl.style.background = 'rgba(15, 23, 42, 0.9)';
+            pttBtnEl.style.borderColor = '#38bdf8';
+            pttBtnEl.style.boxShadow = '0 0 0 4px rgba(56, 189, 248, 0.35), 0 10px 24px rgba(15, 23, 42, 0.45)';
+            pttBtnEl.style.transform = 'scale(1)';
+            pttIconEl.textContent = state === 'dragging' ? '✋' : '⤢';
+            pttLabelEl.textContent = secText || (state === 'dragging' ? '移動中' : `${pttScale.toFixed(1)}x`);
         } else {
             pttBtnEl.style.opacity = '0.58';
             pttBtnEl.style.background = 'rgba(15, 23, 42, 0.78)';
@@ -595,19 +638,116 @@
         hideRadioToast();
     }
 
-    function isPointInsideButton(clientX, clientY) {
-        if (!pttBtnEl) return false;
-        const rect = pttBtnEl.getBoundingClientRect();
-        const pad = 12; // 12px 舒適防誤滑容差
-        return (
-            clientX >= rect.left - pad &&
-            clientX <= rect.right + pad &&
-            clientY >= rect.top - pad &&
-            clientY <= rect.bottom + pad
-        );
+    function clampPttScale(scale) {
+        const numeric = Number(scale);
+        if (!Number.isFinite(numeric)) return 1.0;
+        return Math.min(MAX_SCALE, Math.max(MIN_SCALE, numeric));
     }
 
-    // 🧩 建立並掛載獨立 UI（懸浮 56x56 圓角長方形 PTT 按鈕 ＋ 頂部播放提示條）
+    function getViewportDimensions() {
+        const vw = Math.max(200, window.innerWidth || document.documentElement.clientWidth || 360);
+        const vh = Math.max(200, window.innerHeight || document.documentElement.clientHeight || 640);
+        return { vw, vh };
+    }
+
+    function getScaledBtnSize(scale = pttScale) {
+        const { vw, vh } = getViewportDimensions();
+        const maxAllowedSize = Math.max(BASE_BTN_SIZE, Math.min(vw, vh) - VIEWPORT_MARGIN_PX * 2);
+        return Math.min(maxAllowedSize, Math.round(BASE_BTN_SIZE * clampPttScale(scale)));
+    }
+
+    function clampPttPosition(left, top, scale = pttScale) {
+        const { vw, vh } = getViewportDimensions();
+        const size = getScaledBtnSize(scale);
+        const maxLeft = Math.max(VIEWPORT_MARGIN_PX, vw - size - VIEWPORT_MARGIN_PX);
+        const maxTop = Math.max(VIEWPORT_MARGIN_PX, vh - size - VIEWPORT_MARGIN_PX);
+        const safeLeft = Number.isFinite(Number(left)) ? Number(left) : 14;
+        const safeTop = Number.isFinite(Number(top)) ? Number(top) : (vh - 188 - size);
+        return {
+            left: Math.min(maxLeft, Math.max(VIEWPORT_MARGIN_PX, Math.round(safeLeft))),
+            top: Math.min(maxTop, Math.max(VIEWPORT_MARGIN_PX, Math.round(safeTop)))
+        };
+    }
+
+    function loadSavedPttLayout() {
+        const { vh } = getViewportDimensions();
+        let nextScale = 1.0;
+        let nextLeft = 14;
+        let nextTop = vh - 188 - BASE_BTN_SIZE;
+
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY_LAYOUT);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    nextScale = clampPttScale(parsed.scale);
+                    if (Number.isFinite(Number(parsed.left))) nextLeft = Number(parsed.left);
+                    if (Number.isFinite(Number(parsed.top))) nextTop = Number(parsed.top);
+                }
+            }
+        } catch (e) {}
+
+        pttScale = nextScale;
+        const clamped = clampPttPosition(nextLeft, nextTop, pttScale);
+        pttPosLeft = clamped.left;
+        pttPosTop = clamped.top;
+    }
+
+    function savePttLayout() {
+        try {
+            localStorage.setItem(STORAGE_KEY_LAYOUT, JSON.stringify({
+                left: Math.round(pttPosLeft),
+                top: Math.round(pttPosTop),
+                scale: Number(clampPttScale(pttScale).toFixed(2))
+            }));
+        } catch (e) {}
+    }
+
+    function applyPttLayout() {
+        if (!pttBtnEl) return;
+        const clamped = clampPttPosition(pttPosLeft, pttPosTop, pttScale);
+        pttPosLeft = clamped.left;
+        pttPosTop = clamped.top;
+
+        const size = getScaledBtnSize(pttScale);
+        const effectiveScale = size / BASE_BTN_SIZE;
+
+        pttBtnEl.style.width = `${size}px`;
+        pttBtnEl.style.height = `${size}px`;
+        pttBtnEl.style.borderRadius = `${Math.round(16 * effectiveScale)}px`;
+        pttBtnEl.style.left = `${pttPosLeft}px`;
+        pttBtnEl.style.top = `${pttPosTop}px`;
+        pttBtnEl.style.bottom = 'auto';
+        pttBtnEl.style.right = 'auto';
+
+        if (pttIconEl) {
+            pttIconEl.style.fontSize = `${Math.round(20 * effectiveScale)}px`;
+        }
+        if (pttLabelEl) {
+            pttLabelEl.style.fontSize = `${Math.round(10 * effectiveScale)}px`;
+            pttLabelEl.style.marginTop = `${Math.max(2, Math.round(4 * effectiveScale))}px`;
+        }
+        if (pttResizeHandleEl) {
+            const handleSize = Math.round(Math.min(36, Math.max(18, 15 + 4.5 * effectiveScale)));
+            pttResizeHandleEl.style.width = `${handleSize}px`;
+            pttResizeHandleEl.style.height = `${handleSize}px`;
+            pttResizeHandleEl.style.fontSize = `${Math.round(Math.min(18, Math.max(10, 8 + 2.4 * effectiveScale)))}px`;
+            pttResizeHandleEl.style.borderBottomRightRadius = `${Math.max(6, Math.round(14 * effectiveScale))}px`;
+        }
+    }
+
+    function handleViewportResize() {
+        if (!pttBtnEl) return;
+        applyPttLayout();
+    }
+
+    function getTwoPointerDistance() {
+        const pts = Array.from(activePointers.values());
+        if (pts.length < 2) return 0;
+        return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    }
+
+    // 🧩 建立並掛載獨立 UI（可自由拖動 ＋ 1.0x～4.0x 縮放懸浮 PTT 按鈕 ＋ 頂部播放提示條）
     function mountFleetRadioUI() {
         if (document.getElementById('fleetRadioPttBtn')) return;
 
@@ -621,57 +761,232 @@
         pttBtnEl = document.createElement('button');
         pttBtnEl.id = 'fleetRadioPttBtn';
         pttBtnEl.type = 'button';
-        pttBtnEl.title = '按住說話（最長 8 秒，放開即廣播）';
-        pttBtnEl.className = 'fixed flex flex-col items-center justify-center border-2 text-white select-none cursor-pointer pointer-events-auto';
-        pttBtnEl.style.width = '56px';
-        pttBtnEl.style.height = '56px';
-        pttBtnEl.style.borderRadius = '16px';
-        pttBtnEl.style.left = '14px';
-        pttBtnEl.style.bottom = '188px';
+        pttBtnEl.title = '按住說話（最長 8 秒）；單指拖曳移動位置、雙指或拖曳右下角可縮放（1x～4x）';
+        pttBtnEl.className = 'fixed flex flex-col items-center justify-center border-2 text-white select-none cursor-pointer pointer-events-auto overflow-hidden';
         pttBtnEl.style.zIndex = '45';
         pttBtnEl.style.touchAction = 'none';
         pttBtnEl.style.webkitUserSelect = 'none';
         pttBtnEl.style.webkitTouchCallout = 'none';
         pttBtnEl.style.transition = 'opacity 0.14s ease, background-color 0.14s ease, transform 0.12s ease, box-shadow 0.14s ease';
         pttBtnEl.innerHTML = `
-            <span id="fleetRadioPttIcon" class="text-xl leading-none pointer-events-none">🎙️</span>
-            <span id="fleetRadioPttLabel" class="text-[10px] font-black leading-none mt-1 pointer-events-none">對講</span>
+            <span id="fleetRadioPttIcon" class="leading-none pointer-events-none">🎙️</span>
+            <span id="fleetRadioPttLabel" class="font-black leading-none pointer-events-none">對講</span>
+            <span id="fleetRadioPttResizeHandle" title="拖曳縮放按鈕大小（1x～4x）" aria-label="縮放對講按鈕" class="absolute right-0 bottom-0 flex items-end justify-end leading-none text-white/80 hover:text-sky-300 select-none" style="touch-action:none; cursor:nwse-resize; padding:2px 3px; background:linear-gradient(135deg, transparent 48%, rgba(56, 189, 248, 0.32) 100%);">⤡</span>
         `;
         document.body.appendChild(pttBtnEl);
 
         pttIconEl = pttBtnEl.querySelector('#fleetRadioPttIcon');
         pttLabelEl = pttBtnEl.querySelector('#fleetRadioPttLabel');
+        pttResizeHandleEl = pttBtnEl.querySelector('#fleetRadioPttResizeHandle');
+
+        loadSavedPttLayout();
+        applyPttLayout();
         updatePttButtonVisual('idle');
 
         pttBtnEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
-        // 統一使用 Pointer Events（含觸控滑出按鈕自動停止並上傳）
+        // 隔離底層地圖手勢事件（避免雙指縮放或拖曳 PTT 按鈕時誤觸 MapLibre 縮放／平移）
+        const isolateTouchEvent = (e) => {
+            e.stopPropagation();
+            if (e.cancelable) e.preventDefault();
+        };
+        pttBtnEl.addEventListener('touchstart', isolateTouchEvent, { passive: false });
+        pttBtnEl.addEventListener('touchmove', isolateTouchEvent, { passive: false });
+        pttBtnEl.addEventListener('touchend', (e) => e.stopPropagation(), { passive: false });
+        pttBtnEl.addEventListener('touchcancel', (e) => e.stopPropagation(), { passive: false });
+        pttBtnEl.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+
+        // ↘️ 右下角縮放手把：專責連續縮放（1.0x～4.0x），絕不誤觸發 PTT 廣播
+        if (pttResizeHandleEl) {
+            pttResizeHandleEl.addEventListener('pointerdown', (e) => {
+                if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (isRecordingPtt) stopPttRecording(true);
+                activePointers.clear();
+                gestureMode = 'handle-resize';
+                handlePointerId = e.pointerId;
+                handleStartX = e.clientX;
+                handleStartY = e.clientY;
+                handleStartScale = pttScale;
+                try { pttResizeHandleEl.setPointerCapture(e.pointerId); } catch (_) {}
+                updatePttButtonVisual('resizing', `${pttScale.toFixed(1)}x`);
+            });
+
+            pttResizeHandleEl.addEventListener('pointermove', (e) => {
+                if (gestureMode !== 'handle-resize' || e.pointerId !== handlePointerId) return;
+                e.preventDefault();
+                e.stopPropagation();
+
+                const dx = e.clientX - handleStartX;
+                const dy = e.clientY - handleStartY;
+                const delta = (dx + dy) / 2;
+                pttScale = clampPttScale(handleStartScale + delta / BASE_BTN_SIZE);
+                applyPttLayout();
+                updatePttButtonVisual('resizing', `${pttScale.toFixed(1)}x`);
+            });
+
+            const finishHandleResize = (e) => {
+                if (gestureMode !== 'handle-resize' || (e && e.pointerId !== undefined && e.pointerId !== handlePointerId)) return;
+                if (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                gestureMode = 'idle';
+                handlePointerId = null;
+                savePttLayout();
+                updatePttButtonVisual('idle');
+            };
+            pttResizeHandleEl.addEventListener('pointerup', finishHandleResize);
+            pttResizeHandleEl.addEventListener('pointercancel', finishHandleResize);
+            pttResizeHandleEl.addEventListener('lostpointercapture', () => finishHandleResize(null));
+        }
+
+        // 🎙️ 統一 Multi-Pointer 狀態機：
+        // - 單指原地按住（位移 <= 10px）：維持原 PTT 按住說話、放開廣播
+        // - 單指拖曳超過 10px：立即安全取消 PTT 並切換為自由拖動位置模式
+        // - 雙指捏合：立即安全取消 PTT 並以中心點自由縮放（1.0x～4.0x）
         pttBtnEl.addEventListener('pointerdown', (e) => {
+            if (e.target === pttResizeHandleEl) return;
             if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
             e.preventDefault();
             e.stopPropagation();
-            activePointerId = e.pointerId;
+
+            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             try { pttBtnEl.setPointerCapture(e.pointerId); } catch (_) {}
+
+            if (activePointers.size >= 2) {
+                // 進入雙指縮放前，若已啟動 PTT 立即安全取消且不發送
+                if (isRecordingPtt) stopPttRecording(true);
+                gestureMode = 'pinch-resize';
+                pinchStartDist = Math.max(12, getTwoPointerDistance());
+                pinchStartScale = pttScale;
+                const curSize = getScaledBtnSize(pttScale);
+                pinchAnchorCenterX = pttPosLeft + curSize / 2;
+                pinchAnchorCenterY = pttPosTop + curSize / 2;
+                updatePttButtonVisual('resizing', `${pttScale.toFixed(1)}x`);
+                return;
+            }
+
+            // 單指按下：先保留完整 PTT 即時手感，並記錄起始座標供 10px 防抖判定
+            gestureMode = 'ptt';
+            activePointerId = e.pointerId;
+            dragPointerId = e.pointerId;
+            dragStartPointerX = e.clientX;
+            dragStartPointerY = e.clientY;
+            dragStartLeft = pttPosLeft;
+            dragStartTop = pttPosTop;
             startPttRecording();
         });
 
         pttBtnEl.addEventListener('pointermove', (e) => {
-            if (!isRecordingPtt || (activePointerId !== null && e.pointerId !== activePointerId)) return;
-            if (!isPointInsideButton(e.clientX, e.clientY)) {
-                stopPttRecording(false);
+            if (!activePointers.has(e.pointerId)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (gestureMode === 'pinch-resize') {
+                if (activePointers.size >= 2) {
+                    const curDist = getTwoPointerDistance();
+                    if (curDist > 0 && pinchStartDist > 0) {
+                        const nextScale = clampPttScale(pinchStartScale * (curDist / pinchStartDist));
+                        pttScale = nextScale;
+                        const nextSize = getScaledBtnSize(pttScale);
+                        pttPosLeft = pinchAnchorCenterX - nextSize / 2;
+                        pttPosTop = pinchAnchorCenterY - nextSize / 2;
+                        applyPttLayout();
+                        updatePttButtonVisual('resizing', `${pttScale.toFixed(1)}x`);
+                    }
+                }
+                return;
+            }
+
+            if (gestureMode === 'ptt' && e.pointerId === dragPointerId) {
+                const dx = e.clientX - dragStartPointerX;
+                const dy = e.clientY - dragStartPointerY;
+                if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+                    // 超過防抖門檻：安全取消 PTT 廣播並切換為自由拖曳
+                    gestureMode = 'drag';
+                    if (isRecordingPtt) stopPttRecording(true);
+                    pttPosLeft = dragStartLeft + dx;
+                    pttPosTop = dragStartTop + dy;
+                    applyPttLayout();
+                    updatePttButtonVisual('dragging', '移動中');
+                }
+                return;
+            }
+
+            if (gestureMode === 'drag' && e.pointerId === dragPointerId) {
+                const dx = e.clientX - dragStartPointerX;
+                const dy = e.clientY - dragStartPointerY;
+                pttPosLeft = dragStartLeft + dx;
+                pttPosTop = dragStartTop + dy;
+                applyPttLayout();
             }
         });
 
         const handlePointerRelease = (e) => {
-            if (activePointerId !== null && e.pointerId !== activePointerId) return;
-            if (isRecordingPtt) {
-                stopPttRecording(false);
+            if (e && activePointers.has(e.pointerId)) {
+                activePointers.delete(e.pointerId);
+            }
+            if (e) {
+                e.stopPropagation();
+            }
+
+            if (gestureMode === 'pinch-resize') {
+                if (activePointers.size === 0) {
+                    gestureMode = 'idle';
+                    savePttLayout();
+                    updatePttButtonVisual('idle');
+                }
+                return;
+            }
+
+            if (gestureMode === 'drag') {
+                if (activePointers.size === 0) {
+                    gestureMode = 'idle';
+                    dragPointerId = null;
+                    savePttLayout();
+                    updatePttButtonVisual('idle');
+                }
+                return;
+            }
+
+            if (gestureMode === 'ptt') {
+                if (!e || e.pointerId === dragPointerId || activePointers.size === 0) {
+                    gestureMode = 'idle';
+                    dragPointerId = null;
+                    if (isRecordingPtt) {
+                        stopPttRecording(false);
+                    }
+                }
             }
         };
+
         pttBtnEl.addEventListener('pointerup', handlePointerRelease);
-        pttBtnEl.addEventListener('pointercancel', handlePointerRelease);
-        pttBtnEl.addEventListener('lostpointercapture', () => {
-            if (isRecordingPtt) stopPttRecording(false);
+        pttBtnEl.addEventListener('pointercancel', (e) => {
+            if (gestureMode === 'ptt' && isRecordingPtt) {
+                // pointercancel 時安全取消或停止，並重置手勢狀態
+                activePointers.delete(e.pointerId);
+                gestureMode = 'idle';
+                dragPointerId = null;
+                stopPttRecording(false);
+                return;
+            }
+            handlePointerRelease(e);
+        });
+        pttBtnEl.addEventListener('lostpointercapture', (e) => {
+            if (activePointers.has(e.pointerId)) {
+                handlePointerRelease(e);
+            }
+        });
+
+        // 視窗尺寸變化或螢幕旋轉時自動重新夾緊安全邊界
+        window.addEventListener('resize', handleViewportResize);
+        window.addEventListener('orientationchange', () => {
+            handleViewportResize();
+            setTimeout(handleViewportResize, 180);
         });
 
         // 監聽頁面彈窗狀態變化，自動於地圖主畫面顯示、進入列表／彈窗時隱藏

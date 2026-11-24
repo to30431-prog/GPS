@@ -1392,20 +1392,25 @@
         }
 
         // 🎙️ 統一 Multi-Pointer 狀態機：
-        // - 單指原地按住（位移 <= 10px）：維持原 PTT 按住說話、放開廣播
-        // - 單指拖曳超過 10px：立即安全取消 PTT 並切換為自由拖動位置模式
-        // - 雙指捏合：立即安全取消 PTT 並以中心點自由縮放（1.0x～4.0x）
+        // - 一旦進入紅色錄音中狀態（isRecorderCapturing === true），立即鎖定本次按住錄音手勢：
+        //   手指小幅移動或滑出按鈕邊界皆不取消、不切換為拖曳，直到真正放開手指（pointerup / touchend）才結束並送出錄音（同時 track.stop() 釋放麥克風）
+        // - 僅在尚未進入紅色錄音狀態前，單指快速拖曳超過門檻才切換為移動按鈕位置模式，雙指才切換為縮放模式
         pttBtnEl.addEventListener('pointerdown', (e) => {
             if (e.target === pttResizeHandleEl) return;
             if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
             e.preventDefault();
             e.stopPropagation();
 
+            // 若目前已處於紅色錄音鎖定狀態，忽略額外誤觸的指標，防止雙指誤判取消正在進行的錄音
+            if (gestureMode === 'ptt' && isRecorderCapturing) {
+                return;
+            }
+
             activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             try { pttBtnEl.setPointerCapture(e.pointerId); } catch (_) {}
 
             if (activePointers.size >= 2) {
-                // 進入雙指縮放前，若已啟動 PTT 立即安全取消且不發送
+                // 尚未進入紅色錄音鎖定前，雙指捏合才取消準備並進入縮放模式
                 if (isRecordingPtt) stopPttRecording(true);
                 gestureMode = 'pinch-resize';
                 pinchStartDist = Math.max(12, getTwoPointerDistance());
@@ -1417,7 +1422,7 @@
                 return;
             }
 
-            // 單指按下：先保留完整 PTT 即時手感，並記錄起始座標供 10px 防抖判定
+            // 單指按下：保留完整 PTT 即時手感，並記錄起始座標
             gestureMode = 'ptt';
             activePointerId = e.pointerId;
             dragPointerId = e.pointerId;
@@ -1429,10 +1434,12 @@
         });
 
         pttBtnEl.addEventListener('pointermove', (e) => {
-            if (!activePointers.has(e.pointerId)) return;
+            if (!activePointers.has(e.pointerId) && e.pointerId !== dragPointerId) return;
             e.preventDefault();
             e.stopPropagation();
-            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (activePointers.has(e.pointerId)) {
+                activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            }
 
             if (gestureMode === 'pinch-resize') {
                 if (activePointers.size >= 2) {
@@ -1451,10 +1458,14 @@
             }
 
             if (gestureMode === 'ptt' && e.pointerId === dragPointerId) {
+                // 🔒 已進入紅色錄音中狀態時，鎖定錄音手勢：手指移動或滑出按鈕邊界一律不取消錄音、不切換為拖曳
+                if (isRecorderCapturing) {
+                    return;
+                }
                 const dx = e.clientX - dragStartPointerX;
                 const dy = e.clientY - dragStartPointerY;
                 if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
-                    // 超過防抖門檻：安全取消 PTT 廣播並切換為自由拖曳
+                    // 僅在尚未進入紅色錄音狀態前快速滑動，才取消準備並切換為自由拖曳位置
                     gestureMode = 'drag';
                     if (isRecordingPtt) stopPttRecording(true);
                     pttPosLeft = dragStartLeft + dx;
@@ -1475,10 +1486,10 @@
         });
 
         const handlePointerRelease = (e) => {
-            if (e && activePointers.has(e.pointerId)) {
+            if (e && e.pointerId !== undefined && activePointers.has(e.pointerId)) {
                 activePointers.delete(e.pointerId);
             }
-            if (e) {
+            if (e && typeof e.stopPropagation === 'function' && e.currentTarget === pttBtnEl) {
                 e.stopPropagation();
             }
 
@@ -1497,7 +1508,7 @@
             }
 
             if (gestureMode === 'ptt') {
-                if (!e || e.pointerId === dragPointerId || activePointers.size === 0) {
+                if (!e || e.pointerId === undefined || e.pointerId === dragPointerId || activePointers.size === 0) {
                     gestureMode = 'idle';
                     dragPointerId = null;
                     activePointerId = null;
@@ -1505,6 +1516,7 @@
                     if (isRecordingPtt) {
                         stopPttRecording(false);
                     } else {
+                        cleanupRecorderState();
                         updatePttButtonVisual(isUploadingPtt ? 'uploading' : 'idle');
                         syncAudioFocusWithBgm();
                     }
@@ -1513,16 +1525,41 @@
         };
 
         pttBtnEl.addEventListener('pointerup', handlePointerRelease);
+        pttBtnEl.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            if (gestureMode === 'ptt' && (!e.touches || e.touches.length === 0)) {
+                handlePointerRelease(null);
+            }
+        }, { passive: false });
+
+        // 全域放開保底監聽：當手指在紅色錄音狀態下滑出按鈕邊界（甚至在部分行動瀏覽器遺失 pointer capture）後放開手指時，仍能準確收到放開事件、送出錄音並執行 track.stop()
+        window.addEventListener('pointerup', (e) => {
+            if (gestureMode === 'ptt' && (e.pointerId === dragPointerId || activePointers.has(e.pointerId))) {
+                handlePointerRelease(e);
+            } else if ((gestureMode === 'drag' || gestureMode === 'pinch-resize') && activePointers.has(e.pointerId)) {
+                handlePointerRelease(e);
+            }
+        });
+        window.addEventListener('touchend', (e) => {
+            if (gestureMode === 'ptt' && (!e.touches || e.touches.length === 0)) {
+                handlePointerRelease(null);
+            }
+        }, { passive: true });
+
         pttBtnEl.addEventListener('pointercancel', (e) => {
             e.stopPropagation();
             if (gestureMode === 'ptt') {
-                // pointercancel（例如系統手勢或來電中斷）時安全結束發話並徹底重置所有手勢旗標
+                // pointercancel（例如系統手勢或來電中斷）時安全結束發話並徹底重置所有手勢旗標與釋放麥克風
                 resetAllPttGestureAndRecordingState({ cancelRecording: false, persistLayout: false, releaseMic: false });
                 return;
             }
             resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: false });
         });
         pttBtnEl.addEventListener('lostpointercapture', (e) => {
+            // 若正處於紅色錄音中且手指仍按在螢幕上（滑出按鈕邊界導致部分瀏覽器解除 capture），不要中斷錄音，交由全域 pointerup / touchend 在真正放開手指時結束
+            if (gestureMode === 'ptt' && isRecorderCapturing) {
+                return;
+            }
             if (activePointers.has(e.pointerId) || gestureMode !== 'idle' || isRecordingPtt) {
                 if (gestureMode === 'ptt') {
                     handlePointerRelease(e);

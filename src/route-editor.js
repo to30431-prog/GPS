@@ -429,73 +429,350 @@ if (clearSearchBtn) {
     };
 }
 
-let historyDragAutoScrollRaf = null;
-let historyDragPointerY = null;
-let historyDragTouchMoveHandler = null;
-let historyDragPointerMoveHandler = null;
+// ==========================================
+// ↕️ 鶯歌清運路線庫：跨平台原生輕量拖曳排序引擎（iOS Safari / WebKit ＋ Android Chrome）
+// - 僅鎖定把柄與拖曳中卡片，完整保留 #historyList 清單原生捲動
+// - 拖曳中僅更新 GPU translate3d 位移與插入指示線（零 DOM 重建卡頓）
+// - 接近清單頂部／底部 64px 邊界自動捲動並同步重算插入落點
+// - 完整監聽 pointerup/pointercancel/touchend/touchcancel/blur/visibilitychange 徹底清理狀態
+// ==========================================
+const historyDragState = {
+    active: false,
+    inputMode: null, // 'touch' | 'pointer'
+    pointerId: null,
+    touchId: null,
+    listEl: null,
+    filteredRoutes: null,
+    draggedCard: null,
+    floatingEl: null,
+    indicatorEl: null,
+    startIndex: -1,
+    targetIndex: -1,
+    startClientY: 0,
+    currentClientY: 0,
+    autoScrollRaf: null,
+    listenersBound: false
+};
+
+function getHistoryCardElements(listEl) {
+    if (!listEl) return [];
+    return Array.from(listEl.children).filter(el => el.classList && el.classList.contains('route-lib-card'));
+}
+
+function updateHistoryDragVisualAndTarget() {
+    if (!historyDragState.active || !historyDragState.listEl || !historyDragState.floatingEl) return;
+
+    const dy = historyDragState.currentClientY - historyDragState.startClientY;
+    historyDragState.floatingEl.style.transform = `translate3d(0, ${Math.round(dy)}px, 0) scale(1.015)`;
+
+    const cards = getHistoryCardElements(historyDragState.listEl);
+    if (cards.length === 0) return;
+
+    const listRect = historyDragState.listEl.getBoundingClientRect();
+    let nextTarget = cards.length;
+    let indicatorY = listRect.bottom - 2;
+
+    for (let i = 0; i < cards.length; i++) {
+        const rect = cards[i].getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (historyDragState.currentClientY < midY) {
+            nextTarget = i;
+            indicatorY = rect.top - 4;
+            break;
+        }
+        indicatorY = rect.bottom + 4;
+    }
+
+    historyDragState.targetIndex = nextTarget;
+
+    if (historyDragState.indicatorEl) {
+        const clampedTop = Math.min(listRect.bottom - 3, Math.max(listRect.top + 1, Math.round(indicatorY)));
+        historyDragState.indicatorEl.style.left = `${Math.round(listRect.left + 12)}px`;
+        historyDragState.indicatorEl.style.width = `${Math.max(40, Math.round(listRect.width - 24))}px`;
+        historyDragState.indicatorEl.style.top = `${clampedTop}px`;
+    }
+}
+
+function startHistoryDragAutoScrollLoop() {
+    if (historyDragState.autoScrollRaf !== null) {
+        cancelAnimationFrame(historyDragState.autoScrollRaf);
+        historyDragState.autoScrollRaf = null;
+    }
+
+    const edgeZonePx = 64;
+    const maxStepPx = 14;
+
+    const tick = () => {
+        if (!historyDragState.active || !historyDragState.listEl || !historyDragState.listEl.isConnected) {
+            historyDragState.autoScrollRaf = null;
+            return;
+        }
+        const listEl = historyDragState.listEl;
+        const rect = listEl.getBoundingClientRect();
+        const y = historyDragState.currentClientY;
+        const distTop = y - rect.top;
+        const distBottom = rect.bottom - y;
+        let scrolled = false;
+
+        if (distTop < edgeZonePx && listEl.scrollTop > 0) {
+            const ratio = Math.min(1, Math.max(0, (edgeZonePx - distTop) / edgeZonePx));
+            const step = Math.max(2, Math.round(ratio * maxStepPx));
+            const nextTop = Math.max(0, listEl.scrollTop - step);
+            if (nextTop !== listEl.scrollTop) {
+                listEl.scrollTop = nextTop;
+                scrolled = true;
+            }
+        } else if (distBottom < edgeZonePx) {
+            const maxScrollTop = Math.max(0, listEl.scrollHeight - listEl.clientHeight);
+            if (listEl.scrollTop < maxScrollTop) {
+                const ratio = Math.min(1, Math.max(0, (edgeZonePx - distBottom) / edgeZonePx));
+                const step = Math.max(2, Math.round(ratio * maxStepPx));
+                const nextTop = Math.min(maxScrollTop, listEl.scrollTop + step);
+                if (nextTop !== listEl.scrollTop) {
+                    listEl.scrollTop = nextTop;
+                    scrolled = true;
+                }
+            }
+        }
+
+        if (scrolled) {
+            updateHistoryDragVisualAndTarget();
+        }
+        historyDragState.autoScrollRaf = requestAnimationFrame(tick);
+    };
+
+    historyDragState.autoScrollRaf = requestAnimationFrame(tick);
+}
+
+function onHistoryDragTouchMove(e) {
+    if (!historyDragState.active || historyDragState.inputMode !== 'touch') return;
+    let matchedTouch = null;
+    if (e.touches && e.touches.length > 0) {
+        for (let i = 0; i < e.touches.length; i++) {
+            if (e.touches[i].identifier === historyDragState.touchId) {
+                matchedTouch = e.touches[i];
+                break;
+            }
+        }
+        if (!matchedTouch) matchedTouch = e.touches[0];
+    }
+    if (!matchedTouch) return;
+    if (e.cancelable) e.preventDefault();
+    historyDragState.currentClientY = matchedTouch.clientY;
+    updateHistoryDragVisualAndTarget();
+}
+
+function onHistoryDragTouchEnd(e) {
+    if (!historyDragState.active || historyDragState.inputMode !== 'touch') return;
+    if (e.changedTouches && historyDragState.touchId !== null) {
+        let matched = false;
+        for (let i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === historyDragState.touchId) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched && e.touches && e.touches.length > 0) return;
+    }
+    finishHistoryCardDrag(e.type === 'touchend');
+}
+
+function onHistoryDragPointerMove(e) {
+    if (!historyDragState.active || historyDragState.inputMode !== 'pointer') return;
+    if (historyDragState.pointerId !== null && e.pointerId !== historyDragState.pointerId) return;
+    if (e.cancelable) e.preventDefault();
+    historyDragState.currentClientY = e.clientY;
+    updateHistoryDragVisualAndTarget();
+}
+
+function onHistoryDragPointerEnd(e) {
+    if (!historyDragState.active || historyDragState.inputMode !== 'pointer') return;
+    if (historyDragState.pointerId !== null && e.pointerId !== historyDragState.pointerId) return;
+    finishHistoryCardDrag(e.type === 'pointerup');
+}
+
+function onHistoryDragInterrupt() {
+    if (historyDragState.active) {
+        finishHistoryCardDrag(false);
+    }
+}
+
+function onHistoryDragVisibilityChange() {
+    if (document.visibilityState === 'hidden' && historyDragState.active) {
+        finishHistoryCardDrag(false);
+    }
+}
+
+function bindHistoryDragGlobalListeners() {
+    if (historyDragState.listenersBound) return;
+    historyDragState.listenersBound = true;
+    window.addEventListener('touchmove', onHistoryDragTouchMove, { passive: false });
+    window.addEventListener('touchend', onHistoryDragTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', onHistoryDragTouchEnd, { passive: true });
+    window.addEventListener('pointermove', onHistoryDragPointerMove, { passive: false });
+    window.addEventListener('pointerup', onHistoryDragPointerEnd, { passive: true });
+    window.addEventListener('pointercancel', onHistoryDragPointerEnd, { passive: true });
+    window.addEventListener('blur', onHistoryDragInterrupt);
+    document.addEventListener('visibilitychange', onHistoryDragVisibilityChange);
+}
+
+function unbindHistoryDragGlobalListeners() {
+    if (!historyDragState.listenersBound) return;
+    historyDragState.listenersBound = false;
+    window.removeEventListener('touchmove', onHistoryDragTouchMove, { passive: false });
+    window.removeEventListener('touchend', onHistoryDragTouchEnd, { passive: true });
+    window.removeEventListener('touchcancel', onHistoryDragTouchEnd, { passive: true });
+    window.removeEventListener('pointermove', onHistoryDragPointerMove, { passive: false });
+    window.removeEventListener('pointerup', onHistoryDragPointerEnd, { passive: true });
+    window.removeEventListener('pointercancel', onHistoryDragPointerEnd, { passive: true });
+    window.removeEventListener('blur', onHistoryDragInterrupt);
+    document.removeEventListener('visibilitychange', onHistoryDragVisibilityChange);
+}
 
 function stopHistoryDragAutoScroll(listEl) {
-    if (historyDragAutoScrollRaf !== null) {
-        cancelAnimationFrame(historyDragAutoScrollRaf);
-        historyDragAutoScrollRaf = null;
+    if (historyDragState.active) {
+        finishHistoryCardDrag(false);
+        return;
     }
-    historyDragPointerY = null;
-    if (historyDragTouchMoveHandler) {
-        window.removeEventListener('touchmove', historyDragTouchMoveHandler, { passive: false });
-        historyDragTouchMoveHandler = null;
+    if (historyDragState.autoScrollRaf !== null) {
+        cancelAnimationFrame(historyDragState.autoScrollRaf);
+        historyDragState.autoScrollRaf = null;
     }
-    if (historyDragPointerMoveHandler) {
-        window.removeEventListener('pointermove', historyDragPointerMoveHandler);
-        historyDragPointerMoveHandler = null;
-    }
+    unbindHistoryDragGlobalListeners();
     if (listEl) {
         listEl.classList.remove('is-sorting-routes');
     }
 }
 
-function startHistoryDragAutoScroll(listEl) {
-    stopHistoryDragAutoScroll(listEl);
-    if (!listEl) return;
-    listEl.classList.add('is-sorting-routes');
+function finishHistoryCardDrag(commitDrop = false) {
+    const wasActive = historyDragState.active;
+    const listEl = historyDragState.listEl;
+    const filteredRoutes = historyDragState.filteredRoutes;
+    const draggedCard = historyDragState.draggedCard;
+    const startIndex = historyDragState.startIndex;
+    const rawTargetIndex = historyDragState.targetIndex;
 
-    historyDragTouchMoveHandler = (e) => {
-        if (e.touches && e.touches.length > 0) {
-            historyDragPointerY = e.touches[0].clientY;
-        }
-        // 拖曳排序時鎖定背景清單原生捲動，避免手指移動與捲動衝突導致卡頓或跳頁
-        if (e.cancelable) {
-            e.preventDefault();
-        }
-    };
-    historyDragPointerMoveHandler = (e) => {
-        if (typeof e.clientY === 'number') {
-            historyDragPointerY = e.clientY;
-        }
-    };
-    window.addEventListener('touchmove', historyDragTouchMoveHandler, { passive: false });
-    window.addEventListener('pointermove', historyDragPointerMoveHandler, { passive: true });
+    historyDragState.active = false;
+    historyDragState.inputMode = null;
+    historyDragState.pointerId = null;
+    historyDragState.touchId = null;
 
-    const edgeZonePx = 68;
-    const maxStepPx = 14;
-    const tick = () => {
-        if (historyDragPointerY !== null && listEl.isConnected) {
-            const rect = listEl.getBoundingClientRect();
-            const distTop = historyDragPointerY - rect.top;
-            const distBottom = rect.bottom - historyDragPointerY;
-            if (distTop < edgeZonePx && listEl.scrollTop > 0) {
-                const ratio = Math.min(1, Math.max(0, (edgeZonePx - distTop) / edgeZonePx));
-                listEl.scrollTop = Math.max(0, listEl.scrollTop - Math.max(2, Math.round(ratio * maxStepPx)));
-            } else if (distBottom < edgeZonePx) {
-                const maxScrollTop = listEl.scrollHeight - listEl.clientHeight;
-                if (listEl.scrollTop < maxScrollTop) {
-                    const ratio = Math.min(1, Math.max(0, (edgeZonePx - distBottom) / edgeZonePx));
-                    listEl.scrollTop = Math.min(maxScrollTop, listEl.scrollTop + Math.max(2, Math.round(ratio * maxStepPx)));
-                }
-            }
+    if (historyDragState.autoScrollRaf !== null) {
+        cancelAnimationFrame(historyDragState.autoScrollRaf);
+        historyDragState.autoScrollRaf = null;
+    }
+    unbindHistoryDragGlobalListeners();
+
+    if (historyDragState.floatingEl && historyDragState.floatingEl.parentNode) {
+        historyDragState.floatingEl.parentNode.removeChild(historyDragState.floatingEl);
+    }
+    if (historyDragState.indicatorEl && historyDragState.indicatorEl.parentNode) {
+        historyDragState.indicatorEl.parentNode.removeChild(historyDragState.indicatorEl);
+    }
+    historyDragState.floatingEl = null;
+    historyDragState.indicatorEl = null;
+
+    if (draggedCard) {
+        draggedCard.classList.remove('route-card-drag-ghost', 'route-card-drag-unlocked');
+    }
+
+    historyDragState.listEl = null;
+    historyDragState.filteredRoutes = null;
+    historyDragState.draggedCard = null;
+    historyDragState.startIndex = -1;
+    historyDragState.targetIndex = -1;
+
+    if (!wasActive || !commitDrop || !listEl || !Array.isArray(filteredRoutes) || !draggedCard) return;
+
+    const cards = getHistoryCardElements(listEl);
+    if (startIndex < 0 || startIndex >= cards.length || rawTargetIndex < 0) return;
+
+    let finalIndex = rawTargetIndex > startIndex ? rawTargetIndex - 1 : rawTargetIndex;
+    finalIndex = Math.max(0, Math.min(cards.length - 1, finalIndex));
+    if (finalIndex === startIndex) return;
+
+    const fromIdx = filteredRoutes[startIndex]?.originalIdx;
+    const toIdx = filteredRoutes[finalIndex]?.originalIdx;
+    if (fromIdx === undefined || toIdx === undefined) return;
+
+    // 1. 放開後一次性移動 DOM 節點，避免拖曳期間反覆重排
+    const referenceNode = rawTargetIndex < cards.length ? cards[rawTargetIndex] : null;
+    if (referenceNode && referenceNode !== draggedCard) {
+        listEl.insertBefore(draggedCard, referenceNode);
+    } else if (!referenceNode) {
+        listEl.appendChild(draggedCard);
+    }
+
+    // 2. 更新 savedRoutes 與 filteredRoutes 排序陣列並原地同步每張卡片索引
+    const movedItem = savedRoutes.splice(fromIdx, 1)[0];
+    savedRoutes.splice(toIdx, 0, movedItem);
+    const [movedFiltered] = filteredRoutes.splice(startIndex, 1);
+    filteredRoutes.splice(finalIndex, 0, movedFiltered);
+
+    const updatedCards = getHistoryCardElements(listEl);
+    filteredRoutes.forEach((entry, i) => {
+        const syncedIdx = savedRoutes.indexOf(entry.route);
+        entry.originalIdx = syncedIdx;
+        if (updatedCards[i]) {
+            updatedCards[i].dataset.routeIdx = String(syncedIdx);
         }
-        historyDragAutoScrollRaf = requestAnimationFrame(tick);
-    };
-    historyDragAutoScrollRaf = requestAnimationFrame(tick);
+    });
+
+    // 3. 確實儲存最新排序至 localforage
+    localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch((err) => {
+        console.error('[RouteSort] 儲存路線排序失敗:', err);
+        if (typeof showToast === 'function') {
+            showToast('⚠️ 路線排序儲存失敗，請稍後再試');
+        }
+    });
+}
+
+function startHistoryCardDrag({ listEl, filteredRoutes, card, clientY, inputMode, pointerId = null, touchId = null }) {
+    if (!listEl || !card || !Array.isArray(filteredRoutes)) return;
+    if (historyDragState.active) {
+        finishHistoryCardDrag(false);
+    }
+
+    const cards = getHistoryCardElements(listEl);
+    const startIndex = cards.indexOf(card);
+    if (startIndex < 0) return;
+
+    const rect = card.getBoundingClientRect();
+    const floatingEl = card.cloneNode(true);
+    floatingEl.classList.remove('route-card-drag-ghost');
+    floatingEl.classList.add('route-card-drag-fallback', 'route-card-drag-unlocked');
+    floatingEl.style.position = 'fixed';
+    floatingEl.style.left = `${Math.round(rect.left)}px`;
+    floatingEl.style.top = `${Math.round(rect.top)}px`;
+    floatingEl.style.width = `${Math.round(rect.width)}px`;
+    floatingEl.style.height = `${Math.round(rect.height)}px`;
+    floatingEl.style.transform = 'translate3d(0, 0, 0) scale(1.015)';
+    document.body.appendChild(floatingEl);
+
+    const indicatorEl = document.createElement('div');
+    indicatorEl.className = 'route-card-drop-indicator';
+    document.body.appendChild(indicatorEl);
+
+    card.classList.add('route-card-drag-ghost');
+
+    historyDragState.active = true;
+    historyDragState.inputMode = inputMode;
+    historyDragState.pointerId = pointerId;
+    historyDragState.touchId = touchId;
+    historyDragState.listEl = listEl;
+    historyDragState.filteredRoutes = filteredRoutes;
+    historyDragState.draggedCard = card;
+    historyDragState.floatingEl = floatingEl;
+    historyDragState.indicatorEl = indicatorEl;
+    historyDragState.startIndex = startIndex;
+    historyDragState.targetIndex = startIndex;
+    historyDragState.startClientY = clientY;
+    historyDragState.currentClientY = clientY;
+
+    try { vibrate(20); } catch (e) {}
+    bindHistoryDragGlobalListeners();
+    updateHistoryDragVisualAndTarget();
+    startHistoryDragAutoScrollLoop();
 }
 
 function renderHistoryList() {
@@ -636,69 +913,47 @@ function renderHistoryList() {
             const idx = Number(card.dataset.routeIdx);
             if (!isNaN(idx)) uploadRouteToCloud(idx, uploadBtn);
         };
+        const dragHandle = card.querySelector('.drag-handle');
+        if (dragHandle) {
+            dragHandle.addEventListener('contextmenu', (e) => e.preventDefault());
+            dragHandle.addEventListener('selectstart', (e) => e.preventDefault());
+            dragHandle.addEventListener('touchstart', (e) => {
+                if (!e.changedTouches || e.changedTouches.length === 0) return;
+                if (e.touches && e.touches.length > 1) return;
+                if (e.cancelable) e.preventDefault();
+                e.stopPropagation();
+                const touch = e.changedTouches[0];
+                startHistoryCardDrag({
+                    listEl: list,
+                    filteredRoutes,
+                    card,
+                    clientY: touch.clientY,
+                    inputMode: 'touch',
+                    touchId: touch.identifier
+                });
+            }, { passive: false });
+            dragHandle.addEventListener('pointerdown', (e) => {
+                if (e.pointerType === 'touch') return; // 觸控統一由 { passive: false } touchstart/touchmove 接管，相容 iOS Safari 與 Android Chrome
+                if (e.button !== undefined && e.button !== 0) return;
+                if (e.cancelable) e.preventDefault();
+                e.stopPropagation();
+                startHistoryCardDrag({
+                    listEl: list,
+                    filteredRoutes,
+                    card,
+                    clientY: e.clientY,
+                    inputMode: 'pointer',
+                    pointerId: e.pointerId
+                });
+            });
+        }
         list.appendChild(card);
     });
 
-    if (window.sortableInstance) window.sortableInstance.destroy();
-    window.sortableInstance = new Sortable(list, {
-        handle: '.drag-handle',
-        forceFallback: true,
-        fallbackOnBody: true,
-        fallbackTolerance: 3,
-        delay: 120,
-        delayOnTouchOnly: true,
-        touchStartThreshold: 6,
-        animation: 200,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-        scroll: false,
-        ghostClass: 'route-card-drag-ghost',
-        chosenClass: 'route-card-drag-unlocked',
-        dragClass: 'route-card-drag-fallback',
-        fallbackClass: 'route-card-drag-fallback',
-        onChoose: function (evt) {
-            try { vibrate(25); } catch (e) {}
-            if (evt.item) evt.item.classList.add('route-card-drag-unlocked');
-        },
-        onStart: function (evt) {
-            if (evt.originalEvent) {
-                const orig = evt.originalEvent;
-                if (orig.touches && orig.touches.length > 0) {
-                    historyDragPointerY = orig.touches[0].clientY;
-                } else if (typeof orig.clientY === 'number') {
-                    historyDragPointerY = orig.clientY;
-                }
-            }
-            startHistoryDragAutoScroll(list);
-        },
-        onUnchoose: function (evt) {
-            if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
-            stopHistoryDragAutoScroll(list);
-        },
-        onEnd: function (evt) {
-            if (evt.item) evt.item.classList.remove('route-card-drag-unlocked');
-            stopHistoryDragAutoScroll(list);
-            if (evt.oldIndex === evt.newIndex) return;
-            const fromIdx = filteredRoutes[evt.oldIndex]?.originalIdx;
-            const toIdx = filteredRoutes[evt.newIndex]?.originalIdx;
-            if (fromIdx === undefined || toIdx === undefined) return;
-            const movedItem = savedRoutes.splice(fromIdx, 1)[0];
-            savedRoutes.splice(toIdx, 0, movedItem);
-            const [movedFiltered] = filteredRoutes.splice(evt.oldIndex, 1);
-            filteredRoutes.splice(evt.newIndex, 0, movedFiltered);
-
-            // 原地同步每張卡片對應的 savedRoutes 索引，避免放開後整份清單重繪閃跳或捲動跳頁
-            const cardEls = Array.from(list.children);
-            filteredRoutes.forEach((entry, i) => {
-                const syncedIdx = savedRoutes.indexOf(entry.route);
-                entry.originalIdx = syncedIdx;
-                if (cardEls[i]) {
-                    cardEls[i].dataset.routeIdx = String(syncedIdx);
-                }
-            });
-
-            localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
-        }
-    });
+    if (window.sortableInstance) {
+        try { window.sortableInstance.destroy(); } catch (e) {}
+        window.sortableInstance = null;
+    }
 }
 
 document.getElementById('historyBtn').onclick = () => {
@@ -709,7 +964,10 @@ document.getElementById('historyBtn').onclick = () => {
     }
 };
 document.getElementById('closeHistory').onclick = (e) => { 
-    e.stopPropagation(); historyModal.classList.add('hidden'); backToMain(); 
+    e.stopPropagation();
+    stopHistoryDragAutoScroll(document.getElementById('historyList'));
+    historyModal.classList.add('hidden');
+    backToMain(); 
 };
 
 function renderRouteMarkers(route) {

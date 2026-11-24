@@ -965,32 +965,39 @@ input, textarea {
 }
 
 /* ==========================================
-   🔒 鶯歌清運路線庫列表：觸碰拖曳排序滑順化與佔位／浮動樣式
+   🔒 鶯歌清運路線庫列表：跨平台觸控拖曳排序（iOS Safari / Android Chrome）
+   僅在拖曳把柄與拖曳中卡片鎖定 touch-action，完整保留 #historyList 清單原生滑動
    ========================================== */
+#historyList {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+}
+
 .drag-handle {
     touch-action: none !important;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
     min-width: 28px;
     min-height: 36px;
 }
 
-#historyList.is-sorting-routes {
-    touch-action: none !important;
-    overscroll-behavior: contain;
-    user-select: none;
-    -webkit-user-select: none;
-}
-
 .route-card-drag-unlocked {
+    touch-action: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
     box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22), 0 0 0 2px #3b82f6 !important;
     border-color: #3b82f6 !important;
     z-index: 30;
 }
 
 .route-card-drag-ghost {
-    opacity: 0.32 !important;
+    touch-action: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
+    opacity: 0.34 !important;
     border: 2px dashed #3b82f6 !important;
     background: rgba(219, 234, 254, 0.55) !important;
     box-shadow: none !important;
@@ -998,6 +1005,10 @@ input, textarea {
 }
 
 .route-card-drag-fallback {
+    touch-action: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -webkit-touch-callout: none !important;
     opacity: 0.96 !important;
     box-shadow: 0 18px 36px rgba(37, 99, 235, 0.28), 0 0 0 2px #3b82f6 !important;
     border-color: #3b82f6 !important;
@@ -1005,6 +1016,39 @@ input, textarea {
     pointer-events: none !important;
     z-index: 9999 !important;
     transition: none !important;
+    margin: 0 !important;
+}
+
+.route-card-drop-indicator {
+    position: fixed;
+    height: 3px;
+    border-radius: 9999px;
+    background: #2563eb;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 2px 10px rgba(37, 99, 235, 0.45);
+    pointer-events: none;
+    z-index: 9998;
+    transition: top 0.06s linear;
+}
+
+.route-card-drop-indicator::before,
+.route-card-drop-indicator::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: #2563eb;
+    border: 2px solid #ffffff;
+    transform: translateY(-50%);
+}
+
+.route-card-drop-indicator::before {
+    left: -4px;
+}
+
+.route-card-drop-indicator::after {
+    right: -4px;
 }
 
 /* ==========================================

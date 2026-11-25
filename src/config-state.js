@@ -850,12 +850,28 @@ function ensureRoutesHaveRouteId(routes) {
 }
 
 function persistSavedRoutesToStorage() {
+    let routesToPersist = savedRoutes;
+    if (
+        typeof isEditingMode !== 'undefined' &&
+        isEditingMode &&
+        typeof isReviewingPendingMode !== 'undefined' &&
+        !isReviewingPendingMode &&
+        typeof originalRouteSnapshot !== 'undefined' &&
+        originalRouteSnapshot &&
+        typeof selectedRouteIdx === 'number' &&
+        selectedRouteIdx >= 0 &&
+        selectedRouteIdx < savedRoutes.length
+    ) {
+        routesToPersist = savedRoutes.map((r, idx) =>
+            idx === selectedRouteIdx ? JSON.parse(JSON.stringify(originalRouteSnapshot)) : r
+        );
+    }
     try {
-        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(savedRoutes));
+        localStorage.setItem('yinggeCleanRoutes_v2', JSON.stringify(routesToPersist));
     } catch (e) {}
     const countEl = document.getElementById('historyCount');
-    if (countEl) countEl.innerText = savedRoutes.length;
-    return localforage.setItem('yinggeCleanRoutes_v2', savedRoutes).catch(() => {});
+    if (countEl) countEl.innerText = routesToPersist.length;
+    return localforage.setItem('yinggeCleanRoutes_v2', routesToPersist).catch(() => {});
 }
 
 // 🧹 自動去重過濾器：清除名稱與距離重複或同 ID／同名的重複路線，保留 routeVersion 較高或 updatedAt 較新的那一筆，並保留原排序位置與本機 id

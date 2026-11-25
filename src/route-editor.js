@@ -829,9 +829,9 @@ function renderHistoryList() {
     stopHistoryDragAutoScroll(list);
     list.innerHTML = '';
 
-    // 每次讀取並渲染「鶯歌清運路線庫」本機清單時，自動執行去重過濾並寫回儲存空間清除重複殘留
+    // 每次讀取並渲染「鶯歌清運路線庫」本機清單時，自動執行去重過濾並寫回儲存空間清除重複殘留（編輯模式下禁止自動覆寫儲存）
     if (typeof deduplicateSavedRoutes === 'function') {
-        deduplicateSavedRoutes(true);
+        deduplicateSavedRoutes(!isEditingMode);
     }
 
     if (typeof syncRouteUpdateBadgesAndAllBar === 'function') {
@@ -1122,12 +1122,28 @@ if (detailUploadCloudBtnEl) {
 // ==========================================
 // 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 引線備忘框 ＋ 10步Undo）
 // ==========================================
-let isEditingMode = false, originalEventsBackup = [], originalPointsBackup = [], originalCalloutsBackup = [];
+let isEditingMode = false, originalRouteSnapshot = null, originalEventsBackup = [], originalPointsBackup = [], originalCalloutsBackup = [];
 let editStep = 0, editStartIndex = -1, tempMarkerA = null;
 let editSubMode = 'path', pathEditMarkers = [];
 let selectedEditNodeIdx = -1;
 let activeDraggingEditNodeIdx = -1;
 let lastEditNodeDragEndTime = 0;
+
+function restoreOriginalRouteFromEditSnapshot() {
+    if (selectedRouteIdx < 0 || selectedRouteIdx >= savedRoutes.length || !savedRoutes[selectedRouteIdx]) {
+        originalRouteSnapshot = null;
+        return null;
+    }
+    if (originalRouteSnapshot) {
+        savedRoutes[selectedRouteIdx] = JSON.parse(JSON.stringify(originalRouteSnapshot));
+    } else {
+        savedRoutes[selectedRouteIdx].events = JSON.parse(JSON.stringify(originalEventsBackup || []));
+        savedRoutes[selectedRouteIdx].points = JSON.parse(JSON.stringify(originalPointsBackup || []));
+        savedRoutes[selectedRouteIdx].callouts = JSON.parse(JSON.stringify(originalCalloutsBackup || []));
+    }
+    originalRouteSnapshot = null;
+    return savedRoutes[selectedRouteIdx];
+}
 
 // 📌 引線備忘框（Callout Annotation）暫存狀態
 let pendingCalloutAnchorLngLat = null;
@@ -3171,17 +3187,24 @@ document.getElementById('editRouteBtn').onclick = () => {
     freehandSpliceStartIdx = -1;
     freehandDraftCoords = [];
     if (!Array.isArray(route.callouts)) route.callouts = [];
-    originalEventsBackup = JSON.parse(JSON.stringify(route.events || [])); 
-    originalPointsBackup = JSON.parse(JSON.stringify(route.points || [])); 
+
+    // 進入編輯模式前建立整份路線物件的完整深拷貝快照（含 points、distance、events、callouts、routeVersion、updatedAt、date、timeStr 等）
+    originalRouteSnapshot = JSON.parse(JSON.stringify(route));
+    originalEventsBackup = JSON.parse(JSON.stringify(route.events || []));
+    originalPointsBackup = JSON.parse(JSON.stringify(route.points || []));
     originalCalloutsBackup = JSON.parse(JSON.stringify(route.callouts || []));
+
+    // 以獨立深拷貝副本作為編輯期間的工作物件，確保任何拖曳或增刪節點皆不會污染原始快照
+    savedRoutes[selectedRouteIdx] = JSON.parse(JSON.stringify(originalRouteSnapshot));
+    const workingRoute = savedRoutes[selectedRouteIdx];
 
     document.getElementById('routeDetailUI').classList.add('hidden');
     document.getElementById('editRouteBar').classList.remove('hidden');
-    document.getElementById('appStatusTitle').innerText = `編輯：${route.name}`;
+    document.getElementById('appStatusTitle').innerText = `編輯：${workingRoute.name}`;
 
     ensureEditorMapZoomEnabled();
     setEditSubMode('path');
-    renderEditableRouteMarkers(route);
+    renderEditableRouteMarkers(workingRoute);
 };
 
 function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
@@ -4761,6 +4784,7 @@ window.handleRouteAction = function(action) {
 
 document.getElementById('saveEditBtn').onclick = () => {
     isEditingMode = false;
+    originalRouteSnapshot = null;
     selectedEditNodeIdx = -1;
     activeDraggingEditNodeIdx = -1;
     clearPathEditMarkers();
@@ -4822,12 +4846,11 @@ document.getElementById('cancelEditBtn').onclick = () => {
     ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     document.getElementById('editRouteBar').classList.add('hidden');
-    
-    savedRoutes[selectedRouteIdx].events = originalEventsBackup;
-    savedRoutes[selectedRouteIdx].points = originalPointsBackup;
-    savedRoutes[selectedRouteIdx].callouts = originalCalloutsBackup;
-    syncRouteMarkersAndIndicesAfterSpline(savedRoutes[selectedRouteIdx]);
-    
+
+    // 徹底放棄本次編輯期間的所有修改，將記憶體與本機儲存完整還原回進入編輯前的原始深拷貝快照（嚴禁呼叫 syncRouteMarkersAndIndicesAfterSpline 重算或覆寫）
+    restoreOriginalRouteFromEditSnapshot();
+    persistSavedRoutesToStorage();
+
     document.getElementById('topBackBtn').classList.remove('hidden');
     window.openRouteDetail(selectedRouteIdx);
 };
@@ -4894,7 +4917,11 @@ function backToMain() {
         clearInterval(window.tacticalTimer);
         window.tacticalTimer = null;
     }
+    if (isEditingMode && !isReviewingPendingMode) {
+        restoreOriginalRouteFromEditSnapshot();
+    }
     isEditingMode = false;
+    originalRouteSnapshot = null;
     isReviewingPendingMode = false;
     reviewingPendingId = null;
     targetRouteId = null;
@@ -4906,10 +4933,12 @@ function backToMain() {
     selectedEditNodeIdx = -1;
     activeDraggingEditNodeIdx = -1;
     clearPathEditMarkers();
+    clearPendingCalloutAnchor();
     cancelActiveFreehandStroke(true);
     freehandUndoStack = [];
     updateUndoFreehandBtnUI();
     updateNodeTrimPanelUI(null);
+    if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     try { map.dragPan.enable(); } catch (e) {}
     ensureEditorMapZoomEnabled();
     isManualDrawingMode = false;
@@ -4946,6 +4975,10 @@ function backToMain() {
 document.getElementById('topBackBtn').onclick = (e) => {
     if (isReviewingPendingMode) {
         exitPendingReviewMode(true);
+        return;
+    }
+    if (isEditingMode) {
+        document.getElementById('cancelEditBtn')?.click();
         return;
     }
     if (!document.getElementById('playbackUI').classList.contains('hidden')) {

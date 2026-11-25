@@ -2130,27 +2130,18 @@ function renderPathEditNodes(route) {
             pushEditUndoSnapshot(route);
 
             const inheritedMusic = Boolean(ptA.musicActive);
-            let newSelectedIdx;
-            if (idxB - idxA > 1) {
-                // 若兩關鍵點之間已有細分點，直接將中位點升級為關鍵轉折點並移至幾何中點
-                const midIdx = Math.floor((idxA + idxB) / 2);
-                pts[midIdx].lng = midLng;
-                pts[midIdx].lat = midLat;
-                pts[midIdx].isKeyNode = true;
-                newSelectedIdx = midIdx;
-            } else {
-                const newPt = {
-                    lng: midLng,
-                    lat: midLat,
-                    time: Date.now(),
-                    musicActive: inheritedMusic,
-                    music: inheritedMusic,
-                    bearing: ptA.bearing || 0,
-                    isKeyNode: true
-                };
-                pts.splice(idxA + 1, 0, newPt);
-                newSelectedIdx = idxA + 1;
-            }
+            const newPt = {
+                lng: midLng,
+                lat: midLat,
+                time: Date.now(),
+                musicActive: inheritedMusic,
+                music: inheritedMusic,
+                bearing: ptA.bearing || 0,
+                isKeyNode: true
+            };
+            const insertAtIdx = idxA + 1;
+            pts.splice(insertAtIdx, 0, newPt);
+            const newSelectedIdx = insertAtIdx;
 
             selectedEditNodeIdx = newSelectedIdx;
             isNodeTrimDrawerExpanded = false;
@@ -2214,26 +2205,14 @@ function renderPathEditNodes(route) {
             .addTo(map);
         m._ptIdx = ptIdx;
 
-        let dragOrigNodeLng = pt.lng;
-        let dragOrigNodeLat = pt.lat;
-        let dragLocalWindowOrig = null;
-        let dragAffectedMinIdx = prevKeyIdx;
-        let dragAffectedMaxIdx = nextKeyIdx;
-        let dragPrev1Dense = false;
-        let dragPrev2Dense = false;
-        let dragNext1Dense = false;
-        let dragNext2Dense = false;
-
         m.on('dragstart', () => {
             // 嚴格鎖定單一拖曳頂點：若已有另一顆頂點正在拖曳中，禁止中途切換或搶走焦點
             if (activeDraggingEditNodeIdx !== -1 && activeDraggingEditNodeIdx !== ptIdx) return;
             activeDraggingEditNodeIdx = ptIdx;
             pushEditUndoSnapshot(route);
             selectedEditNodeIdx = ptIdx;
-            dragOrigNodeLng = pt.lng;
-            dragOrigNodeLat = pt.lat;
 
-            // 暫時停用其餘鄰近節點的 pointer-events，避免手指滑過相鄰節點（如 #680/#681/#682）時誤搶焦點
+            // 暫時停用其餘鄰近節點的 pointer-events，避免手指滑過相鄰節點時誤搶焦點
             pathEditMarkers.forEach(otherM => {
                 if (otherM !== m) {
                     try {
@@ -2243,49 +2222,6 @@ function renderPathEditNodes(route) {
                 }
             });
 
-            // 記錄受影響局部範圍原始座標（含前後關鍵區段與相鄰 1～2 個頂點）
-            dragAffectedMinIdx = Math.max(0, Math.min(prevKeyIdx, ptIdx - 2));
-            dragAffectedMaxIdx = Math.min(pts.length - 1, Math.max(nextKeyIdx, ptIdx + 2));
-            dragLocalWindowOrig = new Map();
-            for (let k = dragAffectedMinIdx; k <= dragAffectedMaxIdx; k++) {
-                if (pts[k]) {
-                    dragLocalWindowOrig.set(k, { lng: pts[k].lng, lat: pts[k].lat });
-                }
-            }
-
-            // 判斷前後 1～2 個相鄰頂點是否屬於「相鄰點距 < 15 公尺」的密集軌跡段
-            // （僅密集段啟用鄰點微幅平滑防 V 字折角；點距 >= 15m 的手繪轉折點保持原折角不強行拉圓）
-            const DENSE_NEIGHBOR_MAX_METERS = 15;
-            dragPrev1Dense = false;
-            dragPrev2Dense = false;
-            dragNext1Dense = false;
-            dragNext2Dense = false;
-
-            if (ptIdx - 1 > 0 && pts[ptIdx - 1] && !pts[ptIdx - 1].is_stop) {
-                const dPrev1 = getDistanceKm(pt.lng, pt.lat, pts[ptIdx - 1].lng, pts[ptIdx - 1].lat) * 1000;
-                if (dPrev1 < DENSE_NEIGHBOR_MAX_METERS) {
-                    dragPrev1Dense = true;
-                    if (ptIdx - 2 > 0 && pts[ptIdx - 2] && !pts[ptIdx - 2].is_stop) {
-                        const dPrev2 = getDistanceKm(pts[ptIdx - 1].lng, pts[ptIdx - 1].lat, pts[ptIdx - 2].lng, pts[ptIdx - 2].lat) * 1000;
-                        if (dPrev2 < DENSE_NEIGHBOR_MAX_METERS) {
-                            dragPrev2Dense = true;
-                        }
-                    }
-                }
-            }
-            if (ptIdx + 1 < pts.length - 1 && pts[ptIdx + 1] && !pts[ptIdx + 1].is_stop) {
-                const dNext1 = getDistanceKm(pt.lng, pt.lat, pts[ptIdx + 1].lng, pts[ptIdx + 1].lat) * 1000;
-                if (dNext1 < DENSE_NEIGHBOR_MAX_METERS) {
-                    dragNext1Dense = true;
-                    if (ptIdx + 2 < pts.length - 1 && pts[ptIdx + 2] && !pts[ptIdx + 2].is_stop) {
-                        const dNext2 = getDistanceKm(pts[ptIdx + 1].lng, pts[ptIdx + 1].lat, pts[ptIdx + 2].lng, pts[ptIdx + 2].lat) * 1000;
-                        if (dNext2 < DENSE_NEIGHBOR_MAX_METERS) {
-                            dragNext2Dense = true;
-                        }
-                    }
-                }
-            }
-
             // 拖曳時自動收起回迷你小膠囊，確保拖曳微調時視野零遮擋
             isNodeTrimDrawerExpanded = false;
             updateNodeTrimPanelUI(route);
@@ -2294,43 +2230,13 @@ function renderPathEditNodes(route) {
         m.on('drag', () => {
             if (activeDraggingEditNodeIdx !== ptIdx) return;
             const lngLat = m.getLngLat();
-            // 扣除視覺平行偏移量，確保實際寫入 route.points 的座標維持真實道路座標且不跳位
+            // 僅更新被拖曳節點本身的真實座標（扣除視覺平行偏移量），不連動改寫相鄰節點或整段路線形狀
             const newLng = Number((lngLat.lng - initDLng).toFixed(6));
             const newLat = Number((lngLat.lat - initDLat).toFixed(6));
-            const deltaLng = newLng - dragOrigNodeLng;
-            const deltaLat = newLat - dragOrigNodeLat;
 
             pt.lng = newLng;
             pt.lat = newLat;
             pt.isKeyNode = true;
-
-            // 局部平滑位移：合併關鍵區段線性權重與密集段（< 15m）前後 1～2 鄰點防 V 字折角平滑權重
-            if (dragLocalWindowOrig) {
-                for (let idx = dragAffectedMinIdx; idx <= dragAffectedMaxIdx; idx++) {
-                    if (idx === ptIdx) continue;
-                    const orig = dragLocalWindowOrig.get(idx);
-                    if (!orig || !pts[idx]) continue;
-
-                    let spanWeight = 0;
-                    if (idx > prevKeyIdx && idx < ptIdx && ptIdx > prevKeyIdx + 1) {
-                        spanWeight = (idx - prevKeyIdx) / (ptIdx - prevKeyIdx);
-                    } else if (idx > ptIdx && idx < nextKeyIdx && nextKeyIdx > ptIdx + 1) {
-                        spanWeight = (nextKeyIdx - idx) / (nextKeyIdx - ptIdx);
-                    }
-
-                    let denseWeight = 0;
-                    if (idx === ptIdx - 1 && dragPrev1Dense) denseWeight = 0.55;
-                    else if (idx === ptIdx - 2 && dragPrev2Dense) denseWeight = 0.25;
-                    else if (idx === ptIdx + 1 && dragNext1Dense) denseWeight = 0.55;
-                    else if (idx === ptIdx + 2 && dragNext2Dense) denseWeight = 0.25;
-
-                    const weight = Math.max(spanWeight, denseWeight);
-                    if (weight > 0) {
-                        pts[idx].lng = Number((orig.lng + deltaLng * weight).toFixed(6));
-                        pts[idx].lat = Number((orig.lat + deltaLat * weight).toFixed(6));
-                    }
-                }
-            }
 
             updateRouteLayers(route.points, 25);
             if (isNodeTrimDrawerExpanded) {
@@ -2346,16 +2252,15 @@ function renderPathEditNodes(route) {
             if (activeDraggingEditNodeIdx !== ptIdx) return;
             activeDraggingEditNodeIdx = -1;
             lastEditNodeDragEndTime = Date.now();
-            dragLocalWindowOrig = null;
             isNodeTrimDrawerExpanded = false;
-            // 僅執行局部距離與方位角更新，嚴禁二次回彈或重算整條路線
-            updateLocalRouteAfterNodeDrag(route, dragAffectedMinIdx, dragAffectedMaxIdx);
+            // 僅更新被操作節點的局部距離與方位角，不呼叫 OSRM 或吸附邏輯改寫路線形狀
+            updateLocalRouteAfterNodeDrag(route, ptIdx, ptIdx);
             updateRouteLayers(route.points, 0);
             renderPathEditNodes(route);
             updateNodeTrimPanelUI(route);
             const promptEl = document.getElementById('editPromptText');
             if (promptEl) {
-                promptEl.innerText = `✅ 已局部微調節點 #${ptIdx + 1} 位置（總距離 ${route.distance} km）`;
+                promptEl.innerText = `✅ 已更新節點 #${ptIdx + 1} 座標（總距離 ${route.distance} km）`;
             }
         });
 
@@ -2424,7 +2329,7 @@ function renderFreehandSpliceNodes(route) {
     });
 }
 
-// 處理「手繪延伸／剪接」模式下點選舊節點的互動（選取剪接起點 A ➔ 畫線/加點 ➔ 點擊另一舊節點 B 自動剪除舊路徑並替換）
+// 處理「手繪」模式下點選節點的互動（僅切換純手繪插入錨點位置，絕不自動剪除或覆蓋替換既有節點）
 function handleFreehandNodeClick(route, clickedIdx) {
     if (!route || !Array.isArray(route.points)) return;
     const pts = route.points;
@@ -2432,89 +2337,61 @@ function handleFreehandNodeClick(route, clickedIdx) {
     if (!clickedPt) return;
     const promptEl = document.getElementById('editPromptText');
 
-    // 若已選取起點 A 且已畫出新路徑點 (freehandDraftCoords.length >= 2)，此時點擊另一個舊節點 B ➔ 立即剪除 A 與 B 之間的舊路徑並無縫替換！
-    if (freehandSpliceStartIdx !== -1 && freehandSpliceStartIdx !== clickedIdx && freehandDraftCoords.length >= 2) {
-        const endCoord = [Number(clickedPt.lng.toFixed(6)), Number(clickedPt.lat.toFixed(6))];
-        const fullDraft = [...freehandDraftCoords, endCoord];
-        applySpliceBetweenNodes(route, freehandSpliceStartIdx, clickedIdx, fullDraft);
-        freehandSpliceStartIdx = -1;
-        freehandDraftCoords = [];
-        updateFreehandTempLayer([]);
-        renderFreehandSpliceNodes(route);
-        return;
-    }
-
-    // 否則將此舊節點設為新的「延伸／剪接起點」
     freehandSpliceStartIdx = clickedIdx;
-    freehandDraftCoords = [[Number(clickedPt.lng.toFixed(6)), Number(clickedPt.lat.toFixed(6))]];
+    freehandDraftCoords = [];
     updateFreehandTempLayer([]);
     vibrate(25);
     renderFreehandSpliceNodes(route);
 
-    const isEndpoint = (clickedIdx === 0 || clickedIdx === pts.length - 1);
     if (promptEl) {
-        promptEl.innerText = isEndpoint
-            ? `🎯 已選取${clickedIdx === 0 ? '起點 S' : '終點 E'} (#${clickedIdx + 1})！可單指畫線或點擊地圖向外延伸，或連回另一舊節點剪接`
-            : `✂️ 已鎖定舊節點 #${clickedIdx + 1}！請單指畫線（或點擊地圖加點）並連回另一個舊節點即可剪除中間舊路徑`;
+        promptEl.innerText = `🎯 已選取節點 #${clickedIdx + 1} 作為手繪銜接錨點（手繪放開後將直接保留原線條形狀，不覆蓋既有節點）`;
     }
 }
 
-// 執行兩舊節點之間的剪接替換（將 minIdx 與 maxIdx 之間的多餘舊路徑真正刪除並替換為橘色手繪新座標，強制重繪綠線並清空草稿圖層）
-function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
-    if (!route || !Array.isArray(route.points) || !Array.isArray(rawCoords) || rawCoords.length < 2) return;
+// 將純手繪座標線段直接寫入路線（不執行道路吸附 Snap、不呼叫 OSRM、不刪除或覆蓋任何既有路線節點）
+function applyPureFreehandCoordsToRoute(route, anchorIdx, rawCoords) {
+    if (!route || !Array.isArray(route.points) || !Array.isArray(rawCoords) || rawCoords.length === 0) return;
     const pts = route.points;
-    if (startIdx < 0 || endIdx < 0 || startIdx >= pts.length || endIdx >= pts.length || startIdx === endIdx) return;
-
     const preservedStops = pts
         .filter(p => p.is_stop)
         .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
 
     pushEditUndoSnapshot(route);
 
-    // 正確比較起點索引 startIdx 與終點索引 endIdx（若反向選取則自動反轉手繪草稿順向對齊）
-    const isForward = (startIdx <= endIdx);
-    const idxStart = Math.min(startIdx, endIdx);
-    const idxEnd = Math.max(startIdx, endIdx);
+    const validAnchorIdx = (typeof anchorIdx === 'number' && anchorIdx >= 0 && anchorIdx < pts.length)
+        ? anchorIdx
+        : (pts.length - 1);
+    const inheritedMusic = Boolean(pts[validAnchorIdx]?.musicActive);
 
-    const orderedCoords = isForward ? rawCoords.map(c => [Number(c[0]), Number(c[1])]) : rawCoords.map(c => [Number(c[0]), Number(c[1])]).reverse();
-    orderedCoords[0] = [Number(pts[idxStart].lng.toFixed(6)), Number(pts[idxStart].lat.toFixed(6))];
-    const endSnapCoord = [Number(pts[idxEnd].lng.toFixed(6)), Number(pts[idxEnd].lat.toFixed(6))];
-    const lastDrawn = orderedCoords[orderedCoords.length - 1];
-    if (getDistanceKm(lastDrawn[0], lastDrawn[1], endSnapCoord[0], endSnapCoord[1]) * 1000 > 0.5) {
-        orderedCoords.push(endSnapCoord);
-    } else {
-        orderedCoords[orderedCoords.length - 1] = endSnapCoord;
-    }
-
-    const densified = densifyRoadCoordinates(orderedCoords, 5);
-    const inheritedMusic = Boolean(pts[idxStart]?.musicActive);
-    const newSegmentPoints = densified.map(([lng, lat], i) => ({
-        lng: Number(lng),
-        lat: Number(lat),
+    const pureFreehandPoints = rawCoords.map(([lng, lat]) => ({
+        lng: Number(Number(lng).toFixed(6)),
+        lat: Number(Number(lat).toFixed(6)),
         time: Date.now(),
         musicActive: inheritedMusic,
         music: inheritedMusic,
         bearing: 0,
-        isKeyNode: (i === 0 || i === densified.length - 1)
+        isKeyNode: true
     }));
 
-    // 真正刪除主路線座標陣列中 idxStart..idxEnd 的舊節點，替換為新的手繪草稿座標點
-    pts.splice(idxStart, idxEnd - idxStart + 1, ...newSegmentPoints);
+    // 僅在錨點後插入純手繪節點（deleteCount = 0，嚴禁刪除或覆蓋替換任何既有路線節點）
+    const insertPos = (validAnchorIdx === 0 && pts.length > 1)
+        ? 0
+        : (validAnchorIdx + 1);
+    pts.splice(insertPos, 0, ...pureFreehandPoints);
     route.points = pts;
 
-    // 立即重置所有手繪剪修草稿狀態並清空橘色虛線圖層（避免橘色虛線與暫存起終點殘留）
+    freehandSpliceStartIdx = (insertPos === 0)
+        ? 0
+        : Math.min(pts.length - 1, insertPos + pureFreehandPoints.length - 1);
     isFreehandDrawing = false;
     freehandStartIndex = -1;
     freehandStrokeCoords = [];
-    freehandSpliceStartIdx = -1;
     freehandDraftCoords = [];
     updateFreehandTempLayer([]);
 
-    // 重新計算總距離、方位角與標記點索引
-    syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, true);
+    syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, false);
     vibrate([40, 30, 40]);
 
-    // 強制非節流重繪主路線（綠線／藍線／灰線）與清除草稿來源，確保地圖立刻貼合新形狀
     updateRouteLayers(route.points, 0);
     try {
         map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON || emptyGeoJSON());
@@ -2527,7 +2404,6 @@ function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
     renderEditableRouteMarkers(route);
     renderFreehandSpliceNodes(route);
 
-    // 確保手繪模式維持「單指畫線、雙指縮放平移」手勢狀態
     if (isEditingMode && editSubMode === 'freehand') {
         try { map.dragPan.disable(); } catch (e) {}
     }
@@ -2535,71 +2411,16 @@ function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
 
     const promptEl = document.getElementById('editPromptText');
     if (promptEl) {
-        promptEl.innerText = `✅ 已剪除節點 #${idxStart + 1}～#${idxEnd + 1} 舊路徑並無縫替換為新路線！（總距離 ${route.distance} km）`;
+        promptEl.innerText = `✅ 已保留純手繪線條（新增 ${pureFreehandPoints.length} 點，未覆蓋既有節點，總距離 ${route.distance} km）`;
     }
 }
 
-// 執行從頭尾端點向外延伸路線
+function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
+    applyPureFreehandCoordsToRoute(route, startIdx, rawCoords);
+}
+
 function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
-    if (!route || !Array.isArray(route.points) || rawCoords.length < 2) return;
-    const pts = route.points;
-    const preservedStops = pts
-        .filter(p => p.is_stop)
-        .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
-
-    pushEditUndoSnapshot(route);
-
-    const distToHead = anchorIdx;
-    const distToTail = (pts.length - 1) - anchorIdx;
-    const inheritedMusic = Boolean(pts[anchorIdx]?.musicActive);
-
-    if (distToTail <= distToHead) {
-        // 往尾端 (E) 延伸
-        const alignedCoords = [...rawCoords];
-        alignedCoords[0] = [Number(pts[anchorIdx].lng.toFixed(6)), Number(pts[anchorIdx].lat.toFixed(6))];
-        const densified = densifyRoadCoordinates(alignedCoords, 5);
-        const newTailPoints = densified.map(([lng, lat], i) => ({
-            lng,
-            lat,
-            time: Date.now(),
-            musicActive: inheritedMusic,
-            music: inheritedMusic,
-            bearing: 0,
-            isKeyNode: (i === densified.length - 1)
-        }));
-        pts.splice(anchorIdx, pts.length - anchorIdx, ...newTailPoints);
-        freehandSpliceStartIdx = pts.length - 1;
-    } else {
-        // 往開頭 (S) 延伸
-        const reversedCoords = [...rawCoords].reverse();
-        reversedCoords[reversedCoords.length - 1] = [Number(pts[anchorIdx].lng.toFixed(6)), Number(pts[anchorIdx].lat.toFixed(6))];
-        const densified = densifyRoadCoordinates(reversedCoords, 5);
-        const newHeadPoints = densified.map(([lng, lat], i) => ({
-            lng,
-            lat,
-            time: Date.now(),
-            musicActive: inheritedMusic,
-            music: inheritedMusic,
-            bearing: 0,
-            isKeyNode: (i === 0)
-        }));
-        pts.splice(0, anchorIdx + 1, ...newHeadPoints);
-        freehandSpliceStartIdx = 0;
-    }
-
-    const newAnchorPt = pts[freehandSpliceStartIdx];
-    freehandDraftCoords = newAnchorPt ? [[Number(newAnchorPt.lng.toFixed(6)), Number(newAnchorPt.lat.toFixed(6))]] : [];
-
-    syncRouteMarkersAndIndicesAfterSpline(route, preservedStops, false);
-    vibrate([40, 30, 40]);
-    updateRouteLayers(route.points);
-    renderEditableRouteMarkers(route);
-    renderFreehandSpliceNodes(route);
-
-    const promptEl = document.getElementById('editPromptText');
-    if (promptEl) {
-        promptEl.innerText = `✅ 已延伸路線至 ${route.distance} km！可繼續點擊/畫線延伸，或按「↩️ 上一步」復原`;
-    }
+    applyPureFreehandCoordsToRoute(route, anchorIdx, rawCoords);
 }
 
 // ==========================================
@@ -2617,26 +2438,9 @@ function executeDeleteSingleSelectedNode() {
 
     pushEditUndoSnapshot(route);
 
-    // 若為密集軌跡中的關鍵轉折點，找出前後相鄰關鍵點並一併抹平該偏移區段；若為一般點則直接移除該點
-    const keyIndices = computeRouteKeyNodeIndices(pts);
-    const kPos = keyIndices.indexOf(selectedEditNodeIdx);
     const removedNodeNum = selectedEditNodeIdx + 1;
-
-    if (kPos > 0 && kPos < keyIndices.length - 1 && (keyIndices[kPos + 1] - keyIndices[kPos - 1] > 2) && (pts.length > 45)) {
-        const prevIdx = keyIndices[kPos - 1];
-        const nextIdx = keyIndices[kPos + 1];
-        const removeCount = nextIdx - prevIdx - 1;
-        if (pts.length - removeCount >= 2) {
-            pts.splice(prevIdx + 1, removeCount);
-            selectedEditNodeIdx = Math.min(prevIdx, pts.length - 1);
-        } else {
-            pts.splice(selectedEditNodeIdx, 1);
-            selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
-        }
-    } else {
-        pts.splice(selectedEditNodeIdx, 1);
-        selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
-    }
+    pts.splice(selectedEditNodeIdx, 1);
+    selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
 
     syncRouteMarkersAndIndicesAfterSpline(route, null, true);
     vibrate(35);
@@ -2924,9 +2728,9 @@ if (btnUndoFreehand) {
         const pts = route.points;
         const visualPts = computeVisualRightOffsetCoords(pts);
 
-        // 計算與當前編輯路線所有節點的最近距離（同時比對真實座標與視覺偏移座標）
+        // 找出距離起筆處最近的既有節點索引作為陣列插入錨點參考（不吸附、不改動起筆座標）
         let minStartDistM = Infinity;
-        let closestStartIdx = -1;
+        let closestStartIdx = pts.length - 1;
         for (let i = 0; i < pts.length; i++) {
             const dRaw = getDistanceKm(lngLat.lng, lngLat.lat, pts[i].lng, pts[i].lat) * 1000;
             const vPt = visualPts[i] || pts[i];
@@ -2938,15 +2742,9 @@ if (btnUndoFreehand) {
             }
         }
 
-        // 若使用者已先點選了某個舊節點 (freehandSpliceStartIdx)，或手指在路線節點 45 公尺內按下，啟動單指手繪
-        let activeStartIdx = -1;
-        if (minStartDistM <= 45 && closestStartIdx !== -1) {
-            activeStartIdx = closestStartIdx;
-        } else if (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length) {
-            activeStartIdx = freehandSpliceStartIdx;
-        } else {
-            return;
-        }
+        const activeStartIdx = (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length)
+            ? freehandSpliceStartIdx
+            : closestStartIdx;
 
         // 停用單指 dragPan 避免畫面跟著單指跑，同時保留 touchZoomRotate 與 scrollZoom 開啟
         try { map.dragPan.disable(); } catch (e) {}
@@ -2954,14 +2752,8 @@ if (btnUndoFreehand) {
 
         isFreehandDrawing = true;
         freehandStartIndex = activeStartIdx;
-        const snapPt = pts[activeStartIdx];
-
-        if (freehandSpliceStartIdx === activeStartIdx && freehandDraftCoords.length >= 2) {
-            freehandStrokeCoords = [...freehandDraftCoords];
-        } else {
-            freehandStrokeCoords = [[Number(snapPt.lng.toFixed(6)), Number(snapPt.lat.toFixed(6))]];
-        }
-        // 不在 touchstart 當下立刻畫線，待實際單指移動（handleStrokeMove）才渲染橘色草稿，避免雙指落點時間差閃出尖角
+        // 100% 保留使用者實際落筆座標，不自動磁吸至既有路線節點
+        freehandStrokeCoords = [[Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]];
     }
 
     function handleStrokeMove(clientX, clientY) {
@@ -2974,19 +2766,8 @@ if (btnUndoFreehand) {
         const [lastLng, lastLat] = freehandStrokeCoords[freehandStrokeCoords.length - 1];
         const distM = getDistanceKm(lastLng, lastLat, curLng, curLat) * 1000;
 
-        if (distM >= 4) {
-            if (distM > 10) {
-                const steps = Math.ceil(distM / 5);
-                for (let s = 1; s <= steps; s++) {
-                    const t = s / steps;
-                    freehandStrokeCoords.push([
-                        Number((lastLng + (curLng - lastLng) * t).toFixed(6)),
-                        Number((lastLat + (curLat - lastLat) * t).toFixed(6))
-                    ]);
-                }
-            } else {
-                freehandStrokeCoords.push([curLng, curLat]);
-            }
+        if (distM >= 2.5) {
+            freehandStrokeCoords.push([curLng, curLat]);
             updateFreehandTempLayer(freehandStrokeCoords);
         }
     }
@@ -2997,17 +2778,14 @@ if (btnUndoFreehand) {
         restoreFreehandModeMapGestures();
 
         const route = getActiveWorkingRoute();
-        const promptEl = document.getElementById('editPromptText');
         if (!route || !Array.isArray(route.points) || route.points.length < 2 || freehandStrokeCoords.length < 2) {
-            updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
+            updateFreehandTempLayer([]);
             freehandStrokeCoords = [];
             freehandStartIndex = -1;
             return;
         }
 
-        const pts = route.points;
         const startIndex = freehandStartIndex;
-        const [endLng, endLat] = freehandStrokeCoords[freehandStrokeCoords.length - 1];
 
         let strokeLenM = 0;
         for (let i = 1; i < freehandStrokeCoords.length; i++) {
@@ -3018,57 +2796,18 @@ if (btnUndoFreehand) {
         }
         // 最小有效筆畫門檻：移動距離小於 8 公尺視為誤觸自動取消，不修改路線
         if (strokeLenM < EDITOR_FREEHAND_MIN_STROKE_METERS) {
-            updateFreehandTempLayer(freehandDraftCoords.length >= 2 ? freehandDraftCoords : []);
-            freehandStrokeCoords = [];
-            freehandStartIndex = -1;
-            return;
-        }
-
-        // 計算手繪終點與原路線所有節點的最近距離（同時比對真實座標與視覺偏移座標）
-        const visualPts = computeVisualRightOffsetCoords(pts);
-        let minEndDistM = Infinity;
-        let closestEndIdx = -1;
-        for (let i = 0; i < pts.length; i++) {
-            const dRaw = getDistanceKm(endLng, endLat, pts[i].lng, pts[i].lat) * 1000;
-            const vPt = visualPts[i] || pts[i];
-            const dVis = getDistanceKm(endLng, endLat, vPt.lng, vPt.lat) * 1000;
-            const dM = Math.min(dRaw, dVis);
-            if (dM < minEndDistM) {
-                minEndDistM = dM;
-                closestEndIdx = i;
-            }
-        }
-
-        // 情境 A（剪接替換）：終點連回原路線上另一個舊節點（距離 < 45 公尺且非同一點）➔ 自動剪除兩舊節點之間的多餘舊路徑並無縫替換
-        if (minEndDistM < 45 && closestEndIdx !== -1 && closestEndIdx !== startIndex) {
-            const committedStroke = freehandStrokeCoords.slice();
-            freehandStrokeCoords = [];
-            freehandStartIndex = -1;
-            applySpliceBetweenNodes(route, startIndex, closestEndIdx, committedStroke);
-            return;
-        }
-        // 情境 B（頭尾延伸）：從路線頭尾端點附近（前後 6 點內）向外畫線延伸
-        else if (startIndex <= 5 || startIndex >= pts.length - 6) {
-            const committedStroke = freehandStrokeCoords.slice();
-            freehandStrokeCoords = [];
-            freehandStartIndex = -1;
-            applyExtendFromEndpoint(route, startIndex, committedStroke);
             updateFreehandTempLayer([]);
+            freehandStrokeCoords = [];
+            freehandStartIndex = -1;
             return;
         }
-        // 情境 C（分段剪接草稿）：從路線中段某個舊節點畫出新路徑但尚未連回另一舊節點，保留草稿讓使用者可雙指縮放平移後再點選目標舊節點完成剪接
-        else {
-            freehandSpliceStartIdx = startIndex;
-            freehandDraftCoords = [...freehandStrokeCoords];
-            updateFreehandTempLayer(freehandDraftCoords);
-            renderFreehandSpliceNodes(route);
-            if (promptEl) {
-                promptEl.innerText = `✂️ 已從節點 #${startIndex + 1} 畫出新路徑草稿！可雙指縮放後點選路線上另一個舊節點完成剪接替換`;
-            }
-        }
 
+        // 放開手指（touchend / pointerup / mouseup）時：
+        // 不執行道路吸附（Snap）或自動覆蓋替換既有路線節點，直接將手繪座標線段原樣保留為純手繪線條／節點
+        const committedStroke = freehandStrokeCoords.slice();
         freehandStrokeCoords = [];
         freehandStartIndex = -1;
+        applyPureFreehandCoordsToRoute(route, startIndex, committedStroke);
     }
 
     let isMultiTouchGestureActive = false;
@@ -4971,8 +4710,6 @@ function cancelActiveManualFreehandStroke() {
 
 function commitManualFreehandStroke() {
     const rawCoords = manualFreehandStrokeCoords.slice();
-    const wasSnappedToPrevEnd = manualFreehandSnappedToPrevEnd;
-    const prevTailSnapshot = manualFreehandPrevTailCoords.slice();
 
     isManualFreehandStrokeActive = false;
     manualFreehandStrokeCoords = [];
@@ -4989,12 +4726,7 @@ function commitManualFreehandStroke() {
 
     if (!isManualDrawingMode || rawCoords.length < 2) return;
 
-    // 若起點已磁吸對齊前一段終點 E（20 公尺內），執行防折返重疊修剪，確保銜接滑順無毛刺、不打結
-    let finalFreehandCoords = rawCoords;
-    if (wasSnappedToPrevEnd && prevTailSnapshot.length >= 2) {
-        finalFreehandCoords = trimBacktrackingJunctionPoints(rawCoords, prevTailSnapshot);
-        if (finalFreehandCoords.length < 2) return;
-    }
+    const finalFreehandCoords = rawCoords.map(c => [Number(Number(c[0]).toFixed(6)), Number(Number(c[1]).toFixed(6))]);
 
     // 最小有效筆畫門檻（< 8m 視為誤觸或純折返抖動自動取消）
     let strokeMeters = 0;
@@ -5007,24 +4739,19 @@ function commitManualFreehandStroke() {
     if (strokeMeters < MANUAL_FREEHAND_MIN_STROKE_METERS) return;
 
     // 手繪自由畫路線存檔保護：
-    // 嚴禁呼叫 OSRM Map Matching 或任何路網吸附演算法，僅做共線等距細分（直線 100% 維持筆直不扭曲，零偏移）
-    const densified = densifyRoadCoordinates(finalFreehandCoords, 6);
-    if (densified.length < 2) return;
-
-    const endCoord = densified[densified.length - 1];
+    // 嚴禁呼叫 OSRM、道路吸附（Snap）或自動修剪改寫座標，100% 原樣保留使用者手繪座標線段
+    const endCoord = finalFreehandCoords[finalFreehandCoords.length - 1];
     manualDrawSteps.push({
         clickLngLat: endCoord,
         musicActive: manualDrawMusicActive,
-        densifiedCoords: densified,
+        densifiedCoords: finalFreehandCoords,
         usedOsrm: false,
         sourceMode: 'freehand'
     });
 
     vibrate(30);
     if (manualDrawPromptText) {
-        manualDrawPromptText.textContent = wasSnappedToPrevEnd
-            ? '✅ 已磁吸銜接前段終點並轉為軌跡！可繼續補畫或點擊「✅ 儲存」'
-            : '✅ 已轉為路線軌跡！可繼續補畫、按「重畫」清除，或直接儲存';
+        manualDrawPromptText.textContent = '✅ 已原樣保留純手繪線條！可繼續補畫、按「重畫」清除，或直接儲存';
     }
     renderManualDrawPreview();
 }
@@ -5288,37 +5015,13 @@ if (btnManualSave) {
         manualFreehandPrevTailCoords = [];
         manualFreehandIncomingUnitVec = null;
 
-        // 起點自動磁吸接點（Snap to Endpoint）：
-        // 若畫布上已有前一段手繪路線（存在終點 E），落筆位置距離 E 在 20 公尺以內，自動將新線段第 1 點精準吸附對齊至 E
-        const prevEnd = getLastManualDrawEndpoint();
-        if (prevEnd) {
-            const distToPrevEndM = getDistanceKm(prevEnd[0], prevEnd[1], rawStartCoord[0], rawStartCoord[1]) * 1000;
-            if (distToPrevEndM <= FREEHAND_SNAP_ENDPOINT_MAX_METERS) {
-                manualFreehandSnappedToPrevEnd = true;
-                manualFreehandPrevTailCoords = getPreviousManualDrawTailCoords(35);
-                manualFreehandIncomingUnitVec = computeIncomingTailUnitVector(manualFreehandPrevTailCoords);
-                manualFreehandStrokeCoords = [[prevEnd[0], prevEnd[1]]];
-                return true;
-            }
-        }
-
+        // 停用自動磁吸接點：直接以使用者實際落筆座標作為起點，不強制吸附改寫座標
         manualFreehandStrokeCoords = [rawStartCoord];
         return true;
     }
 
     function pushStrokePoint(coord) {
         if (!coord) return;
-        // 接續繪製防折返即時過濾：若已磁吸至前段終點 E，剛開始移動的前幾個點若仍往回重疊在前段尾巴上，直接過濾不加入草稿線
-        if (manualFreehandSnappedToPrevEnd && manualFreehandStrokeCoords.length === 1) {
-            if (isPointBacktrackingOntoPrevTail(
-                coord,
-                manualFreehandStrokeCoords[0],
-                manualFreehandPrevTailCoords,
-                manualFreehandIncomingUnitVec
-            )) {
-                return;
-            }
-        }
         const prev = manualFreehandStrokeCoords[manualFreehandStrokeCoords.length - 1];
         if (!prev || getDistanceKm(prev[0], prev[1], coord[0], coord[1]) * 1000 >= 2.5) {
             manualFreehandStrokeCoords.push(coord);
@@ -5847,8 +5550,8 @@ map.on('click', (e) => {
             promptEl.innerText = `🎯 已選取節點 #${closestNodeIdx + 1}：點擊上方「✂️ #${closestNodeIdx + 1} ▸」可展開修剪抽屜`;
         }
     } else if (editSubMode === 'freehand') {
-        // 「手繪延伸／剪接」模式下點擊地圖：
-        // 1. 若點擊處靠近路線既有節點 (< 30m，含右側平行偏移視覺位置)，視同點選該舊節點（設定剪接起點或完成剪接替換）
+        // 「手繪」模式下點擊地圖：
+        // 1. 若點擊處靠近路線既有節點 (< 28m)，選取該節點為銜接錨點（不刪除或覆蓋既有節點）
         const pts = route.points;
         const visualPts = computeVisualRightOffsetCoords(pts);
         let minDistM = Infinity;
@@ -5869,36 +5572,17 @@ map.on('click', (e) => {
             return;
         }
 
+        // 2. 點擊地圖空白處：直接將該點作為純手繪節點插入，不呼叫 OSRM、不吸附且不覆蓋既有節點
         const clickCoord = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))];
-
-        // 2. 若尚未選取舊節點，或目前選取的是頭尾端點 (0 或 pts.length - 1)，點擊地圖空白處直接從頭尾加點延伸！
-        if (freehandSpliceStartIdx === -1 || freehandSpliceStartIdx === pts.length - 1 || freehandSpliceStartIdx === 0) {
-            let anchorIdx = freehandSpliceStartIdx;
-            if (anchorIdx === -1) {
-                const dHead = getDistanceKm(clickCoord[0], clickCoord[1], pts[0].lng, pts[0].lat);
-                const dTail = getDistanceKm(clickCoord[0], clickCoord[1], pts[pts.length - 1].lng, pts[pts.length - 1].lat);
-                anchorIdx = (dHead < dTail * 0.6) ? 0 : (pts.length - 1);
-            }
-            const anchorPt = pts[anchorIdx];
-            applyExtendFromEndpoint(route, anchorIdx, [
-                [Number(anchorPt.lng.toFixed(6)), Number(anchorPt.lat.toFixed(6))],
-                clickCoord
-            ]);
-            return;
+        let anchorIdx = (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length)
+            ? freehandSpliceStartIdx
+            : -1;
+        if (anchorIdx === -1) {
+            const dHead = getDistanceKm(clickCoord[0], clickCoord[1], pts[0].lng, pts[0].lat);
+            const dTail = getDistanceKm(clickCoord[0], clickCoord[1], pts[pts.length - 1].lng, pts[pts.length - 1].lat);
+            anchorIdx = (dHead < dTail * 0.6) ? 0 : (pts.length - 1);
         }
-
-        // 3. 若已選取某個中段舊節點 A，點擊地圖空白處則依序累積剪接路徑草稿點，待點選另一舊節點 B 時一併剪除替換
-        if (freehandDraftCoords.length === 0) {
-            const startPt = pts[freehandSpliceStartIdx];
-            freehandDraftCoords.push([Number(startPt.lng.toFixed(6)), Number(startPt.lat.toFixed(6))]);
-        }
-        freehandDraftCoords.push(clickCoord);
-        updateFreehandTempLayer(freehandDraftCoords);
-        vibrate(20);
-        const promptEl = document.getElementById('editPromptText');
-        if (promptEl) {
-            promptEl.innerText = `✍️ 已加入新路徑折點（共 ${freehandDraftCoords.length - 1} 點），請再點選路線上另一個舊節點完成剪接替換`;
-        }
+        applyPureFreehandCoordsToRoute(route, anchorIdx, [clickCoord]);
     }
 });
 

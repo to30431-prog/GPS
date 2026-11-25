@@ -541,7 +541,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
     vehicleVisualHeading = currentHeading;
     map.flyTo({
         center: lastKnownLngLat,
-        zoom: 18.5, // 💡 導航專用的超近視角 (數字越大越近，18.5 是最佳實戰比例)
+        zoom: 19.5, // 💡 導航專用的超近巷弄特寫視角（較原 18.5 再放大 +1.0 級）
         pitch: 50,  // 💡 視角稍微傾斜 50 度，看起來更像專業車載 3D 導航
         bearing: initBearing,
         offset: [0, 100],

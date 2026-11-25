@@ -329,7 +329,7 @@ let map = new maplibregl.Map({
     container: 'map',
     style: currentMapLayerPreset.getStyle(),
     center: [121.346, 24.954],
-    zoom: 16, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
+    zoom: 16, maxZoom: 21, bearing: 0, pitch: 0, dragRotate: true, touchZoomRotate: true
 });
 installMapInstanceListenerRecorder(map);
 bindCoreMapInstanceListeners(map);
@@ -629,15 +629,20 @@ function smoothMoveVehicleMarker(targetLngLat, targetHeading, durationMs = 750) 
 // ==========================================
 // 🔍 車速動態縮放（Speed-based Dynamic Zoom，支援管理員動態設定）
 // - 時速 > 60 km/h：平滑拉遠視野（預設 Zoom 14.5）
-// - 時速 < 20 km/h：平滑放大視野（預設 Zoom 17.5）
+// - 時速 < 20 km/h（低速／巷弄區間）：較原級別再放大 +1.0（預設低速 Zoom 18.5，巷弄慢行／遵循導航低速最高平滑放大至 Zoom 19.5）
 // - 時速 20~60 km/h：線性平滑過渡
+// - 自動縮放上限放寬至 DYNAMIC_ZOOM_MAX_LIMIT = 19.5（地圖 maxZoom = 21）
 // - 若管理員關閉「車速動態縮放」，則維持當前地圖縮放倍率不自動變動
 // ==========================================
+const DYNAMIC_ZOOM_MAX_LIMIT = 19.5;
+
 function getDynamicZoomBySpeed(speedKmh) {
     const spd = typeof speedKmh === 'number' && !isNaN(speedKmh) ? Math.max(0, speedKmh) : 0;
     lastRecordedSpeedKmh = spd;
 
-    const lowZoom = Number(systemNavConfig.lowSpeedZoom) || DEFAULT_SYSTEM_CONFIG.lowSpeedZoom;
+    const rawCfgLow = Number(systemNavConfig.lowSpeedZoom) || DEFAULT_SYSTEM_CONFIG.lowSpeedZoom;
+    const lowZoom = Math.min(DYNAMIC_ZOOM_MAX_LIMIT, rawCfgLow === 17.5 ? 18.5 : rawCfgLow);
+    const alleyMaxZoom = Math.min(DYNAMIC_ZOOM_MAX_LIMIT, lowZoom + 1.0);
     const highZoom = Number(systemNavConfig.highSpeedZoom) || DEFAULT_SYSTEM_CONFIG.highSpeedZoom;
 
     if (!systemNavConfig.enableDynamicZoom) {
@@ -648,9 +653,16 @@ function getDynamicZoomBySpeed(speedKmh) {
         return Number(highZoom.toFixed(2));
     }
     if (spd <= 20) {
-        return Number(lowZoom.toFixed(2));
+        // 低速／巷弄區間（0 ~ 20 km/h）：遵循導航或 <= 10 km/h 巷弄慢行放大至 alleyMaxZoom (19.5)，10~20 km/h 平滑過渡至 lowZoom (18.5)
+        const isActiveFollowNav = (typeof followWatchId !== 'undefined' && followWatchId !== null);
+        if (spd <= 10) {
+            return Number((isActiveFollowNav ? alleyMaxZoom : Math.min(DYNAMIC_ZOOM_MAX_LIMIT, lowZoom + 0.5)).toFixed(2));
+        }
+        const alleyFactor = (20 - spd) / 10; // 10km/h -> 1, 20km/h -> 0
+        const peakLowZoom = isActiveFollowNav ? alleyMaxZoom : Math.min(DYNAMIC_ZOOM_MAX_LIMIT, lowZoom + 0.5);
+        return Number((lowZoom + (peakLowZoom - lowZoom) * alleyFactor).toFixed(2));
     }
-    // 20 ~ 60 km/h：由 lowZoom 線性平滑過渡至 highZoom
+    // 20 ~ 60 km/h：由 lowZoom (18.5) 線性平滑過渡至 highZoom (14.5)
     const midFactor = (spd - 20) / 40;
     return Number((lowZoom + (highZoom - lowZoom) * midFactor).toFixed(2));
 }
@@ -1271,6 +1283,7 @@ function rebuildMapInstanceAndRestoreAllState(reason = 'webgl-recovery') {
             style: currentMapLayerPreset.getStyle(),
             center: savedCenter,
             zoom: savedZoom,
+            maxZoom: 21,
             bearing: savedBearing,
             pitch: savedPitch,
             dragRotate: true,

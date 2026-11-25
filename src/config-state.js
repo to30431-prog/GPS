@@ -93,7 +93,7 @@ const DEFAULT_SYSTEM_CONFIG = {
     confirmDistMeters: 45,
     bearingToleranceDeg: 30,
     voiceRate: 1.1,
-    lowSpeedZoom: 17.5,
+    lowSpeedZoom: 18.5,
     highSpeedZoom: 14.5,
     enableDynamicZoom: true,
     showOnlineFleetList: true,
@@ -158,13 +158,17 @@ function normalizeSystemConfig(raw) {
     const rawFestivalTheme = typeof src.festivalTheme === 'string' ? src.festivalTheme.trim() : '';
     const festivalTheme = FESTIVAL_THEMES[rawFestivalTheme] ? rawFestivalTheme : DEFAULT_SYSTEM_CONFIG.festivalTheme;
 
+    // 若雲端或本機舊快取仍為舊預設 17.5，自動升級 +1.0 至 18.5
+    const rawLowZoomNum = Number(src.lowSpeedZoom);
+    const effectiveRawLowZoom = (rawLowZoomNum === 17.5) ? 18.5 : src.lowSpeedZoom;
+
     return {
         radarIntervalSec: clampNum(src.radarIntervalSec, 2, 120, DEFAULT_SYSTEM_CONFIG.radarIntervalSec),
         lookAheadDistMeters: clampNum(src.lookAheadDistMeters, 20, 600, DEFAULT_SYSTEM_CONFIG.lookAheadDistMeters),
         confirmDistMeters: clampNum(src.confirmDistMeters, 10, 200, DEFAULT_SYSTEM_CONFIG.confirmDistMeters),
         bearingToleranceDeg: clampNum(src.bearingToleranceDeg, 5, 180, DEFAULT_SYSTEM_CONFIG.bearingToleranceDeg),
         voiceRate: Number(clampNum(src.voiceRate, 0.8, 1.5, DEFAULT_SYSTEM_CONFIG.voiceRate).toFixed(2)),
-        lowSpeedZoom: Number(clampNum(src.lowSpeedZoom, 12, 21, DEFAULT_SYSTEM_CONFIG.lowSpeedZoom).toFixed(2)),
+        lowSpeedZoom: Number(clampNum(effectiveRawLowZoom, 12, 21.5, DEFAULT_SYSTEM_CONFIG.lowSpeedZoom).toFixed(2)),
         highSpeedZoom: Number(clampNum(src.highSpeedZoom, 10, 20, DEFAULT_SYSTEM_CONFIG.highSpeedZoom).toFixed(2)),
         enableDynamicZoom: typeof src.enableDynamicZoom === 'boolean' ? src.enableDynamicZoom : DEFAULT_SYSTEM_CONFIG.enableDynamicZoom,
         showOnlineFleetList: typeof src.showOnlineFleetList === 'boolean' ? src.showOnlineFleetList : DEFAULT_SYSTEM_CONFIG.showOnlineFleetList,

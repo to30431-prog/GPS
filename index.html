@@ -162,9 +162,14 @@
             <div id="onlineFleetListContainer" class="hidden flex flex-col gap-1.5 items-start"></div>
             <!-- 🛋️ 家具模式專屬：左側串聯按鈕（排在左上角狀態／名稱膠囊下方，垂直排列） -->
             <div id="furnitureLeftConnectControls" class="hidden flex flex-col gap-2 items-start mt-1">
-                <button id="btnFurnitureAutoOsrmConnect" type="button" class="bg-indigo-600/95 hover:bg-indigo-700 backdrop-blur text-white font-extrabold py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-indigo-300/80 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-45 whitespace-nowrap" disabled>
-                    <span>🤖 自動沿路串（OSRM）</span>
-                </button>
+                <div class="flex items-center gap-1.5">
+                    <button id="btnFurnitureAutoOsrmConnect" type="button" class="bg-indigo-600/95 hover:bg-indigo-700 backdrop-blur text-white font-extrabold py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-indigo-300/80 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-45 whitespace-nowrap" disabled title="依目前插針順序進行 OSRM 沿路串接（維持手動順序）">
+                        <span>🤖 自動沿路串（OSRM）</span>
+                    </button>
+                    <button id="btnFurnitureSmartSortConnect" type="button" class="bg-emerald-600/95 hover:bg-emerald-700 backdrop-blur text-white font-extrabold py-2.5 px-3 rounded-2xl text-xs shadow-lg border border-emerald-300/80 active:scale-95 transition-all flex items-center gap-1 disabled:opacity-45 whitespace-nowrap" disabled title="固定起點，依最近鄰（Nearest Neighbor）由近到遠重新排列點位並串接">
+                        <span>⚡ 順排</span>
+                    </button>
+                </div>
                 <button id="btnFurnitureManualConnect" type="button" class="bg-orange-600/95 hover:bg-orange-700 backdrop-blur text-white font-extrabold py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-orange-300/80 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-45 whitespace-nowrap" disabled>
                     <span id="furnitureManualConnectBtnText">✍️ 手動拉線串</span>
                 </button>

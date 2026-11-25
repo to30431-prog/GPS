@@ -242,6 +242,7 @@ function updateFurniturePanelUI() {
     const undoBtn = document.getElementById('btnFurnitureUndoPin');
     const clearBtn = document.getElementById('btnFurnitureClearPins');
     const autoOsrmBtn = document.getElementById('btnFurnitureAutoOsrmConnect');
+    const smartSortBtn = document.getElementById('btnFurnitureSmartSortConnect');
     const manualConnectBtn = document.getElementById('btnFurnitureManualConnect');
     const manualConnectText = document.getElementById('furnitureManualConnectBtnText');
     const routeNavBar = document.getElementById('furnitureRouteNavBar');
@@ -249,6 +250,7 @@ function updateFurniturePanelUI() {
     if (undoBtn) undoBtn.disabled = (pinsCount === 0);
     if (clearBtn) clearBtn.disabled = (pinsCount === 0 && furnitureActiveData.routeCoords.length === 0);
     if (autoOsrmBtn) autoOsrmBtn.disabled = (pinsCount < 1);
+    if (smartSortBtn) smartSortBtn.disabled = (pinsCount < 1);
     if (manualConnectBtn) {
         manualConnectBtn.disabled = (pinsCount < 2);
         if (isFurnitureManualConnecting) {
@@ -1149,59 +1151,89 @@ function normalizeFurnitureHeadingDeg(rawHeading) {
     return ((Math.round(rawHeading) % 360) + 360) % 360;
 }
 
-// 家具模式專屬：兩點間 OSRM driving 道路吸附（強制 continue_straight=true 與台灣靠右 approaches=curb）
+// 家具模式 OSRM 雙軌距離比對門檻：順向抑制迴轉 (路徑A) 若比允許迴轉保底 (路徑B) 多繞超過 400 公尺，即改採路徑B
+const FURNITURE_OSRM_DETOUR_THRESHOLD_M = 400;
+
+function parseFurnitureOsrmRoutePayload(data, startLng, startLat, fallbackHeading) {
+    const routeObj = data?.routes?.[0];
+    const coords = routeObj?.geometry?.coordinates;
+    if (data?.code !== 'Ok' || !Array.isArray(coords) || coords.length < 2) {
+        return null;
+    }
+    const alignedCoords = (typeof startLng === 'number' && typeof startLat === 'number')
+        ? [[startLng, startLat], ...coords.slice(1)]
+        : coords;
+    const distM = (typeof routeObj.distance === 'number' && isFinite(routeObj.distance) && routeObj.distance > 0)
+        ? Number(routeObj.distance)
+        : (computeCoordsDistanceKm(alignedCoords) * 1000);
+    let endHeading = fallbackHeading;
+    if (alignedCoords.length >= 2) {
+        const pPrev = alignedCoords[alignedCoords.length - 2];
+        const pLast = alignedCoords[alignedCoords.length - 1];
+        if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
+            endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
+        }
+    }
+    return { coords: alignedCoords, distM, endHeading };
+}
+
+// 家具模式專屬：兩點間 OSRM driving 雙軌比對（路徑A：continue_straight=true 順向抑制迴轉 vs 路徑B：不強制直行允許迴轉保底，門檻 400 公尺）
 async function fetchFurnitureOsrmSegmentGeometry(lng1, lat1, lng2, lat2, options = {}) {
     const validHeading = normalizeFurnitureHeadingDeg(options?.startHeading);
     const bearingsQuery = validHeading !== null ? `&bearings=${validHeading},45;` : '';
-    const approachCandidates = [
-        options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb',
-        'unrestricted;curb'
+
+    // 1. 請求路徑 B（允許迴轉保底版：不帶 continue_straight=true 與強制航向，取得最短距離 D_最短）
+    const pathBUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
+    const fetchPathBPromise = (async () => {
+        try {
+            const res = await fetchWithTimeout(pathBUrl, {}, 4000);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return parseFurnitureOsrmRoutePayload(data, lng1, lat1, validHeading);
+        } catch (e) {
+            return null;
+        }
+    })();
+
+    // 2. 請求路徑 A（順向抑制迴轉版：補上 continue_straight=true 與起點車頭方位角 bearings，取得順向距離 D_順向）
+    const pathAUrls = [
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb'}${bearingsQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true${bearingsQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true`
     ];
 
-    for (const approachesParam of approachCandidates) {
-        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${approachesParam}${bearingsQuery}`;
+    let routeA = null;
+    for (const osrmUrl of pathAUrls) {
         try {
             const res = await fetchWithTimeout(osrmUrl, {}, 4000);
             if (!res.ok) continue;
             const data = await res.json();
-            const coords = data?.routes?.[0]?.geometry?.coordinates;
-            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
-                let endHeading = validHeading;
-                if (alignedCoords.length >= 2) {
-                    const pPrev = alignedCoords[alignedCoords.length - 2];
-                    const pLast = alignedCoords[alignedCoords.length - 1];
-                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
-                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-                    }
-                }
-                return { coords: alignedCoords, usedOsrm: true, endHeading };
+            const parsed = parseFurnitureOsrmRoutePayload(data, lng1, lat1, validHeading);
+            if (parsed) {
+                routeA = parsed;
+                break;
             }
         } catch (err) {
-            // 單次嘗試失敗或超時，繼續嘗試備援參數
+            // 單次嘗試失敗或超時，繼續嘗試下一組順向參數
         }
     }
 
-    try {
-        const fallbackUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=unrestricted;curb`;
-        const res = await fetchWithTimeout(fallbackUrl, {}, 3500);
-        if (res.ok) {
-            const data = await res.json();
-            const coords = data?.routes?.[0]?.geometry?.coordinates;
-            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-                const alignedCoords = [[lng1, lat1], ...coords.slice(1)];
-                let endHeading = validHeading;
-                if (alignedCoords.length >= 2) {
-                    const pPrev = alignedCoords[alignedCoords.length - 2];
-                    const pLast = alignedCoords[alignedCoords.length - 1];
-                    if (pPrev[0] !== pLast[0] || pPrev[1] !== pLast[1]) {
-                        endHeading = getBearing(pPrev[0], pPrev[1], pLast[0], pLast[1]);
-                    }
-                }
-                return { coords: alignedCoords, usedOsrm: true, endHeading };
-            }
-        }
-    } catch (e) {}
+    const routeB = await fetchPathBPromise;
+
+    // 決策規則：
+    // - 若路徑 A 與路徑 B 皆成功：當 (D_順向 - D_最短) > 400 公尺時採用路徑 B（允許迴轉保底），<= 400 公尺時採用路徑 A（順向不迴轉）
+    // - 若路徑 A 算不出路線（如死巷盡頭 NoRoute），自動退回採用路徑 B
+    if (routeA && routeB) {
+        const detourDiffM = routeA.distM - routeB.distM;
+        const chosen = (detourDiffM > FURNITURE_OSRM_DETOUR_THRESHOLD_M) ? routeB : routeA;
+        return { coords: chosen.coords, usedOsrm: true, endHeading: chosen.endHeading };
+    }
+    if (routeA) {
+        return { coords: routeA.coords, usedOsrm: true, endHeading: routeA.endHeading };
+    }
+    if (routeB) {
+        return { coords: routeB.coords, usedOsrm: true, endHeading: routeB.endHeading };
+    }
 
     return {
         coords: [[lng1, lat1], [lng2, lat2]],
@@ -1281,90 +1313,15 @@ async function resolveVehicleOriginForFurnitureOsrm() {
     return { lng: Number(p0.lng.toFixed(6)), lat: Number(p0.lat.toFixed(6)), heading: null, source: 'first_pin' };
 }
 
-// 兩階段多途經點 OSRM 順向靠右規劃：
-// - 第一階段：先以無限制距離（不帶 curb 與 continue_straight）重排 #1～#N 順路順序並計算無限制基準距離
-// - 第二階段：以排好順序套用 continue_straight=true 與 approaches=unrestricted;curb;curb... 實現台灣右側靠停，並設有死胡同距離暴增（超過 1.35 倍）自動放寬 curb 的保底機制
+// 家具模式多點分段 OSRM 雙軌距離比對規劃（維持原本分段拆解架構，每段獨立進行「路徑A 順向不迴轉 vs 路徑B 允許迴轉保底」之 400 公尺繞路門檻決策）：
 async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     if (!Array.isArray(waypoints) || waypoints.length < 2) {
-        return waypoints.map(w => [w.lng, w.lat]);
+        return (waypoints || []).map(w => [w.lng, w.lat]);
     }
 
-    const coordStr = waypoints.map(w => `${w.lng},${w.lat}`).join(';');
     const validHeading = normalizeFurnitureHeadingDeg(originHeading);
-    // 第 1 個點帶入 ${Math.round(heading)},45，其餘插針點全部留空（例如 bearings=180,45;;...）
-    const bearingsParam = validHeading !== null
-        ? `&bearings=${[`${validHeading},45`, ...waypoints.slice(1).map(() => '')].join(';')}`
-        : '';
 
-    // 先取得第一階段無限制基準路线與距離（不帶 curb 與 continue_straight），作為死胡同距離暴增 1.35 倍比較基準與保底路線
-    const unrestrictedUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
-    let baselineUnrestrictedCoords = null;
-    let baselineUnrestrictedDistM = 0;
-    try {
-        const baseRes = await fetchWithTimeout(unrestrictedUrl, {}, 6000);
-        if (baseRes.ok) {
-            const baseData = await baseRes.json();
-            const r0 = baseData?.routes?.[0];
-            if (baseData?.code === 'Ok' && Array.isArray(r0?.geometry?.coordinates) && r0.geometry.coordinates.length >= 2) {
-                baselineUnrestrictedCoords = r0.geometry.coordinates;
-                baselineUnrestrictedDistM = Number(r0.distance) || (computeCoordsDistanceKm(baselineUnrestrictedCoords) * 1000);
-            }
-        }
-    } catch (e) {}
-
-    // 第二階段：套用 continue_straight=true 與 approaches=unrestricted;curb;curb...（以及全 curb）實現台灣右側順向靠停
-    const originUnrestrictedApproaches = ['unrestricted', ...waypoints.slice(1).map(() => 'curb')].join(';');
-    const allCurbApproaches = waypoints.map(() => 'curb').join(';');
-    const stage2CurbUrls = [
-        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}${bearingsParam}`,
-        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${allCurbApproaches}${bearingsParam}`,
-        `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true&approaches=${originUnrestrictedApproaches}`
-    ];
-
-    for (const osrmUrl of stage2CurbUrls) {
-        try {
-            const res = await fetchWithTimeout(osrmUrl, {}, 6500);
-            if (!res.ok) continue;
-            const data = await res.json();
-            const routeObj = data?.routes?.[0];
-            const coords = routeObj?.geometry?.coordinates;
-            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-                const curbDistM = Number(routeObj.distance) || (computeCoordsDistanceKm(coords) * 1000);
-                // 死胡同距離暴增保底機制：若套用 curb 後總距離超過無限制基準距離的 1.35 倍（且多繞超過 250m），代表遇到死巷或單向封閉強迫大繞遠路，自動放寬 curb
-                if (
-                    baselineUnrestrictedDistM > 50 &&
-                    curbDistM > baselineUnrestrictedDistM * 1.35 &&
-                    (curbDistM - baselineUnrestrictedDistM) > 250
-                ) {
-                    continue;
-                }
-                return densifyRoadCoordinates(coords, 8);
-            }
-        } catch (e) {}
-    }
-
-    // 保底放寬機制：若死胡同導致 curb 距離暴增超過 1.35 倍，優先退回僅帶 continue_straight=true（放寬 curb）或第一階段無限制順路路線
-    try {
-        const relaxedCurbUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&continue_straight=true`;
-        const res = await fetchWithTimeout(relaxedCurbUrl, {}, 6000);
-        if (res.ok) {
-            const data = await res.json();
-            const r0 = data?.routes?.[0];
-            const coords = r0?.geometry?.coordinates;
-            if (data?.code === 'Ok' && Array.isArray(coords) && coords.length >= 2) {
-                const relaxedDistM = Number(r0.distance) || (computeCoordsDistanceKm(coords) * 1000);
-                if (!baselineUnrestrictedDistM || relaxedDistM <= baselineUnrestrictedDistM * 1.35) {
-                    return densifyRoadCoordinates(coords, 8);
-                }
-            }
-        }
-    } catch (e) {}
-
-    if (baselineUnrestrictedCoords && baselineUnrestrictedCoords.length >= 2) {
-        return densifyRoadCoordinates(baselineUnrestrictedCoords, 8);
-    }
-
-    // 最終分段備援
+    // 依序逐段拆解計算：每段皆攜帶前一段抵達時的真實車頭航向 rollingHeading，並執行「路徑A (continue_straight=true + bearings) vs 路徑B (無強制直行)」雙軌 400 公尺門檻比對
     const combinedCoords = [[waypoints[0].lng, waypoints[0].lat]];
     let rollingHeading = validHeading;
     for (let i = 0; i < waypoints.length - 1; i++) {
@@ -1385,8 +1342,59 @@ async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     return combinedCoords;
 }
 
+// ⚡ 獨立前置排序函式：固定起點（第一點／當前出發點），將後續點位依最近鄰（Nearest Neighbor）由近到遠重新排列
+function sortFurniturePinsByNearestNeighbor(pins, origin = null) {
+    if (!Array.isArray(pins) || pins.length <= 1) {
+        return Array.isArray(pins) ? [...pins] : [];
+    }
+
+    const remainingPins = [...pins];
+    const orderedPins = [];
+
+    // 若有即時出發點 (origin) 且距離第一點 >= 12m，以當前出發點為固定起點依序找最近鄰；否則固定第一支插針 (pins[0]) 為起點排列後續點位
+    const useOriginAsAnchor = Boolean(
+        origin &&
+        typeof origin.lng === 'number' &&
+        typeof origin.lat === 'number' &&
+        (origin.source === 'gps' || origin.source === 'vehicle_marker') &&
+        (getDistanceKm(origin.lng, origin.lat, remainingPins[0].lng, remainingPins[0].lat) * 1000 >= 12)
+    );
+
+    let curLng;
+    let curLat;
+    if (useOriginAsAnchor) {
+        curLng = origin.lng;
+        curLat = origin.lat;
+    } else {
+        const firstPin = remainingPins.shift();
+        orderedPins.push(firstPin);
+        curLng = firstPin.lng;
+        curLat = firstPin.lat;
+    }
+
+    while (remainingPins.length > 0) {
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < remainingPins.length; i++) {
+            const dKm = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
+            if (dKm < bestDist) {
+                bestDist = dKm;
+                bestIdx = i;
+            }
+        }
+        const nextPin = remainingPins.splice(bestIdx, 1)[0];
+        orderedPins.push(nextPin);
+        curLng = nextPin.lng;
+        curLat = nextPin.lat;
+    }
+
+    return orderedPins;
+}
+
 let isFurnitureOsrmBusy = false;
-document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click', async () => {
+
+async function executeFurnitureOsrmConnect(options = {}) {
+    const shouldSortNearestNeighbor = Boolean(options?.sortNearestNeighbor);
     if (isFurnitureOsrmBusy) return;
     if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 1) return;
 
@@ -1395,80 +1403,38 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
     }
 
     isFurnitureOsrmBusy = true;
-    const btn = document.getElementById('btnFurnitureAutoOsrmConnect');
-    const origHtml = btn ? btn.innerHTML : '';
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
+    const autoBtn = document.getElementById('btnFurnitureAutoOsrmConnect');
+    const sortBtn = document.getElementById('btnFurnitureSmartSortConnect');
+    const origAutoHtml = autoBtn ? autoBtn.innerHTML : '';
+    const origSortHtml = sortBtn ? sortBtn.innerHTML : '';
+
+    if (autoBtn) autoBtn.disabled = true;
+    if (sortBtn) sortBtn.disabled = true;
+
+    if (shouldSortNearestNeighbor) {
+        if (sortBtn) sortBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>順排中...</span>';
+        showFurnitureToast('⚡ 正在依最近鄰由近到遠順排點位，並進行 OSRM 雙軌比對串接...');
+    } else {
+        if (autoBtn) autoBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
+        showFurnitureToast('🤖 維持目前點位順序，進行 OSRM 順向 vs 400m 繞路門檻雙軌串接...');
     }
-    showFurnitureToast('🤖 第一階段順路排序中，第二階段套用台灣靠右順向停靠...');
 
     try {
         const origin = await resolveVehicleOriginForFurnitureOsrm();
 
-        // 【第一階段】：使用無限制純距離（不帶 curb、continue_straight 或方位角懲罰）重排 #1～#N 順路順序並更新號碼牌，避免最左與最右兩端點位跨區折返
-        const remainingPins = [...furnitureActiveData.pins];
-        const orderedPins = [];
-        let curLng = origin.lng;
-        let curLat = origin.lat;
-
-        // 嘗試先向 OSRM table API 取得無限制純路網距離矩陣（若超時則以純直線距離最近鄰＋2-opt 順路優化）
-        while (remainingPins.length > 0) {
-            let bestIdx = 0;
-            let bestDist = Infinity;
-            for (let i = 0; i < remainingPins.length; i++) {
-                const dKm = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
-                if (dKm < bestDist) {
-                    bestDist = dKm;
-                    bestIdx = i;
-                }
-            }
-            const nextPin = remainingPins.splice(bestIdx, 1)[0];
-            orderedPins.push(nextPin);
-            curLng = nextPin.lng;
-            curLat = nextPin.lat;
+        // 僅在使用者主動點擊「⚡ 順排」時才重新排列 furnitureActiveData.pins；未點擊時完全維持原本手動順序
+        if (shouldSortNearestNeighbor && furnitureActiveData.pins.length >= 2) {
+            furnitureActiveData.pins = sortFurniturePinsByNearestNeighbor(furnitureActiveData.pins, origin);
+            renderAllFurnitureMapElements();
         }
 
-        // 針對排好的 orderedPins 進行無限制距離 2-opt 順路消除交叉折返（確保不會從最左跨區跳到最右再折返）
-        if (orderedPins.length >= 3) {
-            const getPtDist = (aLng, aLat, bLng, bLat) => getDistanceKm(aLng, aLat, bLng, bLat);
-            let improved = true;
-            let pass = 0;
-            while (improved && pass < 12) {
-                improved = false;
-                pass++;
-                for (let i = 0; i < orderedPins.length - 1; i++) {
-                    const prevLng = (i === 0) ? origin.lng : orderedPins[i - 1].lng;
-                    const prevLat = (i === 0) ? origin.lat : orderedPins[i - 1].lat;
-                    for (let k = i + 1; k < orderedPins.length; k++) {
-                        const nextAfterK = (k + 1 < orderedPins.length) ? orderedPins[k + 1] : null;
-                        const currEdgeDist =
-                            getPtDist(prevLng, prevLat, orderedPins[i].lng, orderedPins[i].lat) +
-                            (nextAfterK ? getPtDist(orderedPins[k].lng, orderedPins[k].lat, nextAfterK.lng, nextAfterK.lat) : 0);
-                        const swappedEdgeDist =
-                            getPtDist(prevLng, prevLat, orderedPins[k].lng, orderedPins[k].lat) +
-                            (nextAfterK ? getPtDist(orderedPins[i].lng, orderedPins[i].lat, nextAfterK.lng, nextAfterK.lat) : 0);
-                        if (swappedEdgeDist + 0.002 < currEdgeDist) {
-                            const reversedSeg = orderedPins.slice(i, k + 1).reverse();
-                            orderedPins.splice(i, k - i + 1, ...reversedSeg);
-                            improved = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 更新 #1～#N 號碼牌順序
-        furnitureActiveData.pins = orderedPins;
-        renderAllFurnitureMapElements();
-
-        // 【第二階段】：以第一階段排好的 #1～#N 順路順序，套用 continue_straight=true 與 approaches=unrestricted;curb;curb...（含 1.35 倍死胡同自動放寬保底）
+        const activePins = furnitureActiveData.pins;
         const waypoints = [];
-        const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, orderedPins[0].lng, orderedPins[0].lat) * 1000;
+        const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, activePins[0].lng, activePins[0].lat) * 1000;
         if (distOriginToFirstM >= 12) {
             waypoints.push({ lng: origin.lng, lat: origin.lat, isOrigin: true });
         }
-        orderedPins.forEach(p => {
+        activePins.forEach(p => {
             waypoints.push({ lng: p.lng, lat: p.lat, isOrigin: false });
         });
 
@@ -1483,14 +1449,31 @@ document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click'
 
         renderAllFurnitureMapElements();
         await syncActiveFurnitureToFirebase(false);
-        showFurnitureToast(`✅ 已完成兩階段順路排序與靠右停靠路線（共 ${furnitureActiveData.distanceKm} km）`);
+        showFurnitureToast(
+            shouldSortNearestNeighbor
+                ? `⚡ 已完成最近鄰順排與 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
+                : `✅ 已依目前順序完成 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
+        );
     } finally {
         isFurnitureOsrmBusy = false;
-        if (btn) {
-            btn.innerHTML = origHtml;
-            btn.disabled = (furnitureActiveData.pins.length < 1);
+        const hasPins = Array.isArray(furnitureActiveData.pins) && furnitureActiveData.pins.length >= 1;
+        if (autoBtn) {
+            autoBtn.innerHTML = origAutoHtml;
+            autoBtn.disabled = !hasPins;
+        }
+        if (sortBtn) {
+            sortBtn.innerHTML = origSortHtml;
+            sortBtn.disabled = !hasPins;
         }
     }
+}
+
+document.getElementById('btnFurnitureAutoOsrmConnect')?.addEventListener('click', () => {
+    executeFurnitureOsrmConnect({ sortNearestNeighbor: false });
+});
+
+document.getElementById('btnFurnitureSmartSortConnect')?.addEventListener('click', () => {
+    executeFurnitureOsrmConnect({ sortNearestNeighbor: true });
 });
 
 // ==========================================

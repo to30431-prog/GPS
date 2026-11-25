@@ -599,12 +599,112 @@
         syncCalibrationToggleUI();
     }
 
+    function calcPointToSegmentMeters(pLat, pLng, aLat, aLng, bLat, bLng) {
+        const rad = Math.PI / 180;
+        const cosLat = Math.cos(pLat * rad);
+        const metersPerDegLat = 111320;
+        const metersPerDegLng = 111320 * cosLat;
+
+        const px = (pLng - aLng) * metersPerDegLng;
+        const py = (pLat - aLat) * metersPerDegLat;
+        const bx = (bLng - aLng) * metersPerDegLng;
+        const by = (bLat - aLat) * metersPerDegLat;
+
+        const segLenSq = bx * bx + by * by;
+        if (segLenSq <= 1e-6) {
+            return Math.hypot(px, py);
+        }
+        const t = Math.max(0, Math.min(1, (px * bx + py * by) / segLenSq));
+        return Math.hypot(px - t * bx, py - t * by);
+    }
+
+    // 解析測速照相標註之拍攝／行進方向（若非雙向，比對車頭行進方向是否與該相機監控方向一致）
+    function isCameraDirectionCompatible(cam, vehicleHeadingDeg) {
+        if (!cam || typeof vehicleHeadingDeg !== 'number' || isNaN(vehicleHeadingDeg)) return true;
+
+        const explicitBearing = Number(cam.bearing ?? cam.heading);
+        if (isFinite(explicitBearing) && explicitBearing >= 0 && explicitBearing <= 360) {
+            return angularDiffDeg(vehicleHeadingDeg, explicitBearing) <= 45;
+        }
+
+        const dirStr = String(cam.direction || '').trim();
+        if (!dirStr || dirStr.includes('雙向')) return true;
+
+        let targetAzimuth = null;
+        if (dirStr.includes('東北向西南') || dirStr.includes('東北往西南')) targetAzimuth = 225;
+        else if (dirStr.includes('西南向東北') || dirStr.includes('西南往東北')) targetAzimuth = 45;
+        else if (dirStr.includes('西北向東南') || dirStr.includes('西北往東南')) targetAzimuth = 135;
+        else if (dirStr.includes('東南向西北') || dirStr.includes('東南往西北')) targetAzimuth = 315;
+        else if (dirStr.includes('北向南') || dirStr.includes('北往南') || dirStr.includes('往南')) targetAzimuth = 180;
+        else if (dirStr.includes('南向北') || dirStr.includes('南往北') || dirStr.includes('往北')) targetAzimuth = 0;
+        else if (dirStr.includes('西向東') || dirStr.includes('西往東') || dirStr.includes('往東')) targetAzimuth = 90;
+        else if (dirStr.includes('東向西') || dirStr.includes('東往西') || dirStr.includes('往西')) targetAzimuth = 270;
+
+        if (targetAzimuth === null) return true;
+        return angularDiffDeg(vehicleHeadingDeg, targetAzimuth) <= 55;
+    }
+
+    // 取得目前「遵循導航」模式啟用中的路線軌跡（若未處於遵循導航則回傳 null）
+    function getActiveFollowNavigationRoutePoints() {
+        const isFollowNavActive = (typeof followWatchId !== 'undefined' && followWatchId !== null) ||
+            (typeof activeFollowGpsHandler === 'function');
+        if (!isFollowNavActive) return null;
+        if (window.ApproachNav && typeof window.ApproachNav.isActive === 'function' && window.ApproachNav.isActive()) {
+            return null;
+        }
+        const activeRoute = (typeof getActivePlaybackOrFollowRoute === 'function')
+            ? getActivePlaybackOrFollowRoute()
+            : ((typeof savedRoutes !== 'undefined' && typeof selectedRouteIdx === 'number' && savedRoutes[selectedRouteIdx])
+                ? savedRoutes[selectedRouteIdx]
+                : null);
+        if (!activeRoute || !Array.isArray(activeRoute.points) || activeRoute.points.length < 2) {
+            return null;
+        }
+        return activeRoute.points;
+    }
+
+    // 檢查測速相機是否落在目前遵循導航路線的前方路廊（距離導航軌跡 <= 25 公尺內）
+    function isCameraWithinFollowRouteCorridor(cam, routePts) {
+        if (!cam || !Array.isArray(routePts) || routePts.length < 2) return true;
+
+        const curIdx = (typeof window.activeFollowCurrentTrackIndex === 'number' && window.activeFollowCurrentTrackIndex >= 0)
+            ? window.activeFollowCurrentTrackIndex
+            : 0;
+        const startIdx = Math.max(0, curIdx - 2);
+        const maxLookaheadMeters = TRIGGER_DISTANCE_M + 140; // 僅檢查車頭前方約 320m 內的導航路徑段
+        let accumulatedM = 0;
+        let minCorridorDistM = Infinity;
+
+        for (let i = startIdx; i < routePts.length - 1; i++) {
+            const pA = routePts[i];
+            const pB = routePts[i + 1];
+            if (!pA || !pB) continue;
+
+            const dSegM = calcPointToSegmentMeters(
+                cam.lat, cam.lng,
+                Number(pA.lat), Number(pA.lng),
+                Number(pB.lat), Number(pB.lng)
+            );
+            if (dSegM < minCorridorDistM) {
+                minCorridorDistM = dSegM;
+            }
+
+            if (i >= curIdx) {
+                accumulatedM += calcDistanceMeters(Number(pA.lat), Number(pA.lng), Number(pB.lat), Number(pB.lng));
+                if (accumulatedM > maxLookaheadMeters) break;
+            }
+        }
+
+        return minCorridorDistM <= ROUTE_CORRIDOR_MAX_DIST_M;
+    }
+
     function checkSpeedCamerasForPosition(lat, lng, headingDeg, speedKmh = 0, isStationary = false) {
         if (typeof isReplaying !== 'undefined' && isReplaying) return;
         if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
 
         const now = Date.now();
         const hasValidHeading = typeof headingDeg === 'number' && !isNaN(headingDeg);
+        const followRoutePts = getActiveFollowNavigationRoutePoints();
         let closestCandidate = null;
         let closestDistM = Infinity;
 
@@ -617,7 +717,7 @@
                 cameraAlertState.set(cam.id, state);
             }
 
-            // 離開該測速點超過 400 公尺後，重置可再次觸發狀態
+            // 離開該測速點超過 250 公尺後，重置可再次觸發狀態
             if (state.awaitingExit && distM > RESET_DISTANCE_M) {
                 state.awaitingExit = false;
             }
@@ -626,16 +726,24 @@
             if (state.awaitingExit) continue;
             if (state.triggeredAt > 0 && (now - state.triggeredAt) < COOLDOWN_MS) continue;
 
-            // 距離超過 300 公尺不觸發
+            // 1. 市區觸發距離過濾：超過 180 公尺不觸發
             if (distM > TRIGGER_DISTANCE_M) continue;
 
             // 靜止不動或無有效行進方向時不誤報
             if (isStationary || !hasValidHeading || speedKmh < 3) continue;
 
-            // 確認行進方向朝向該測速點（容許誤差 ±60 度）
+            // 2. 車頭正前方窄錐形夾角判定（±25° 以內）＋ 相機拍攝方向比對
             const bearingToCam = calcBearingDeg(lat, lng, cam.lat, cam.lng);
             const angleDiff = angularDiffDeg(headingDeg, bearingToCam);
-            if (angleDiff <= BEARING_TOLERANCE_DEG && distM < closestDistM) {
+            if (angleDiff > BEARING_TOLERANCE_DEG) continue;
+            if (!isCameraDirectionCompatible(cam, headingDeg)) continue;
+
+            // 3. 遵循導航路線路廊優先過濾：若目前處於遵循導航模式，僅允許距離前方導航軌跡 <= 25 公尺內的測速照相觸發
+            if (followRoutePts && !isCameraWithinFollowRouteCorridor(cam, followRoutePts)) {
+                continue;
+            }
+
+            if (distM < closestDistM) {
                 closestDistM = distM;
                 closestCandidate = { cam, state, distM };
             }

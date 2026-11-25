@@ -469,6 +469,207 @@ function updateTacticalDisplay() {
     }
 }
 
+// ==========================================
+// 🔊 遵循導航前方轉彎預先偵測與轉入路名解析（提前約 20 公尺播報「前方20公尺左轉／右轉＋路名」）
+// ==========================================
+const turnRoadNameCache = new Map();
+
+function sanitizeDetectedRoadName(rawName) {
+    if (!rawName || typeof rawName !== 'string') return '';
+    let s = rawName.trim();
+    if (!s || s === 'undefined' || s === 'null') return '';
+    // 剔除純郵遞區號、門牌號碼或無意義泛稱
+    s = s.replace(/^\d{3,6}\s*/, '').trim();
+    if (/^(unnamed|road|street|path|track|service|無名路|未命名|前方道路)$/i.test(s)) return '';
+    // 若包含逗號或斜線（如 Nominatim 地址串），取最前面的道路名
+    if (s.includes(',')) s = s.split(',')[0].trim();
+    if (s.includes('；')) s = s.split('；')[0].trim();
+    return s;
+}
+
+// 1. 同步嘗試由向量底圖（若當前為向量圖層）或路線本身的點位屬性擷取轉入路段路名
+function lookupRoadNameFromMapOrPoint(pts, afterTurnIdx, targetBearing) {
+    for (let k = afterTurnIdx; k <= Math.min(pts.length - 1, afterTurnIdx + 3); k++) {
+        const ptName = sanitizeDetectedRoadName(pts[k]?.roadName || pts[k]?.streetName || pts[k]?.street);
+        if (ptName) return ptName;
+    }
+    try {
+        if (typeof map !== 'undefined' && map && typeof map.queryRenderedFeatures === 'function' && typeof map.project === 'function') {
+            const samplePt = pts[Math.min(pts.length - 1, afterTurnIdx)];
+            if (samplePt) {
+                const scr = map.project([samplePt.lng, samplePt.lat]);
+                if (scr && typeof scr.x === 'number' && typeof scr.y === 'number') {
+                    const bbox = [
+                        [scr.x - 26, scr.y - 26],
+                        [scr.x + 26, scr.y + 26]
+                    ];
+                    const features = map.queryRenderedFeatures(bbox) || [];
+                    for (const f of features) {
+                        const props = f?.properties;
+                        if (!props) continue;
+                        const layerId = String(f?.layer?.id || '').toLowerCase();
+                        const srcLayer = String(f?.sourceLayer || '').toLowerCase();
+                        if (
+                            layerId.includes('road') || layerId.includes('street') || layerId.includes('transportation') ||
+                            layerId.includes('highway') || srcLayer.includes('transportation') || srcLayer.includes('road')
+                        ) {
+                            const raw = props['name:zh-Hant'] || props['name:zh'] || props.name || props.ref || '';
+                            const clean = sanitizeDetectedRoadName(String(raw));
+                            if (clean) return clean;
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) {}
+    return '';
+}
+
+// 2. 非同步向 OSRM nearest（附帶轉彎後行進方向 bearing 鎖定轉入道路）或 Nominatim 查詢轉入路段路名並寫入快取
+async function fetchTurnTargetRoadNameAsync(lng, lat, outBearing) {
+    const cacheKey = `${lng.toFixed(5)},${lat.toFixed(5)},${Math.round((outBearing || 0) / 15)}`;
+    if (turnRoadNameCache.has(cacheKey)) {
+        return turnRoadNameCache.get(cacheKey) || '';
+    }
+
+    // 優先使用 OSRM nearest API + bearings 鎖定轉彎後進入的目標道路名稱（極快且精準對應轉入方向）
+    try {
+        const bDeg = Math.round(((outBearing % 360) + 360) % 360);
+        const osrmUrl = `https://router.project-osrm.org/nearest/v1/driving/${lng},${lat}?number=1&bearings=${bDeg},45`;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 1400);
+        const res = await fetch(osrmUrl, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (res && res.ok) {
+            const data = await res.json();
+            const wpName = sanitizeDetectedRoadName(data?.waypoints?.[0]?.name || '');
+            if (wpName) {
+                turnRoadNameCache.set(cacheKey, wpName);
+                return wpName;
+            }
+        }
+    } catch (e) {}
+
+    // 備援：使用 Nominatim reverse geocoding 查詢該轉入座標的 road / pedestrian / residential 名稱
+    try {
+        const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&accept-language=zh-TW`;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 1500);
+        const res = await fetch(nomUrl, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (res && res.ok) {
+            const data = await res.json();
+            const addr = data?.address || {};
+            const rd = sanitizeDetectedRoadName(
+                addr.road || addr.pedestrian || addr.residential || addr.living_street || addr.cycleway || data?.name || ''
+            );
+            if (rd) {
+                turnRoadNameCache.set(cacheKey, rd);
+                return rd;
+            }
+        }
+    } catch (e) {}
+
+    turnRoadNameCache.set(cacheKey, '');
+    return '';
+}
+
+// 3. 預先掃描整條遵循路線，精準找出所有真實左右轉彎頂點（turnIdx）、轉入後延伸點（afterIdx）與轉入方向角（outBearing）
+function precomputeFollowRouteTurns(pts, cumMeters) {
+    if (!Array.isArray(pts) || pts.length < 3 || !Array.isArray(cumMeters) || cumMeters.length !== pts.length) {
+        return [];
+    }
+    const n = pts.length;
+    const turns = [];
+    let lastTurnDistM = -999;
+
+    for (let i = 1; i < n - 1; i++) {
+        if (pts[i]?.isSegmentStart) continue;
+        const cornerDistM = cumMeters[i] || 0;
+        // 同一路口轉彎叢集冷卻至少 28 公尺，避免單一彎道拆成多個點
+        if (cornerDistM - lastTurnDistM < 28) continue;
+
+        // 往前找距離頂點 i 約 8~18 公尺的進入起點 inIdx
+        let inIdx = i - 1;
+        while (inIdx > 0 && !pts[inIdx + 1]?.isSegmentStart && (cornerDistM - (cumMeters[inIdx] || 0)) < 12) {
+            inIdx--;
+        }
+        const inSpanM = cornerDistM - (cumMeters[inIdx] || 0);
+        if (inSpanM < 4) continue;
+
+        // 往後找距離頂點 i 約 10~20 公尺的轉出終點 outIdx（此處亦是查詢「轉入後道路名稱」的最佳採樣點）
+        let outIdx = i + 1;
+        while (outIdx < n - 1 && !pts[outIdx]?.isSegmentStart && ((cumMeters[outIdx] || 0) - cornerDistM) < 15) {
+            outIdx++;
+        }
+        if (pts[outIdx]?.isSegmentStart) continue;
+        const outSpanM = (cumMeters[outIdx] || 0) - cornerDistM;
+        if (outSpanM < 4) continue;
+
+        const inBearing = getBearing(pts[inIdx].lng, pts[inIdx].lat, pts[i].lng, pts[i].lat);
+        const outBearing = getBearing(pts[i].lng, pts[i].lat, pts[outIdx].lng, pts[outIdx].lat);
+        const angleDiff = getAngleDiff(inBearing, outBearing);
+        const absAngle = Math.abs(angleDiff);
+
+        // 轉角介於 40° ~ 155° 判定為有效左右轉
+        if (absAngle > 40 && absAngle < 155) {
+            // 往後微調 1~3 點找出彎道中轉折最尖銳的局部峰值頂點
+            let bestCornerIdx = i;
+            let bestAbsAngle = absAngle;
+            let bestAngleDiff = angleDiff;
+            let bestOutIdx = outIdx;
+            let bestOutBearing = outBearing;
+
+            for (let c = i + 1; c <= Math.min(n - 2, i + 4); c++) {
+                if (pts[c]?.isSegmentStart) break;
+                const cDist = cumMeters[c] || 0;
+                if (cDist - cornerDistM > 12) break;
+                let cIn = c - 1;
+                while (cIn > 0 && !pts[cIn + 1]?.isSegmentStart && (cDist - (cumMeters[cIn] || 0)) < 12) cIn--;
+                let cOut = c + 1;
+                while (cOut < n - 1 && !pts[cOut]?.isSegmentStart && ((cumMeters[cOut] || 0) - cDist) < 15) cOut++;
+                const bIn = getBearing(pts[cIn].lng, pts[cIn].lat, pts[c].lng, pts[c].lat);
+                const bOut = getBearing(pts[c].lng, pts[c].lat, pts[cOut].lng, pts[cOut].lat);
+                const diff = getAngleDiff(bIn, bOut);
+                if (Math.abs(diff) > bestAbsAngle && Math.abs(diff) < 160 && Math.sign(diff) === Math.sign(angleDiff)) {
+                    bestAbsAngle = Math.abs(diff);
+                    bestAngleDiff = diff;
+                    bestCornerIdx = c;
+                    bestOutIdx = cOut;
+                    bestOutBearing = bOut;
+                }
+            }
+
+            const dir = bestAngleDiff > 0 ? 'right' : 'left';
+            const turnDistM = cumMeters[bestCornerIdx] || 0;
+            lastTurnDistM = turnDistM;
+            i = bestCornerIdx;
+
+            const samplePt = pts[bestOutIdx] || pts[bestCornerIdx];
+            const initialRoadName = lookupRoadNameFromMapOrPoint(pts, bestOutIdx, bestOutBearing);
+
+            turns.push({
+                turnIdx: bestCornerIdx,
+                afterIdx: bestOutIdx,
+                turnDistM,
+                dir,
+                actionZh: dir === 'right' ? '右轉' : '左轉',
+                iconHtml: dir === 'right'
+                    ? '<i class="fa-solid fa-arrow-right"></i>'
+                    : '<i class="fa-solid fa-arrow-left"></i>',
+                outBearing: bestOutBearing,
+                sampleLng: samplePt.lng,
+                sampleLat: samplePt.lat,
+                roadName: initialRoadName,
+                prefetching: false,
+                announced: false
+            });
+        }
+    }
+
+    return turns;
+}
+
 document.getElementById('startFollowBtn').onclick = async () => {
     window.BgmPlayer?.unlockAndSync();
     isReplaying = false;
@@ -510,6 +711,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     const pts = route.points;
     const followCumMeters = buildCumulativeRouteMeters(pts);
+    const precomputedTurns = precomputeFollowRouteTurns(pts, followCumMeters);
     // 重新開始導航時，完整重置所有標記點（含語音開關與一般提醒點）的 played 與 prePlayed 狀態
     const mappedEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
     window.activeFollowMappedEvents = mappedEvents;
@@ -641,12 +843,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters);
             currentTrackIndex = progressInfo.trackIndex;
             hasInitializedTrackIndex = true;
-            // 若為半路切入（距起點 > 80m 且起算索引 > 0），將起始點之前的舊事件標記為已略過避免回溯誤報
+            // 若為半路切入（距起點 > 80m 且起算索引 > 0），將起始點之前的舊事件與舊轉彎標記為已略過避免回溯誤報
             if (currentTrackIndex > 0) {
                 mappedEvents.forEach(ev => {
                     if ((ev.ptIdx || 0) < currentTrackIndex - 2) {
                         ev.played = true;
                         ev.prePlayed = true;
+                    }
+                });
+                precomputedTurns.forEach(t => {
+                    if (t.turnIdx <= currentTrackIndex) {
+                        t.announced = true;
+                        triggeredTurnIndices.add(t.turnIdx);
                     }
                 });
             }
@@ -728,33 +936,70 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        if (!isOffRoute) {
-            let lookAheadIdx = currentTrackIndex, scanDist = 0;
-            while (lookAheadIdx < pts.length - 1 && scanDist < 30) {
-                scanDist += (getDistanceKm(pts[lookAheadIdx].lng, pts[lookAheadIdx].lat, pts[lookAheadIdx+1].lng, pts[lookAheadIdx+1].lat) * 1000);
-                lookAheadIdx++;
-            }
+        if (!isOffRoute && precomputedTurns.length > 0) {
+            const currentAlongM = (Array.isArray(followCumMeters) && followCumMeters.length === pts.length)
+                ? (followCumMeters[currentTrackIndex] || 0)
+                : 0;
 
-            if (lookAheadIdx > currentTrackIndex && !triggeredTurnIndices.has(currentTrackIndex)) {
-                const currentSegAngle = getBearing(pts[currentTrackIndex].lng, pts[currentTrackIndex].lat, pts[currentTrackIndex+1].lng, pts[currentTrackIndex+1].lat);
-                const futureSegAngle = getBearing(pts[lookAheadIdx-1].lng, pts[lookAheadIdx-1].lat, pts[lookAheadIdx].lng, pts[lookAheadIdx].lat);
-                const angleDiff = getAngleDiff(currentSegAngle, futureSegAngle);
-                
-                if (angleDiff > 40 && angleDiff < 140) {
-                    for(let k = Math.max(0, currentTrackIndex - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
-                    autoWakeScreen(); 
-                    // 🚀 換成 100% 絕對支援的基本大箭頭 (向右)
-                    showNavAlert('<i class="fa-solid fa-arrow-right"></i>', '', 'bg-blue-600'); 
-                    speakText("前方準備右轉"); 
-                    autoSleepScreen();
-                } else if (angleDiff < -40 && angleDiff > -140) {
-                    for(let k = Math.max(0, currentTrackIndex - 3); k <= lookAheadIdx + 2; k++) triggeredTurnIndices.add(k);
-                    autoWakeScreen(); 
-                    // 🚀 換成 100% 絕對支援的基本大箭頭 (向左)
-                    showNavAlert('<i class="fa-solid fa-arrow-left"></i>', '', 'bg-blue-600'); 
-                    speakText("前方準備左轉"); 
-                    autoSleepScreen();
+            for (let tIdx = 0; tIdx < precomputedTurns.length; tIdx++) {
+                const turnItem = precomputedTurns[tIdx];
+                if (turnItem.announced || triggeredTurnIndices.has(turnItem.turnIdx)) continue;
+
+                // 若車輛進度已超過該轉彎頂點超過 8 公尺，直接標記已通過不再補報
+                const alongToTurnM = turnItem.turnDistM - currentAlongM;
+                if (currentTrackIndex > turnItem.turnIdx + 2 || alongToTurnM < -8) {
+                    turnItem.announced = true;
+                    triggeredTurnIndices.add(turnItem.turnIdx);
+                    continue;
                 }
+
+                // 距離轉彎頂點進入 110 公尺內時，預先在背景查詢轉入路段路名並快取，確保抵達 20m 播報點時立即可用不延遲
+                if (!turnItem.roadName && !turnItem.prefetching && alongToTurnM <= 110 && alongToTurnM >= 0) {
+                    turnItem.roadName = lookupRoadNameFromMapOrPoint(pts, turnItem.afterIdx, turnItem.outBearing);
+                    if (!turnItem.roadName) {
+                        turnItem.prefetching = true;
+                        fetchTurnTargetRoadNameAsync(turnItem.sampleLng, turnItem.sampleLat, turnItem.outBearing)
+                            .then(resolvedName => {
+                                if (resolvedName && !turnItem.roadName) {
+                                    turnItem.roadName = resolvedName;
+                                }
+                            })
+                            .catch(() => {});
+                    }
+                }
+
+                // 計算車輛目前實際座標到轉彎頂點 (pts[turnItem.turnIdx]) 的精確距離
+                const cornerPt = pts[turnItem.turnIdx];
+                const directToCornerM = cornerPt
+                    ? getDistanceKm(lng, lat, cornerPt.lng, cornerPt.lat) * 1000
+                    : alongToTurnM;
+                // 結合沿線剩餘距離與直線距離（避免節點較疏時沿線距離跳階）
+                const effectiveDistToTurnM = Math.min(alongToTurnM, directToCornerM);
+
+                // 當距離前方轉彎節點約 20 公尺（容許 GPS 更新步進視窗 6m ~ 28m）時，提前觸發單次左右轉語音提示
+                if (alongToTurnM <= 32 && effectiveDistToTurnM <= 28 && effectiveDistToTurnM >= 4) {
+                    turnItem.announced = true;
+                    for (let k = Math.max(0, turnItem.turnIdx - 4); k <= Math.min(pts.length - 1, turnItem.afterIdx + 2); k++) {
+                        triggeredTurnIndices.add(k);
+                    }
+
+                    if (!turnItem.roadName) {
+                        turnItem.roadName = lookupRoadNameFromMapOrPoint(pts, turnItem.afterIdx, turnItem.outBearing);
+                    }
+                    const cleanRoad = sanitizeDetectedRoadName(turnItem.roadName);
+                    const voiceMsg = cleanRoad
+                        ? `前方20公尺${turnItem.actionZh}${cleanRoad}`
+                        : `前方20公尺${turnItem.actionZh}`;
+
+                    autoWakeScreen();
+                    showNavAlert(turnItem.iconHtml, '', 'bg-blue-600');
+                    speakText(voiceMsg);
+                    autoSleepScreen();
+                    break;
+                }
+
+                // 只處理前方最近的一個未播報轉彎，若距離尚超過 115m 則跳出迴圈
+                if (alongToTurnM > 115) break;
             }
         }
 

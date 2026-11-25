@@ -1555,8 +1555,14 @@
             step.maneuverLocation[0], step.maneuverLocation[1]
         );
         const fallbackLabel = (activeNavMode === 'free') ? '目的地' : (activeTargetRoute?.name || '路線起點');
-        const roadLabel = step.roadName || (step.type === 'arrive' ? fallbackLabel : '前方道路');
-        const roadVoiceSuffix = step.roadName ? `，進入 ${step.roadName}` : '';
+        const cleanRoadName = (step.roadName && step.roadName !== 'undefined' && step.roadName !== 'null')
+            ? String(step.roadName).trim()
+            : '';
+        const roadLabel = cleanRoadName || (step.type === 'arrive' ? fallbackLabel : '前方道路');
+        const isTurnAction = step.actionText.includes('轉') || step.actionText.includes('迴轉');
+        const actionWithRoadText = cleanRoadName
+            ? (isTurnAction ? `${step.actionText}${cleanRoadName}` : `${step.actionText}，進入 ${cleanRoadName}`)
+            : step.actionText;
 
         updateTurnCardUI({
             iconClass: step.iconClass,
@@ -1573,28 +1579,28 @@
 
         const startVoicePrefix = (activeNavMode === 'free') ? '開始導航' : '開始前往起點';
         if (isInitialAfterFetch && !step._preSpoken && !step._turnSpoken) {
-            if (distToManeuverM <= 45) {
+            if (distToManeuverM <= 35) {
                 step._preSpoken = true;
                 step._turnSpoken = true;
-                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方準備${step.actionText}${roadVoiceSuffix}`);
+                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方20公尺${actionWithRoadText}`);
             } else {
                 step._preSpoken = true;
                 const rounded = distToManeuverM >= 1000
                     ? `${(distToManeuverM / 1000).toFixed(1)} 公里`
-                    : `${Math.max(10, Math.round(distToManeuverM / 10) * 10)} 公尺`;
-                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方 ${rounded} ${step.actionText}${roadVoiceSuffix}`);
+                    : `${Math.max(20, Math.round(distToManeuverM / 10) * 10)} 公尺`;
+                enqueueRoutineApproachVoice(`${startVoicePrefix}，前方${rounded}${actionWithRoadText}`);
             }
             return;
         }
 
-        if (distToManeuverM <= 150 && distToManeuverM > 45 && !step._preSpoken) {
+        if (distToManeuverM <= 150 && distToManeuverM > 38 && !step._preSpoken) {
             step._preSpoken = true;
             const roundedM = Math.max(50, Math.round(distToManeuverM / 10) * 10);
-            enqueueRoutineApproachVoice(`前方 ${roundedM} 公尺，${step.actionText}${roadVoiceSuffix}`);
-        } else if (distToManeuverM <= 45 && !step._turnSpoken) {
+            enqueueRoutineApproachVoice(`前方${roundedM}公尺${actionWithRoadText}`);
+        } else if (distToManeuverM <= 32 && !step._turnSpoken) {
             step._preSpoken = true;
             step._turnSpoken = true;
-            enqueueRoutineApproachVoice(`前方準備${step.actionText}${roadVoiceSuffix}`);
+            enqueueRoutineApproachVoice(`前方20公尺${actionWithRoadText}`);
         }
     }
 

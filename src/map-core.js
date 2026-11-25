@@ -2176,13 +2176,18 @@ function computeVisualRightOffsetCoords(points) {
     // 1. 計算累積里程 (cumM) 與每個點的穩定前進方向角 (bearings)
     const cumM = new Array(n).fill(0);
     for (let i = 1; i < n; i++) {
-        cumM[i] = cumM[i - 1] + getDistanceKm(points[i - 1].lng, points[i - 1].lat, points[i].lng, points[i].lat) * 1000;
+        if (points[i].isSegmentStart) {
+            cumM[i] = cumM[i - 1];
+        } else {
+            cumM[i] = cumM[i - 1] + getDistanceKm(points[i - 1].lng, points[i - 1].lat, points[i].lng, points[i].lat) * 1000;
+        }
     }
 
     const bearings = new Array(n).fill(0);
     for (let i = 0; i < n; i++) {
         let found = false;
         for (let k = i + 1; k < n; k++) {
+            if (points[k].isSegmentStart) break;
             const dM = cumM[k] - cumM[i];
             if (dM >= 1.2) {
                 bearings[i] = getBearing(points[i].lng, points[i].lat, points[k].lng, points[k].lat);
@@ -2192,6 +2197,7 @@ function computeVisualRightOffsetCoords(points) {
         }
         if (!found) {
             for (let k = i - 1; k >= 0; k--) {
+                if (points[k + 1]?.isSegmentStart) break;
                 const dM = cumM[i] - cumM[k];
                 if (dM >= 1.2) {
                     bearings[i] = getBearing(points[k].lng, points[k].lat, points[i].lng, points[i].lat);
@@ -2213,6 +2219,7 @@ function computeVisualRightOffsetCoords(points) {
         let isOverlappingEarlier = false;
 
         for (let j = 0; j < i - 1; j++) {
+            if (points[j + 1]?.isSegmentStart) continue;
             const pathGapM = cumM[i] - cumM[j + 1];
             if (pathGapM < 10) break;
 
@@ -2297,7 +2304,7 @@ function computeVisualRightOffsetCoords(points) {
     return result;
 }
 
-// 優化軌跡圖層更新：合併連續同狀態線段，並套用來回重複路段右側平行偏移視覺座標
+// 優化軌跡圖層更新：合併連續同狀態線段，並套用來回重複路段右側平行偏移視覺座標（若遇到 isSegmentStart 獨立手繪線段則斷開不自動接頭尾）
 function buildRouteLayerFeatures(points) {
     const musicFeatures = [], silentFeatures = [];
     if (Array.isArray(points) && points.length >= 2) {
@@ -2309,6 +2316,22 @@ function buildRouteLayerFeatures(points) {
             const pt = points[i];
             const vPt = visualPts[i];
             const isMusic = Boolean(pt.musicActive);
+
+            // 若為獨立手繪筆畫起點 (isSegmentStart === true)，先結束前一段，嚴禁將前段尾巴與新筆畫起點連成跨區直線
+            if (pt.isSegmentStart) {
+                if (currentCoords.length >= 2) {
+                    const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: currentCoords } };
+                    if (currentIsMusic) musicFeatures.push(feature);
+                    else silentFeatures.push(feature);
+                }
+                currentCoords = [[vPt.lng, vPt.lat]];
+                const nextMusic = (i + 1 < points.length && !points[i + 1].isSegmentStart)
+                    ? Boolean(points[i + 1].musicActive)
+                    : isMusic;
+                currentIsMusic = nextMusic;
+                continue;
+            }
+
             if (isMusic === currentIsMusic) {
                 currentCoords.push([vPt.lng, vPt.lat]);
             } else {
@@ -2380,20 +2403,31 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
     const clampedIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
 
     // 1. 已行駛路段（0 至 currentTrackIndex）：日間半透明淺灰色 / 夜間高亮度綠色 (bg-route)
-    const traveledCoords = [];
+    const traveledFeatures = [];
+    let currentTraveledCoords = [];
     for (let i = 0; i <= clampedIdx; i++) {
-        traveledCoords.push([points[i].lng, points[i].lat]);
-    }
-    if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
-        const lastC = traveledCoords[traveledCoords.length - 1];
-        if (!lastC || lastC[0] !== exactPos.lng || lastC[1] !== exactPos.lat) {
-            traveledCoords.push([exactPos.lng, exactPos.lat]);
+        if (i > 0 && points[i].isSegmentStart) {
+            if (currentTraveledCoords.length >= 2) {
+                traveledFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: currentTraveledCoords } });
+            }
+            currentTraveledCoords = [[points[i].lng, points[i].lat]];
+        } else {
+            currentTraveledCoords.push([points[i].lng, points[i].lat]);
         }
     }
-    if (traveledCoords.length >= 2) {
+    if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
+        const lastC = currentTraveledCoords[currentTraveledCoords.length - 1];
+        if (!lastC || lastC[0] !== exactPos.lng || lastC[1] !== exactPos.lat) {
+            currentTraveledCoords.push([exactPos.lng, exactPos.lat]);
+        }
+    }
+    if (currentTraveledCoords.length >= 2) {
+        traveledFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: currentTraveledCoords } });
+    }
+    if (traveledFeatures.length > 0) {
         cachedBgRouteGeoJSON = {
             type: 'FeatureCollection',
-            features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: traveledCoords } }]
+            features: traveledFeatures
         };
     } else {
         cachedBgRouteGeoJSON = emptyGeoJSON();
@@ -2426,8 +2460,12 @@ function buildCumulativeRouteMeters(pts) {
     if (!Array.isArray(pts) || pts.length === 0) return [];
     const cum = new Array(pts.length).fill(0);
     for (let i = 1; i < pts.length; i++) {
-        const segM = getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat) * 1000;
-        cum[i] = cum[i - 1] + segM;
+        if (pts[i].isSegmentStart) {
+            cum[i] = cum[i - 1];
+        } else {
+            const segM = getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat) * 1000;
+            cum[i] = cum[i - 1] + segM;
+        }
     }
     return cum;
 }

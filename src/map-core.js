@@ -2840,43 +2840,43 @@ function openAlertPopupCard(route, ev, eventIdx, pinEl) {
         card.appendChild(photoBtn);
     }
 
-    // 底部操作按鈕列（✏️ 編輯 / 🗑️ 刪除）
-    const actionRow = document.createElement('div');
-    actionRow.className = 'flex items-center gap-1.5 pt-1 border-t border-gray-100';
+    // 底部操作按鈕列（✏️ 編輯 / 🗑️ 刪除）：僅限在「路線編輯模式」(isEditingMode === true) 下顯示；
+    // 在「遵循導航」與一般「路線預覽」模式下完全隱藏，避免行車或預覽途中誤觸修改或刪除路線提醒
+    if (typeof isEditingMode !== 'undefined' && isEditingMode) {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'flex items-center gap-1.5 pt-1 border-t border-gray-100';
 
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl py-1.5 px-2 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
-    editBtn.innerHTML = '<span>✏️ 編輯</span>';
-    editBtn.onclick = (e) => {
-        e.stopPropagation();
-        closeActiveAlertPopup();
-        openAlertModalForEdit(route, eventIdx);
-    };
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'flex-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-xl py-1.5 px-2 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
+        editBtn.innerHTML = '<span>✏️ 編輯</span>';
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            closeActiveAlertPopup();
+            openAlertModalForEdit(route, eventIdx);
+        };
 
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl py-1.5 px-2.5 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
-    delBtn.innerHTML = '<i class="fa-regular fa-trash-can"></i><span>刪除</span>';
-    delBtn.onclick = (e) => {
-        e.stopPropagation();
-        if (!confirm(`確定要刪除【${ev.note || '提醒'}】這筆黃色提醒嗎？`)) return;
-        closeActiveAlertPopup();
-        if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
-            pushEditUndoSnapshot(route);
-        }
-        if (Array.isArray(route.events) && eventIdx >= 0 && eventIdx < route.events.length) {
-            route.events.splice(eventIdx, 1);
-        }
-        if (!isEditingMode && typeof persistSavedRoutesToStorage === 'function') {
-            persistSavedRoutesToStorage();
-        }
-        refreshCurrentRouteMarkers(route);
-    };
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl py-1.5 px-2.5 text-xs font-extrabold flex items-center justify-center gap-1 active:scale-95 transition-all';
+        delBtn.innerHTML = '<i class="fa-regular fa-trash-can"></i><span>刪除</span>';
+        delBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (!confirm(`確定要刪除【${ev.note || '提醒'}】這筆黃色提醒嗎？`)) return;
+            closeActiveAlertPopup();
+            if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+                pushEditUndoSnapshot(route);
+            }
+            if (Array.isArray(route.events) && eventIdx >= 0 && eventIdx < route.events.length) {
+                route.events.splice(eventIdx, 1);
+            }
+            refreshCurrentRouteMarkers(route);
+        };
 
-    actionRow.appendChild(editBtn);
-    actionRow.appendChild(delBtn);
-    card.appendChild(actionRow);
+        actionRow.appendChild(editBtn);
+        actionRow.appendChild(delBtn);
+        card.appendChild(actionRow);
+    }
 
     const arrow = document.createElement('div');
     arrow.className = 'alert-popup-arrow';

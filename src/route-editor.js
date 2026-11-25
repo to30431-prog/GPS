@@ -4028,7 +4028,7 @@ function closeCustomRoutePinModal() {
 }
 
 function openCustomRoutePinModal(route, pinIdx = null, lngLat = null) {
-    if (!route) return;
+    if (!isEditingMode || !route) return;
     if (!Array.isArray(route.customPins)) route.customPins = [];
     const existingPin = (typeof pinIdx === 'number' && pinIdx >= 0 && pinIdx < route.customPins.length)
         ? route.customPins[pinIdx]
@@ -4274,7 +4274,7 @@ function closeRouteTextLabelModal() {
 }
 
 function openRouteTextLabelModal(route, labelIdx = null, lngLat = null) {
-    if (!route) return;
+    if (!isEditingMode || !route) return;
     if (!Array.isArray(route.textLabels)) route.textLabels = [];
     const existingLabel = (typeof labelIdx === 'number' && labelIdx >= 0 && labelIdx < route.textLabels.length)
         ? route.textLabels[labelIdx]
@@ -6567,6 +6567,7 @@ function openStopModalForCreate(route, ptIndex) {
 }
 
 function openStopModalForEdit(route, idx) {
+    if (!isEditingMode) return;
     const p = route?.points?.[idx];
     if (!p) return;
     const modal = document.getElementById('editStopModal');
@@ -6742,6 +6743,7 @@ function openAlertModalForCreate(route, ptIndex) {
 }
 
 function openAlertModalForEdit(route, eventIdx) {
+    if (!isEditingMode) return;
     const ev = route.events && route.events[eventIdx];
     if (!ev) return;
 

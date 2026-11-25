@@ -609,11 +609,23 @@
                     } else if (!cur.includes(tag)) {
                         noteInput.value = `${cur}、${tag}`;
                     }
+                    if (typeof activeFormSession?.onNoteChange === 'function') {
+                        try { activeFormSession.onNoteChange(noteInput.value); } catch (e) {}
+                    }
                     try { if (typeof vibrate === 'function') vibrate(15); } catch (e) {}
                 });
                 tagsWrap.appendChild(chip);
             });
             noteContainer.appendChild(tagsWrap);
+        }
+
+        if (noteInput && noteInput.dataset.livePreviewBound !== '1') {
+            noteInput.dataset.livePreviewBound = '1';
+            noteInput.addEventListener('input', () => {
+                if (typeof activeFormSession?.onNoteChange === 'function') {
+                    try { activeFormSession.onNoteChange(noteInput.value); } catch (e) {}
+                }
+            });
         }
 
         // 2. 在照片預覽區注入「✏️ 標記照片」按鈕（緊鄰「❌ 移除照片」）
@@ -741,6 +753,18 @@
 
         if (titleEl) {
             titleEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${options?.title || '設定黃色提醒事項'}`;
+        }
+        const lockedBadgeEl = document.getElementById('editAlertLockedBadge');
+        if (lockedBadgeEl) {
+            if (options?.lockedBadgeText) {
+                lockedBadgeEl.textContent = options.lockedBadgeText;
+                lockedBadgeEl.classList.remove('hidden');
+            } else if (Array.isArray(options?.lockedCoord) && options.lockedCoord.length >= 2) {
+                lockedBadgeEl.textContent = '🎯 已鎖定上方地圖閃爍準星位置';
+                lockedBadgeEl.classList.remove('hidden');
+            } else {
+                lockedBadgeEl.classList.add('hidden');
+            }
         }
         noteInput.value = options?.initialNote !== undefined ? String(options.initialNote) : '';
         const camInput = document.getElementById('alertCameraInput');

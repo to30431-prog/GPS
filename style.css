@@ -1614,3 +1614,187 @@ body[data-theme="night"] #fleetUserBadgeBtn {
     color: #6ee7b7 !important;
     border-color: #34d399 !important;
 }
+
+/* 🎯 路線編輯「鎖定位置」高對比脈動準星預覽標記（外層嚴禁設 transform 以免干擾 MapLibre translate3d 經緯度定位） */
+.locked-point-preview-marker {
+    width: 24px;
+    height: 24px;
+    position: relative;
+    pointer-events: none;
+    z-index: 95;
+}
+.locked-point-target-wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.locked-point-pulse-ring,
+.locked-point-pulse-ring-2 {
+    position: absolute;
+    width: 52px;
+    height: 52px;
+    border-radius: 9999px;
+    border: 3px solid #f59e0b;
+    background: rgba(245, 158, 11, 0.22);
+    box-shadow: 0 0 16px rgba(245, 158, 11, 0.75);
+    animation: lockedPointPulseAnim 1.45s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.locked-point-pulse-ring-2 {
+    animation-delay: 0.72s;
+}
+.locked-point-crosshair {
+    position: relative;
+    width: 22px;
+    height: 22px;
+    border-radius: 9999px;
+    background: #f59e0b;
+    border: 3.5px solid #ffffff;
+    box-shadow: 0 0 0 2.5px #78350f, 0 4px 12px rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+}
+.locked-point-crosshair::before,
+.locked-point-crosshair::after {
+    content: '';
+    position: absolute;
+    background: #78350f;
+    border-radius: 2px;
+}
+.locked-point-crosshair::before {
+    width: 28px;
+    height: 2.5px;
+}
+.locked-point-crosshair::after {
+    width: 2.5px;
+    height: 28px;
+}
+.locked-point-center-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: #ffffff;
+    border: 1.5px solid #78350f;
+    z-index: 3;
+}
+.locked-point-floating-pill {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 5px 11px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.25;
+    color: #111827;
+    background: linear-gradient(135deg, #fde047 0%, #f59e0b 100%);
+    border: 2.5px solid #ffffff;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.38), 0 0 0 2px #b45309;
+    z-index: 4;
+}
+.locked-point-floating-arrow {
+    position: absolute;
+    bottom: calc(100% + 7px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 8px solid #f59e0b;
+    filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.3));
+    z-index: 4;
+}
+/* 主題配色切換：select (藍青準星) / alert (高對比琥珀黃) / stop (靛藍站牌) / music (翠綠音樂) */
+.locked-point-preview-marker.theme-select .locked-point-pulse-ring,
+.locked-point-preview-marker.theme-select .locked-point-pulse-ring-2 {
+    border-color: #0ea5e9;
+    background: rgba(14, 165, 233, 0.24);
+    box-shadow: 0 0 16px rgba(14, 165, 233, 0.78);
+}
+.locked-point-preview-marker.theme-select .locked-point-crosshair {
+    background: #0284c7;
+    box-shadow: 0 0 0 2.5px #0c4a6e, 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+.locked-point-preview-marker.theme-select .locked-point-crosshair::before,
+.locked-point-preview-marker.theme-select .locked-point-crosshair::after {
+    background: #0c4a6e;
+}
+.locked-point-preview-marker.theme-select .locked-point-floating-pill {
+    color: #ffffff;
+    background: linear-gradient(135deg, #0284c7 0%, #1d4ed8 100%);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.38), 0 0 0 2px #1e3a8a;
+}
+.locked-point-preview-marker.theme-select .locked-point-floating-arrow {
+    border-top-color: #1d4ed8;
+}
+
+.locked-point-preview-marker.theme-stop .locked-point-pulse-ring,
+.locked-point-preview-marker.theme-stop .locked-point-pulse-ring-2 {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.24);
+    box-shadow: 0 0 16px rgba(99, 102, 241, 0.78);
+}
+.locked-point-preview-marker.theme-stop .locked-point-crosshair {
+    background: #4f46e5;
+    box-shadow: 0 0 0 2.5px #312e81, 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+.locked-point-preview-marker.theme-stop .locked-point-crosshair::before,
+.locked-point-preview-marker.theme-stop .locked-point-crosshair::after {
+    background: #312e81;
+}
+.locked-point-preview-marker.theme-stop .locked-point-floating-pill {
+    color: #ffffff;
+    background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.38), 0 0 0 2px #312e81;
+}
+.locked-point-preview-marker.theme-stop .locked-point-floating-arrow {
+    border-top-color: #3730a3;
+}
+
+.locked-point-preview-marker.theme-music .locked-point-pulse-ring,
+.locked-point-preview-marker.theme-music .locked-point-pulse-ring-2 {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.24);
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.78);
+}
+.locked-point-preview-marker.theme-music .locked-point-crosshair {
+    background: #059669;
+    box-shadow: 0 0 0 2.5px #064e3b, 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+.locked-point-preview-marker.theme-music .locked-point-crosshair::before,
+.locked-point-preview-marker.theme-music .locked-point-crosshair::after {
+    background: #064e3b;
+}
+.locked-point-preview-marker.theme-music .locked-point-floating-pill {
+    color: #ffffff;
+    background: linear-gradient(135deg, #10b981 0%, #047857 100%);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.38), 0 0 0 2px #064e3b;
+}
+.locked-point-preview-marker.theme-music .locked-point-floating-arrow {
+    border-top-color: #047857;
+}
+
+@keyframes lockedPointPulseAnim {
+    0% {
+        transform: scale(0.45);
+        opacity: 0.95;
+    }
+    75% {
+        transform: scale(1.45);
+        opacity: 0.15;
+    }
+    100% {
+        transform: scale(1.6);
+        opacity: 0;
+    }
+}
+

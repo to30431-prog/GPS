@@ -644,44 +644,50 @@
     </div>
     
     <!-- 2.6 自訂區段動作大按鈕選單 -->
-    <div id="customActionModal" class="hidden fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center pointer-events-auto transition-opacity">
-        <div class="bg-white w-11/12 max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3">
-            <h3 class="text-lg font-black text-gray-900 mb-2 text-center">已選取路段，請選擇動作</h3>
-            <button onclick="handleRouteAction('1')" class="bg-green-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-music"></i> 整段【開啟音樂】(變綠線)</button>
-            <button onclick="handleRouteAction('2')" class="bg-gray-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-volume-xmark"></i> 整段【關閉音樂】(變灰線)</button>
-            <button onclick="handleRouteAction('3')" class="bg-amber-500 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-solid fa-triangle-exclamation"></i> 單點新增【黃色提醒】</button>
-            <button onclick="handleRouteAction('5')" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-clock"></i> 單點新增【藍色時刻站牌】</button>
-            <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-3 rounded-2xl active:scale-95 mt-1 border border-gray-200">取消重選</button>
+    <div id="customActionModal" class="hidden fixed inset-0 bg-black/25 z-[9999] flex items-end sm:items-center justify-center p-3 pb-4 pointer-events-auto transition-opacity">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-4 shadow-2xl flex flex-col gap-2.5 border-2 border-sky-300">
+            <h3 class="text-base font-black text-gray-900 text-center">🎯 已鎖定上方標記點，請選擇動作</h3>
+            <button onclick="handleRouteAction('1')" class="bg-green-600 text-white font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-sm sm:text-base"><i class="fa-solid fa-music"></i> 整段【開啟音樂】(變綠線)</button>
+            <button onclick="handleRouteAction('2')" class="bg-gray-500 text-white font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-sm sm:text-base"><i class="fa-solid fa-volume-xmark"></i> 整段【關閉音樂】(變灰線)</button>
+            <button onclick="handleRouteAction('3')" class="bg-amber-500 text-white font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-sm sm:text-base"><i class="fa-solid fa-triangle-exclamation"></i> 單點新增【黃色提醒】</button>
+            <button onclick="handleRouteAction('5')" class="bg-indigo-600 text-white font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-sm sm:text-base"><i class="fa-regular fa-clock"></i> 單點新增【藍色時刻站牌】</button>
+            <button onclick="handleRouteAction('4')" class="bg-gray-100 text-gray-600 font-extrabold py-2.5 rounded-2xl active:scale-95 mt-0.5 border border-gray-200 text-sm">取消重選</button>
         </div>
     </div>
 
     <!-- 🚀 2.7 編輯現有站牌專用大選單 -->
-    <div id="editStopModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center pointer-events-auto transition-opacity">
-        <div class="bg-white w-11/12 max-w-sm rounded-3xl p-6 shadow-2xl flex flex-col gap-4">
-            <h3 class="text-xl font-black text-indigo-700 mb-1 flex items-center justify-center gap-2"><i class="fa-regular fa-clock"></i> 編輯時刻站牌</h3>
+    <div id="editStopModal" class="hidden fixed inset-0 bg-black/25 z-[99999] flex items-end sm:items-center justify-center p-3 pb-4 pointer-events-auto transition-opacity">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 border-2 border-indigo-300">
+            <h3 id="editStopModalTitle" class="text-lg font-black text-indigo-700 flex items-center justify-center gap-2"><i class="fa-regular fa-clock"></i> 編輯時刻站牌</h3>
+            <div id="editStopLockedBadge" class="bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-extrabold px-3 py-1.5 rounded-xl text-center">
+                🎯 已鎖定上方地圖閃爍標記點位
+            </div>
             <div class="flex flex-col gap-1">
                 <label class="text-sm font-bold text-gray-600 ml-1">表定時間 (格式如 17:30)</label>
-                <input type="time" id="editStopTimeInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none">
+                <input type="time" id="editStopTimeInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-2.5 w-full focus:ring-2 focus:ring-indigo-500 outline-none">
             </div>
-            <div class="flex flex-col gap-1 mb-2">
+            <div class="flex flex-col gap-1 mb-1">
                 <label class="text-sm font-bold text-gray-600 ml-1">站點名稱</label>
-                <input type="text" id="editStopNameInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如：火車站前">
+                <input type="text" id="editStopNameInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-lg font-bold rounded-2xl p-2.5 w-full focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如：火車站前">
             </div>
-            <button id="btnSaveStopEdit" class="bg-indigo-600 text-white font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-lg shadow-md"><i class="fa-solid fa-check"></i> 儲存修改</button>
-            <button id="btnDeleteStop" class="bg-red-50 text-red-600 border border-red-200 font-extrabold py-3.5 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base"><i class="fa-regular fa-trash-can"></i> 刪除此站牌</button>
-            <button id="btnCancelStopEdit" class="text-gray-500 font-extrabold py-2 mt-1 active:scale-95">取消</button>
+            <button id="btnSaveStopEdit" class="bg-indigo-600 text-white font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-base shadow-md"><i class="fa-solid fa-check"></i> 儲存修改</button>
+            <button id="btnDeleteStop" class="bg-red-50 text-red-600 border border-red-200 font-extrabold py-3 rounded-2xl active:scale-95 flex items-center justify-center gap-2 text-sm"><i class="fa-regular fa-trash-can"></i> 刪除此站牌</button>
+            <button id="btnCancelStopEdit" class="text-gray-500 font-extrabold py-1.5 active:scale-95 text-sm">取消</button>
         </div>
     </div>
 
     <!-- ⚠️ 2.8 新增/編輯黃色提醒事項專用彈窗 (支援實景拍照與自動壓縮) -->
-    <div id="editAlertModal" class="hidden fixed inset-0 bg-black/70 z-[99999] flex items-center justify-center p-4 pointer-events-auto transition-opacity">
-        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto">
-            <h3 id="editAlertModalTitle" class="text-xl font-black text-amber-600 flex items-center justify-center gap-2">
+    <div id="editAlertModal" class="hidden fixed inset-0 bg-black/25 z-[99999] flex items-end sm:items-center justify-center p-3 pb-4 pointer-events-auto transition-opacity">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col gap-3 max-h-[62vh] sm:max-h-[82vh] overflow-y-auto border-2 border-amber-400">
+            <h3 id="editAlertModalTitle" class="text-lg font-black text-amber-600 flex items-center justify-center gap-2">
                 <i class="fa-solid fa-triangle-exclamation"></i> 設定黃色提醒事項
             </h3>
+            <div id="editAlertLockedBadge" class="bg-amber-50 border border-amber-300 text-amber-900 text-xs font-extrabold px-3 py-1.5 rounded-xl text-center">
+                🎯 已鎖定上方地圖閃爍準星位置
+            </div>
             <div class="flex flex-col gap-1">
                 <label class="text-sm font-bold text-gray-600 ml-1">提醒內容</label>
-                <input type="text" id="editAlertNoteInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-base font-bold rounded-2xl p-3 w-full focus:ring-2 focus:ring-amber-500 outline-none" placeholder="例如：窄巷倒車、小心惡犬">
+                <input type="text" id="editAlertNoteInput" class="bg-gray-50 border border-gray-200 text-gray-900 text-base font-bold rounded-2xl p-2.5 w-full focus:ring-2 focus:ring-amber-500 outline-none" placeholder="例如：窄巷倒車、小心惡犬">
             </div>
             <div class="flex flex-col gap-2">
                 <label class="text-sm font-bold text-gray-600 ml-1">附加實景照片（選填，自動壓縮至 150KB 內）</label>

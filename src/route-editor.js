@@ -3277,34 +3277,7 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
 
             markerEl.onclick = (e) => {
                 e.stopPropagation();
-                document.getElementById('editStopTimeInput').value = p.scheduled_time || "";
-                document.getElementById('editStopNameInput').value = p.stop_name || "";
-                
-                const modal = document.getElementById('editStopModal');
-                modal.classList.remove('hidden');
-
-                document.getElementById('btnSaveStopEdit').onclick = () => {
-                    const newTime = document.getElementById('editStopTimeInput').value;
-                    const newName = document.getElementById('editStopNameInput').value;
-                    if (newTime && newName) {
-                        pushEditUndoSnapshot(route);
-                        route.points[idx].scheduled_time = newTime; 
-                        route.points[idx].stop_name = newName;
-                        modal.classList.add('hidden');
-                        renderEditableRouteMarkers(route);
-                    } else { alert("時間與站名不可空白！"); }
-                };
-
-                document.getElementById('btnDeleteStop').onclick = () => {
-                    if (confirm(`確定要刪除【${p.stop_name}】這個站牌嗎？`)) {
-                        pushEditUndoSnapshot(route);
-                        delete route.points[idx].is_stop; delete route.points[idx].stop_name; delete route.points[idx].scheduled_time;
-                        modal.classList.add('hidden');
-                        renderEditableRouteMarkers(route);
-                    }
-                };
-
-                document.getElementById('btnCancelStopEdit').onclick = () => modal.classList.add('hidden');
+                openStopModalForEdit(route, idx);
             };
             domMarkers.push(m);
         }
@@ -4609,26 +4582,28 @@ map.on('click', (e) => {
         }
         return;
     } else if (editSubMode === 'marker') {
+        const visualPts = computeVisualRightOffsetCoords(route.points);
         let minDist = Infinity, closestIdx = -1;
         route.points.forEach((p, idx) => {
-            let d = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
+            const dRaw = getDistanceKm(e.lngLat.lng, e.lngLat.lat, p.lng, p.lat);
+            const vPt = visualPts[idx] || p;
+            const dVis = getDistanceKm(e.lngLat.lng, e.lngLat.lat, vPt.lng, vPt.lat);
+            const d = Math.min(dRaw, dVis);
             if (d < minDist) { minDist = d; closestIdx = idx; }
         });
 
-        if (minDist * 1000 > 50) { alert("請點擊在路線軌跡附近！"); return; }
+        if (minDist * 1000 > 50 || closestIdx === -1) { alert("請點擊在路線軌跡附近！"); return; }
 
         if (editStep === 0) {
-            editStartIndex = closestIdx; 
-            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
-            const el = document.createElement('div');
-            el.innerHTML = `<div class="music-marker bg-blue-600 border-2 border-white px-3 py-1 shadow-lg text-sm text-white">📍 選擇位置中...</div>`;
-            tempMarkerA = new maplibregl.Marker({
-                element: el,
-                anchor: 'center',
-                rotationAlignment: 'viewport',
-                pitchAlignment: 'viewport'
-            }).setLngLat([route.points[closestIdx].lng, route.points[closestIdx].lat]).addTo(map);
-            
+            editStartIndex = closestIdx;
+            const lockedPt = route.points[closestIdx];
+            showLockedRoutePointPreviewMarker(
+                [lockedPt.lng, lockedPt.lat],
+                'select',
+                `🎯 已鎖定位置 · 節點 #${closestIdx + 1}`
+            );
+            focusMapAboveBottomModal([lockedPt.lng, lockedPt.lat]);
+
             window.currentEditData = { route, editStartIndex };
             document.getElementById('customActionModal').classList.remove('hidden');
         } else if (editStep === 1) {
@@ -4753,32 +4728,34 @@ window.handleRouteAction = function(action) {
     if (!window.currentEditData) return;
 
     const { route, editStartIndex } = window.currentEditData;
+    const targetPt = route?.points?.[editStartIndex];
 
     if (action === '1' || action === '2') {
         window.currentEditData.action = action;
-        editStep = 1; 
-        document.getElementById('editPromptText').innerText = "🎵 已選擇音樂動作！請點選軌跡另一處作為『區段終點 (B點)』";
+        editStep = 1;
+        if (targetPt) {
+            const actLabel = action === '1' ? '開啟音樂起點 A' : '關閉音樂起點 A';
+            showLockedRoutePointPreviewMarker(
+                [targetPt.lng, targetPt.lat],
+                'music',
+                `🎵 ${actLabel} (#${editStartIndex + 1})`
+            );
+        }
+        document.getElementById('editPromptText').innerText = "🎵 已鎖定音樂區段起點 A！請點選軌跡另一處作為『區段終點 (B點)』";
         return;
     } 
     else if (action === '3') {
-        pushEditUndoSnapshot(route);
         openAlertModalForCreate(route, editStartIndex);
         return;
     } 
     else if (action === '5') {
-        const time = prompt("請輸入表定時間 (格式如 17:30)：", "17:00");
-        const name = prompt("請輸入站點名稱 (如：火車站前)：", "新增定點");
-        if (time && name) {
-            pushEditUndoSnapshot(route);
-            route.points[editStartIndex].is_stop = true;
-            route.points[editStartIndex].scheduled_time = time;
-            route.points[editStartIndex].stop_name = name;
-        }
+        openStopModalForCreate(route, editStartIndex);
+        return;
     }
     
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     editStep = 0;
-    document.getElementById('editPromptText').innerText = "🛠️ 標記完成！請點擊地圖軌跡選擇下一個『目標點』";
+    document.getElementById('editPromptText').innerText = "🛠️ 已取消選點！請點擊地圖軌跡選擇下一個『目標點』";
     updateRouteLayers(route.points); renderEditableRouteMarkers(route);
 };
 
@@ -5203,6 +5180,75 @@ async function handleAlertPhotoInputChange(e) {
 if (alertCameraInput) alertCameraInput.onchange = handleAlertPhotoInputChange;
 if (alertGalleryInput) alertGalleryInput.onchange = handleAlertPhotoInputChange;
 
+// 🎯 在地圖上顯示高對比脈動準星＋浮動膠囊的「鎖定位置」預覽標記，並將該點平移至彈窗上方的清晰可視區
+function showLockedRoutePointPreviewMarker(lngLat, themeMode = 'alert', pillText = '') {
+    if (!map || !Array.isArray(lngLat) || lngLat.length < 2) return null;
+    const lng = Number(lngLat[0]);
+    const lat = Number(lngLat[1]);
+    if (isNaN(lng) || isNaN(lat)) return null;
+
+    if (tempMarkerA) {
+        try { tempMarkerA.remove(); } catch (e) {}
+        tempMarkerA = null;
+    }
+
+    const rootEl = document.createElement('div');
+    rootEl.className = `locked-point-preview-marker theme-${themeMode}`;
+
+    const pillEl = document.createElement('div');
+    pillEl.className = 'locked-point-floating-pill';
+    pillEl.textContent = pillText || '🎯 已鎖定位置';
+
+    const arrowEl = document.createElement('div');
+    arrowEl.className = 'locked-point-floating-arrow';
+
+    const targetWrapEl = document.createElement('div');
+    targetWrapEl.className = 'locked-point-target-wrap';
+    targetWrapEl.innerHTML = `
+        <div class="locked-point-pulse-ring"></div>
+        <div class="locked-point-pulse-ring-2"></div>
+        <div class="locked-point-crosshair">
+            <div class="locked-point-center-dot"></div>
+        </div>
+    `;
+
+    rootEl.appendChild(pillEl);
+    rootEl.appendChild(arrowEl);
+    rootEl.appendChild(targetWrapEl);
+
+    tempMarkerA = new maplibregl.Marker({
+        element: rootEl,
+        anchor: 'center',
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    }).setLngLat([lng, lat]).addTo(map);
+    tempMarkerA._pillEl = pillEl;
+    return tempMarkerA;
+}
+
+function updateLockedRoutePointPreviewLabel(pillText) {
+    if (tempMarkerA && tempMarkerA._pillEl) {
+        tempMarkerA._pillEl.textContent = pillText;
+    }
+}
+
+// 將鎖定座標適度上移至畫面中上段（避開底部彈出的表單卡片），讓使用者在按下儲存前能清楚看見地圖上的閃爍鎖定點
+function focusMapAboveBottomModal(lngLat) {
+    if (!map || !Array.isArray(lngLat) || lngLat.length < 2) return;
+    const lng = Number(lngLat[0]);
+    const lat = Number(lngLat[1]);
+    if (isNaN(lng) || isNaN(lat)) return;
+    try {
+        const vh = window.innerHeight || 720;
+        const offsetY = -Math.round(Math.min(Math.max(vh * 0.24, 120), 200));
+        map.easeTo({
+            center: [lng, lat],
+            offset: [0, offsetY],
+            duration: 280
+        });
+    } catch (e) {}
+}
+
 function finishAlertModalCleanup(route) {
     editAlertModal.classList.add('hidden');
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
@@ -5221,25 +5267,205 @@ function finishAlertModalCleanup(route) {
     }
 }
 
+function openStopModalForCreate(route, ptIndex) {
+    const targetPt = route?.points?.[ptIndex];
+    if (!targetPt) return;
+    const lockedLng = Number(targetPt.lng);
+    const lockedLat = Number(targetPt.lat);
+
+    const modal = document.getElementById('editStopModal');
+    const titleEl = document.getElementById('editStopModalTitle');
+    const badgeEl = document.getElementById('editStopLockedBadge');
+    const timeInput = document.getElementById('editStopTimeInput');
+    const nameInput = document.getElementById('editStopNameInput');
+    const saveBtn = document.getElementById('btnSaveStopEdit');
+    const delBtn = document.getElementById('btnDeleteStop');
+    const cancelBtn = document.getElementById('btnCancelStopEdit');
+    if (!modal || !timeInput || !nameInput || !saveBtn) return;
+
+    if (titleEl) {
+        titleEl.innerHTML = '<i class="fa-regular fa-clock"></i> 新增藍色時刻站牌';
+    }
+    if (badgeEl) {
+        badgeEl.textContent = `🎯 已鎖定路線節點 #${ptIndex + 1}（上方地圖閃爍準星處）`;
+        badgeEl.classList.remove('hidden');
+    }
+    timeInput.value = targetPt.scheduled_time || '17:00';
+    nameInput.value = targetPt.stop_name || '新增定點';
+    if (delBtn) delBtn.classList.add('hidden');
+
+    const updateStopPreviewLabel = () => {
+        const t = (timeInput.value || '17:00').trim();
+        const n = (nameInput.value || '新增定點').trim();
+        updateLockedRoutePointPreviewLabel(`🕒 站牌鎖定點 (#${ptIndex + 1})：${t} ${n}`);
+    };
+
+    showLockedRoutePointPreviewMarker(
+        [lockedLng, lockedLat],
+        'stop',
+        `🕒 站牌鎖定點 (#${ptIndex + 1})：${timeInput.value} ${nameInput.value}`
+    );
+    focusMapAboveBottomModal([lockedLng, lockedLat]);
+
+    timeInput.oninput = updateStopPreviewLabel;
+    nameInput.oninput = updateStopPreviewLabel;
+    modal.classList.remove('hidden');
+
+    saveBtn.onclick = () => {
+        const newTime = timeInput.value.trim();
+        const newName = nameInput.value.trim();
+        if (!newTime || !newName) {
+            alert('時間與站名不可空白！');
+            return;
+        }
+        if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+            pushEditUndoSnapshot(route);
+        }
+        targetPt.lng = lockedLng;
+        targetPt.lat = lockedLat;
+        targetPt.is_stop = true;
+        targetPt.scheduled_time = newTime;
+        targetPt.stop_name = newName;
+        modal.classList.add('hidden');
+        if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+        editStep = 0;
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) promptEl.innerText = '🛠️ 時刻站牌已新增！請點擊地圖軌跡選擇下一個『目標點』';
+        updateRouteLayers(route.points);
+        renderEditableRouteMarkers(route);
+    };
+
+    if (cancelBtn) {
+        cancelBtn.onclick = () => {
+            modal.classList.add('hidden');
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+            editStep = 0;
+        };
+    }
+}
+
+function openStopModalForEdit(route, idx) {
+    const p = route?.points?.[idx];
+    if (!p) return;
+    const modal = document.getElementById('editStopModal');
+    const titleEl = document.getElementById('editStopModalTitle');
+    const badgeEl = document.getElementById('editStopLockedBadge');
+    const timeInput = document.getElementById('editStopTimeInput');
+    const nameInput = document.getElementById('editStopNameInput');
+    const saveBtn = document.getElementById('btnSaveStopEdit');
+    const delBtn = document.getElementById('btnDeleteStop');
+    const cancelBtn = document.getElementById('btnCancelStopEdit');
+    if (!modal || !timeInput || !nameInput || !saveBtn) return;
+
+    if (titleEl) {
+        titleEl.innerHTML = '<i class="fa-regular fa-clock"></i> 編輯時刻站牌';
+    }
+    if (badgeEl) {
+        badgeEl.textContent = `🎯 已鎖定站牌節點 #${idx + 1}（上方地圖閃爍準星處）`;
+        badgeEl.classList.remove('hidden');
+    }
+    timeInput.value = p.scheduled_time || '';
+    nameInput.value = p.stop_name || '';
+    if (delBtn) delBtn.classList.remove('hidden');
+
+    const updateStopPreviewLabel = () => {
+        const t = (timeInput.value || '').trim();
+        const n = (nameInput.value || '').trim();
+        updateLockedRoutePointPreviewLabel(`🕒 編輯站牌 (#${idx + 1})：${t} ${n}`);
+    };
+
+    showLockedRoutePointPreviewMarker(
+        [p.lng, p.lat],
+        'stop',
+        `🕒 編輯站牌 (#${idx + 1})：${p.scheduled_time || ''} ${p.stop_name || ''}`
+    );
+    focusMapAboveBottomModal([p.lng, p.lat]);
+
+    timeInput.oninput = updateStopPreviewLabel;
+    nameInput.oninput = updateStopPreviewLabel;
+    modal.classList.remove('hidden');
+
+    saveBtn.onclick = () => {
+        const newTime = timeInput.value.trim();
+        const newName = nameInput.value.trim();
+        if (newTime && newName) {
+            pushEditUndoSnapshot(route);
+            route.points[idx].scheduled_time = newTime;
+            route.points[idx].stop_name = newName;
+            modal.classList.add('hidden');
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+            renderEditableRouteMarkers(route);
+        } else {
+            alert('時間與站名不可空白！');
+        }
+    };
+
+    if (delBtn) {
+        delBtn.onclick = () => {
+            if (confirm(`確定要刪除【${p.stop_name}】這個站牌嗎？`)) {
+                pushEditUndoSnapshot(route);
+                delete route.points[idx].is_stop;
+                delete route.points[idx].stop_name;
+                delete route.points[idx].scheduled_time;
+                modal.classList.add('hidden');
+                if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+                renderEditableRouteMarkers(route);
+            }
+        };
+    }
+
+    if (cancelBtn) {
+        cancelBtn.onclick = () => {
+            modal.classList.add('hidden');
+            if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+        };
+    }
+}
+
 function openAlertModalForCreate(route, ptIndex) {
+    const targetPt = route?.points?.[ptIndex];
+    if (!targetPt) return;
+    const lockedLng = Number(targetPt.lng);
+    const lockedLat = Number(targetPt.lat);
+    const lockedBearing = Number(targetPt.bearing) || 0;
+
+    // 1. 事先在地圖鎖定座標上顯示高對比脈動準星與即時預覽標籤，並將地圖中心微調至彈窗上方可視區
+    showLockedRoutePointPreviewMarker(
+        [lockedLng, lockedLat],
+        'alert',
+        `⚠️ 提醒鎖定點 (#${ptIndex + 1})：注意路段`
+    );
+    focusMapAboveBottomModal([lockedLng, lockedLat]);
+
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `🎯 已鎖定節點 #${ptIndex + 1}！請確認地圖閃爍準星落點並輸入提醒內容`;
+    }
+
     if (window.CautionEditor && typeof window.CautionEditor.openForm === 'function') {
-        const targetPt = route?.points?.[ptIndex];
-        if (!targetPt) return;
         window.CautionEditor.openForm({
             title: '新增黃色提醒事項',
             initialNote: '注意路段',
             initialPhoto: '',
-            lockedCoord: [targetPt.lng, targetPt.lat],
+            lockedCoord: [lockedLng, lockedLat],
+            lockedBadgeText: `🎯 已鎖定路線節點 #${ptIndex + 1}（上方地圖閃爍準星處）`,
             lockedTime: Date.now(),
+            onNoteChange: (liveVal) => {
+                const clean = String(liveVal || '').trim() || '注意路段';
+                updateLockedRoutePointPreviewLabel(`⚠️ 提醒鎖定點 (#${ptIndex + 1})：${clean}`);
+            },
             onSave: ({ note, photo, lockedTime }) => {
+                if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+                    pushEditUndoSnapshot(route);
+                }
                 route.events = route.events || [];
                 const newEv = {
                     type: 'alert',
                     note,
-                    lng: targetPt.lng,
-                    lat: targetPt.lat,
+                    lng: lockedLng,
+                    lat: lockedLat,
                     ptIdx: ptIndex,
-                    bearing: targetPt.bearing || 0,
+                    bearing: lockedBearing,
                     createdAt: lockedTime
                 };
                 if (photo) newEv.photo = photo;
@@ -5260,20 +5486,28 @@ function openAlertModalForCreate(route, ptIndex) {
     btnDeleteAlert.classList.add('hidden');
     editAlertModal.classList.remove('hidden');
 
+    editAlertNoteInput.oninput = () => {
+        const clean = editAlertNoteInput.value.trim() || '注意路段';
+        updateLockedRoutePointPreviewLabel(`⚠️ 提醒鎖定點 (#${ptIndex + 1})：${clean}`);
+    };
+
     btnSaveAlertEdit.onclick = () => {
         const note = editAlertNoteInput.value.trim();
         if (!note) {
             alert('請輸入提醒內容！');
             return;
         }
+        if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
+            pushEditUndoSnapshot(route);
+        }
         route.events = route.events || [];
         const newEv = {
             type: 'alert',
             note,
-            lng: route.points[ptIndex].lng,
-            lat: route.points[ptIndex].lat,
+            lng: lockedLng,
+            lat: lockedLat,
             ptIdx: ptIndex,
-            bearing: route.points[ptIndex].bearing || 0
+            bearing: lockedBearing
         };
         if (currentAlertPhotoBase64) newEv.photo = currentAlertPhotoBase64;
         route.events.push(newEv);
@@ -5289,13 +5523,29 @@ function openAlertModalForEdit(route, eventIdx) {
     const ev = route.events && route.events[eventIdx];
     if (!ev) return;
 
+    const lockedLng = Number(ev.lng);
+    const lockedLat = Number(ev.lat);
+    const ptLabel = typeof ev.ptIdx === 'number' ? ` (#${ev.ptIdx + 1})` : '';
+
+    showLockedRoutePointPreviewMarker(
+        [lockedLng, lockedLat],
+        'alert',
+        `⚠️ 編輯提醒鎖定點${ptLabel}：${ev.note || '注意路段'}`
+    );
+    focusMapAboveBottomModal([lockedLng, lockedLat]);
+
     if (window.CautionEditor && typeof window.CautionEditor.openForm === 'function') {
         window.CautionEditor.openForm({
             title: '編輯黃色提醒事項',
             initialNote: ev.note || '注意路段',
             initialPhoto: ev.photo || '',
-            lockedCoord: [ev.lng, ev.lat],
+            lockedCoord: [lockedLng, lockedLat],
+            lockedBadgeText: `🎯 已鎖定提醒位置${ptLabel}（上方地圖閃爍準星處）`,
             lockedTime: ev.createdAt || Date.now(),
+            onNoteChange: (liveVal) => {
+                const clean = String(liveVal || '').trim() || '注意路段';
+                updateLockedRoutePointPreviewLabel(`⚠️ 編輯提醒鎖定點${ptLabel}：${clean}`);
+            },
             onSave: ({ note, photo }) => {
                 if (isEditingMode && typeof pushEditUndoSnapshot === 'function') {
                     pushEditUndoSnapshot(route);
@@ -5319,7 +5569,10 @@ function openAlertModalForEdit(route, eventIdx) {
                 }
                 return false;
             },
-            onCancel: () => {}
+            onCancel: () => {
+                if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+                editStep = 0;
+            }
         });
         return;
     }
@@ -5330,6 +5583,11 @@ function openAlertModalForEdit(route, eventIdx) {
     updateAlertPhotoPreviewUI(ev.photo || '');
     btnDeleteAlert.classList.remove('hidden');
     editAlertModal.classList.remove('hidden');
+
+    editAlertNoteInput.oninput = () => {
+        const clean = editAlertNoteInput.value.trim() || '注意路段';
+        updateLockedRoutePointPreviewLabel(`⚠️ 編輯提醒鎖定點${ptLabel}：${clean}`);
+    };
 
     btnSaveAlertEdit.onclick = () => {
         const note = editAlertNoteInput.value.trim();
@@ -5361,6 +5619,9 @@ function openAlertModalForEdit(route, eventIdx) {
 
     btnCancelAlertEdit.onclick = () => {
         editAlertModal.classList.add('hidden');
+        if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+        editStep = 0;
     };
 }
+
 

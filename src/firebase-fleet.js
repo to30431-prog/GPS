@@ -69,18 +69,21 @@ function findMatchingCloudRoute(localRoute, cloudList = cachedCloudRoutes) {
     }, matches[0]);
 }
 
-// 判斷本機路線是否在雲端有新版本（routeVersion 比對）
+// 判斷本機路線是否在雲端有新版本（routeVersion 與 baseVersion 比對）
 function getCloudRouteUpdateInfo(localRoute, cloudList = cachedCloudRoutes) {
     const localVer = getRouteVersion(localRoute);
+    const localBaseVer = getRouteBaseVersion(localRoute);
     const matchingCloud = findMatchingCloudRoute(localRoute, cloudList);
     if (!matchingCloud) {
-        return { hasUpdate: false, localVer, cloudVer: null, cloudRoute: null, updateTimeText: '' };
+        return { hasUpdate: false, localVer, localBaseVer, cloudVer: null, cloudRoute: null, updateTimeText: '' };
     }
     const cloudVer = getRouteVersion(matchingCloud);
-    const hasUpdate = cloudVer > localVer;
+    // 若雲端版本大於本機版本，或本機雖有未同步修改但雲端版本已超越本機編輯基準版本（baseVersion），皆代表雲端有他人發布的新版
+    const hasUpdate = (cloudVer > localVer) || (Boolean(localRoute?.hasLocalEdit) && cloudVer > localBaseVer);
     return {
         hasUpdate,
         localVer,
+        localBaseVer,
         cloudVer,
         cloudRoute: matchingCloud,
         updateTimeText: formatRouteUpdateTimeText(matchingCloud)
@@ -208,9 +211,11 @@ function isRouteAlreadyInLocal(cloudRoute) {
         if (!local || local.isPendingPreview) return false;
         if (!isSameRouteIdentity(local, cloudRoute)) return false;
         const lVer = getRouteVersion(local);
+        const lBaseVer = getRouteBaseVersion(local);
         const lUpd = getRouteUpdatedAt(local);
-        // 若雲端版本號大於本機版本號，或同版本但雲端更新時間較新，代表雲端有新版可覆蓋更新
+        // 若雲端版本號大於本機版本號，或本機有修改但雲端版本已大於本機 baseVersion，代表雲端有新版可覆蓋更新
         if (cVer > lVer) return false;
+        if (local.hasLocalEdit && cVer > lBaseVer) return false;
         if (cVer === lVer && cloudRoute.uploadedAt && local.uploadedAt && cloudRoute.uploadedAt !== local.uploadedAt && cUpd > lUpd) {
             return false;
         }
@@ -220,11 +225,48 @@ function isRouteAlreadyInLocal(cloudRoute) {
 
 function askUploadConflictChoice(existingRoute, localRoute) {
     return new Promise((resolve) => {
+        const titleEl = document.getElementById('uploadConflictTitle');
         const descEl = document.getElementById('uploadConflictDesc');
+        const overwriteBtn = document.getElementById('btnConflictOverwrite');
+        const cancelBtn = document.getElementById('btnConflictCancel');
+
+        const cloudLatestVer = getRouteVersion(existingRoute);
+        const localBaseVer = getRouteBaseVersion(localRoute);
+        const nextCloudVer = cloudLatestVer + 1;
+        const isVersionConflict = cloudLatestVer > localBaseVer;
+
         const matchReason = (existingRoute.routeId && existingRoute.routeId === localRoute.routeId)
             ? `相同路線 ID (${localRoute.routeId})`
             : `相同路線名稱【${existingRoute.name}】`;
-        descEl.innerText = `雲端已存在${matchReason}（原創作者：${existingRoute.author || '隊員'}）。請選擇您要「覆蓋更新原路線」還是「另存為新路線」：`;
+
+        if (isVersionConflict) {
+            if (titleEl) {
+                titleEl.innerText = `⚠️ 版本衝突：雲端已有較新版本 v${cloudLatestVer}`;
+            }
+            if (descEl) {
+                descEl.innerText = `雲端已有較新版本 v${cloudLatestVer}（由【${existingRoute.author || '其他同仁'}】更新），你目前是基於 v${localBaseVer} 修改。是否強制以你的版本覆蓋並升為 v${nextCloudVer}？`;
+            }
+            if (overwriteBtn) {
+                overwriteBtn.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> 強制覆蓋並升為 v${nextCloudVer}`;
+            }
+            if (cancelBtn) {
+                cancelBtn.innerText = `取消並保留雲端新版 (v${cloudLatestVer})`;
+            }
+        } else {
+            if (titleEl) {
+                titleEl.innerText = '偵測到雲端已有同名或同 ID 路線';
+            }
+            if (descEl) {
+                descEl.innerText = `雲端已存在${matchReason}（目前雲端版本 v${cloudLatestVer}，與您的編輯基準 v${localBaseVer} 一致，期間無人更動）。請選擇要「覆蓋升版為 v${nextCloudVer}」還是「另存為新路線」：`;
+            }
+            if (overwriteBtn) {
+                overwriteBtn.innerHTML = `<i class="fa-solid fa-arrows-rotate"></i> 覆蓋更新並升為 v${nextCloudVer}`;
+            }
+            if (cancelBtn) {
+                cancelBtn.innerText = '取消上傳';
+            }
+        }
+
         uploadConflictModal.classList.remove('hidden');
 
         const cleanup = (choice) => {
@@ -248,7 +290,7 @@ async function fetchRawFirebaseList(url) {
         .filter(item => item && item.name && Array.isArray(item.points) && item.points.length >= 2);
 }
 
-async function publishRouteToSharedDB(payload, overwriteMode = true) {
+async function publishRouteToSharedDB(payload, overwriteMode = true, options = {}) {
     if (!isAdminUnlocked) {
         throw new Error('PERMISSION_DENIED_ADMIN_REQUIRED');
     }
@@ -271,16 +313,30 @@ async function publishRouteToSharedDB(payload, overwriteMode = true) {
     delete cleanPayload.targetFirebaseKey;
     delete cleanPayload.targetRouteId;
     delete cleanPayload.isPendingPreview;
+    delete cleanPayload.hasLocalEdit;
 
     if (overwriteMode && targetMatches.length > 0) {
         const primaryMatch = targetMatches[0];
         const primaryKey = primaryMatch.firebaseKey;
         const maxExistingCloudVer = targetMatches.reduce((maxV, item) => Math.max(maxV, getRouteVersion(item)), 1);
-        // 雲端已存在同名或同 routeId 路線：自動將 routeVersion 在雲端現有版本基礎上 + 1
+        const payloadBaseVer = getRouteBaseVersion(payload);
+
+        // 上傳寫入前進行衝突檢查：若雲端最新 version > 編輯基準 baseVersion，且尚未在對話框確認過該雲端版本，必須明確提示詢問
+        if (maxExistingCloudVer > payloadBaseVer && options.confirmedForceUpToVer !== maxExistingCloudVer) {
+            const forceConfirmed = confirm(
+                `⚠️ 版本衝突提醒！\n\n雲端已有較新版本 v${maxExistingCloudVer}，目前此修改是基於 v${payloadBaseVer} 修改。\n是否強制以你的版本覆蓋並升為 v${maxExistingCloudVer + 1}？\n（按「取消」將中止寫入並保留雲端新版 v${maxExistingCloudVer}）`
+            );
+            if (!forceConfirmed) {
+                throw new Error('USER_CANCELLED_VERSION_CONFLICT');
+            }
+        }
+
+        // 真正成功寫入雲端時，新版本號一律以「雲端當下最新 version + 1」計算（嚴禁採用本機自行累加的數字）
         const nextVer = maxExistingCloudVer + 1;
 
         cleanPayload.routeId = primaryMatch.routeId || payload.targetRouteId || cleanPayload.routeId || generateRouteId();
         cleanPayload.routeVersion = nextVer;
+        cleanPayload.baseVersion = nextVer;
         cleanPayload.updatedAt = nowTs;
         cleanPayload.uploadedAt = nowIso;
         cleanPayload.uploadedAtText = uploadedAtText;
@@ -301,7 +357,8 @@ async function publishRouteToSharedDB(payload, overwriteMode = true) {
         }
     } else {
         cleanPayload.routeId = payload.targetRouteId || cleanPayload.routeId || generateRouteId();
-        cleanPayload.routeVersion = getRouteVersion(cleanPayload);
+        cleanPayload.routeVersion = 1;
+        cleanPayload.baseVersion = 1;
         cleanPayload.updatedAt = nowTs;
         cleanPayload.uploadedAt = cleanPayload.uploadedAt || nowIso;
         cleanPayload.uploadedAtText = cleanPayload.uploadedAtText || uploadedAtText;
@@ -315,7 +372,7 @@ async function publishRouteToSharedDB(payload, overwriteMode = true) {
         if (!postRes.ok) throw new Error(`POST HTTP ${postRes.status}`);
     }
 
-    // 同步將本機 localStorage / localforage 中對應的路線原地更新為剛發布的最新版本（不重複新增）
+    // 同步將本機 localStorage / localforage 中對應的路線原地更新為剛發布的最新版本（包含同步更新 baseVersion 為新版本）
     for (let i = savedRoutes.length - 1; i >= 0; i--) {
         if (savedRoutes[i]?.isPendingPreview) {
             savedRoutes.splice(i, 1);
@@ -337,11 +394,12 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
         return;
     }
 
-    // 確保具備唯一 routeId 與初始 routeVersion 並寫回本機
+    // 確保具備唯一 routeId、routeVersion 與 baseVersion 並寫回本機
     if (!r.routeId) {
         r.routeId = generateRouteId();
     }
     r.routeVersion = getRouteVersion(r);
+    r.baseVersion = getRouteBaseVersion(r);
     r.updatedAt = getRouteUpdatedAt(r);
     await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
 
@@ -366,33 +424,43 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
     }
 
     try {
-        // 1. 先檢查雲端正式庫是否已有相同 routeId 或相同名稱的路線
+        // 1. 先讀取雲端正式庫該路線當下的最新 version，與本機記錄的 baseVersion 進行比對
         const existingShared = await fetchRawFirebaseList(FIREBASE_ROUTES_URL);
-        const conflictRoute = existingShared.find(item =>
+        const conflictMatches = existingShared.filter(item =>
             (item.routeId && item.routeId === r.routeId) ||
             ((item.name || '').trim().toLowerCase() === (r.name || '').trim().toLowerCase())
         );
+        const conflictRoute = conflictMatches.length > 0
+            ? conflictMatches.reduce((best, cur) => (getRouteVersion(cur) >= getRouteVersion(best) ? cur : best), conflictMatches[0])
+            : null;
 
         let uploadAction = 'new';
         let finalRouteId = r.routeId;
         let finalRouteName = r.name;
-        let nextRouteVersion = getRouteVersion(r);
+        let nextRouteVersion = 1;
+        let localBaseVer = getRouteBaseVersion(r);
+        let confirmedCloudVer = null;
 
         if (conflictRoute) {
+            const cloudLatestVer = getRouteVersion(conflictRoute);
             const choice = await askUploadConflictChoice(conflictRoute, r);
-            if (!choice) return; // 使用者取消上傳
+            if (!choice) return; // 使用者選擇「取消並保留雲端新版」或取消上傳
             uploadAction = choice;
             if (choice === 'overwrite') {
                 finalRouteId = conflictRoute.routeId || r.routeId;
                 r.routeId = finalRouteId;
-                // 雲端已存在同名或同 routeId 路線：自動將 routeVersion 在原本基礎上 + 1
-                const cloudBaseVer = getRouteVersion(conflictRoute);
-                nextRouteVersion = Math.max(cloudBaseVer, getRouteVersion(r)) + 1;
+                // 新版本號一律嚴格以「雲端當下最新 version + 1」計算，並同步校正本機等待上傳的目標版本
+                nextRouteVersion = cloudLatestVer + 1;
+                confirmedCloudVer = cloudLatestVer;
                 await localforage.setItem('yinggeCleanRoutes_v2', savedRoutes);
             } else if (choice === 'new') {
                 finalRouteId = generateRouteId();
                 r.routeId = finalRouteId;
                 nextRouteVersion = 1;
+                localBaseVer = 1;
+                r.baseVersion = 1;
+                r.routeVersion = 1;
+                r.hasLocalEdit = false;
                 const newNameInput = prompt('您選擇「另存為新路線」，請確認或修改路線名稱：', r.name);
                 if (newNameInput === null) return;
                 if (newNameInput.trim()) {
@@ -423,6 +491,7 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             name: finalRouteName,
             author: finalAuthor,
             routeVersion: nextRouteVersion,
+            baseVersion: localBaseVer,
             updatedAt: nowTs,
             date: r.date || uploadedAtText,
             uploadedAt: nowIso,
@@ -451,12 +520,15 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
         };
 
         if (publishDirectlyAsAdmin) {
-            const published = await publishRouteToSharedDB(payload, uploadAction === 'overwrite');
+            const published = await publishRouteToSharedDB(payload, uploadAction === 'overwrite', {
+                confirmedForceUpToVer: confirmedCloudVer
+            });
             renderHistoryList();
             syncPreviewDetailCardIfVisible();
             alert(`✅ 管理員直通上架成功！\n路線【${finalRouteName}】(v${published.routeVersion}) 已${uploadAction === 'overwrite' ? '覆蓋更新至' : '新增至'}正式雲端路線庫。`);
         } else {
-            // 一般隊員上傳至 pending_routes：不提前竄改本機正式版號，待管理員審核通過後再同步升級
+            // 一般隊員上傳至 pending_routes：不提前竄改本機正式版號，但若已在衝突檢查中確認基於最新雲端版升版，同步對齊目標顯示版本
+            r.routeVersion = nextRouteVersion;
             r.updatedAt = nowTs;
             r.uploadedAt = nowIso;
             r.uploadedAtText = uploadedAtText;
@@ -473,6 +545,10 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             alert(`✅ 已提交至待審核區（pending_routes），待管理員審核確認後發布正式版！\n\n路線名稱：${finalRouteName} (目標版本 v${nextRouteVersion})\n分享隊員：${finalAuthor}\n提交模式：${uploadAction === 'overwrite' ? '🔄 覆蓋更新原路線' : '🆕 新增路線'}`);
         }
     } catch (err) {
+        if (err && err.message === 'USER_CANCELLED_VERSION_CONFLICT') {
+            showNavAlert('ℹ️', '已取消覆蓋上傳，保留雲端較新版本', 'bg-slate-700');
+            return;
+        }
         console.error('上傳雲端失敗:', err);
         alert('❌ 上傳失敗（網路不穩或連線逾時）！請檢查網路狀態後再試。');
     } finally {
@@ -643,6 +719,14 @@ async function approvePendingRoute(pendingIdx, btnEl) {
         showNavAlert('✅', `已核准並發布「${cleanName}」(v${published.routeVersion})，並自動清除待審紀錄！`, 'bg-emerald-600');
         await fetchCloudRoutes();
     } catch (err) {
+        if (err && err.message === 'USER_CANCELLED_VERSION_CONFLICT') {
+            showNavAlert('ℹ️', '已取消核准覆蓋，保留雲端較新版本', 'bg-slate-700');
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerHTML = '✅ 直接核准';
+            }
+            return;
+        }
         console.error('核准失敗:', err);
         alert('❌ 核准上架失敗（網路不穩或逾時），請檢查網路連線後再試！');
         if (btnEl) {
@@ -836,6 +920,10 @@ async function approveAndPublishReviewedPendingRoute() {
         exitPendingReviewMode(true);
         showNavAlert('✅', `已核准發布「${published.name}」正式版 (v${published.routeVersion})，並自動清除待審紀錄與同步更新本機！`, 'bg-emerald-600');
     } catch (err) {
+        if (err && err.message === 'USER_CANCELLED_VERSION_CONFLICT') {
+            showNavAlert('ℹ️', '已取消核准覆蓋，保留雲端較新版本', 'bg-slate-700');
+            return;
+        }
         console.error('審核核准並發布失敗:', err);
         alert('❌ 核准並發布正式版失敗（網路不穩或連線逾時），請檢查網路後再試！');
     } finally {
@@ -1119,13 +1207,18 @@ function renderCloudRoutesList() {
 function cloneCloudRouteForLocal(cr, existingLocal = null) {
     const rawName = String(cr.name || existingLocal?.name || '未命名路線').trim();
     const cleanName = rawName.replace(/\s+[vV]\d+(\.\d+)?$/i, '').trim() || rawName;
+    const isLocalDraft = Boolean(cr?.hasLocalEdit);
+    const resolvedVersion = getRouteVersion(cr);
+    const resolvedBaseVersion = isLocalDraft ? getRouteBaseVersion(cr) : resolvedVersion;
     return {
         routeId: cr.routeId || existingLocal?.routeId || generateRouteId(),
         id: existingLocal?.id || cr.id || (Date.now() + Math.floor(Math.random() * 1000)),
         originId: existingLocal?.originId || existingLocal?.id || cr.originId || cr.id || Date.now(),
         name: cleanName,
         author: cr.author || existingLocal?.author || '熱心隊員',
-        routeVersion: getRouteVersion(cr),
+        routeVersion: resolvedVersion,
+        baseVersion: resolvedBaseVersion,
+        hasLocalEdit: isLocalDraft,
         updatedAt: getRouteUpdatedAt(cr),
         date: cr.date || cr.uploadedAtText || existingLocal?.date || new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
         uploadedAt: cr.uploadedAt || existingLocal?.uploadedAt || '',

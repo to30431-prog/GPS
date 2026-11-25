@@ -723,6 +723,13 @@ function getRouteVersion(r) {
     return (!isNaN(v) && v >= 1) ? v : 1;
 }
 
+// 取得路線基準版本號（baseVersion：從雲端載入/下載或上次同步成功時的雲端版本號）
+function getRouteBaseVersion(r) {
+    const bv = parseInt(r?.baseVersion, 10);
+    if (!isNaN(bv) && bv >= 1) return bv;
+    return getRouteVersion(r);
+}
+
 // 取得路線更新時間戳（向下相容舊資料）
 function getRouteUpdatedAt(r) {
     if (typeof r?.updatedAt === 'number' && !isNaN(r.updatedAt) && r.updatedAt > 0) {
@@ -821,6 +828,8 @@ function pickPreferredRouteDuplicate(existingRoute, candidateRoute) {
         routeId: winner.routeId || existingRoute.routeId || generateRouteId(),
         name: cleanName,
         routeVersion: Math.max(verA, verB),
+        baseVersion: getRouteBaseVersion(winner),
+        hasLocalEdit: Boolean(winner.hasLocalEdit),
         updatedAt: Math.max(updA, updB)
     };
 }
@@ -838,6 +847,11 @@ function ensureRoutesHaveRouteId(routes) {
         const ver = getRouteVersion(r);
         if (r.routeVersion !== ver) {
             r.routeVersion = ver;
+            mutated = true;
+        }
+        const baseVer = getRouteBaseVersion(r);
+        if (r.baseVersion !== baseVer) {
+            r.baseVersion = baseVer;
             mutated = true;
         }
         const upd = getRouteUpdatedAt(r);

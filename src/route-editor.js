@@ -195,7 +195,7 @@ async function stopAndSaveActiveRecording() {
         const nowId = Date.now();
         savedRoutes.unshift({
             id: nowId, originId: nowId, routeId: generateRouteId(), name, author,
-            routeVersion: 1, updatedAt: nowId,
+            routeVersion: 1, baseVersion: 1, hasLocalEdit: false, updatedAt: nowId,
             date: new Date().toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
             createdAt: new Date(nowId).toISOString(),
             distance: totalDistanceKm.toFixed(2), timeStr: `${mins}m ${secs}s`,
@@ -3908,7 +3908,8 @@ function buildManualRouteRecordObject(routeName, authorName) {
     const trimmedName = routeName.trim();
 
     const existingMatch = savedRoutes.find(r => !r?.isPendingPreview && isSameRouteIdentity(r, { name: trimmedName }));
-    const nextVer = existingMatch ? (getRouteVersion(existingMatch) + 1) : 1;
+    const baseVer = existingMatch ? getRouteBaseVersion(existingMatch) : 1;
+    const nextVer = existingMatch ? (baseVer + 1) : 1;
 
     return {
         id: existingMatch?.id || nowId,
@@ -3917,6 +3918,8 @@ function buildManualRouteRecordObject(routeName, authorName) {
         name: trimmedName,
         author: authorName,
         routeVersion: nextVer,
+        baseVersion: baseVer,
+        hasLocalEdit: Boolean(existingMatch),
         updatedAt: nowId,
         date: new Date(nowId).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
         createdAt: new Date(nowId).toISOString(),
@@ -4773,6 +4776,7 @@ document.getElementById('saveEditBtn').onclick = () => {
     try { map.dragPan.enable(); } catch (e) {}
     ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    document.getElementById('exitEditConfirmModal')?.classList.add('hidden');
     document.getElementById('editRouteBar').classList.add('hidden');
 
     const editedRoute = savedRoutes[selectedRouteIdx];
@@ -4783,9 +4787,13 @@ document.getElementById('saveEditBtn').onclick = () => {
         // 自動重新計算總距離 (km) 與各語音標記點的對應路徑索引
         syncRouteMarkersAndIndicesAfterSpline(editedRoute, null, true);
 
-        // 儲存自動升版：routeVersion + 1、更新 updatedAt 時間戳，並原地覆蓋本機舊檔
+        // 本機儲存版本控制：在同一次編輯基準（baseVersion，尚未成功同步寫入雲端成為新版本前），
+        // 就算使用者在本機重複按多次儲存，也不可把版本號無限制累加（固定為 baseVersion + 1），防止連按 5 次變成 v6
         const nowTs = Date.now();
-        editedRoute.routeVersion = getRouteVersion(editedRoute) + 1;
+        const baseVer = getRouteBaseVersion(editedRoute);
+        editedRoute.baseVersion = baseVer;
+        editedRoute.routeVersion = baseVer + 1;
+        editedRoute.hasLocalEdit = true;
         editedRoute.updatedAt = nowTs;
         editedRoute.date = new Date(nowTs).toLocaleString('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         savedRoutes[selectedRouteIdx] = editedRoute;
@@ -4801,7 +4809,7 @@ document.getElementById('saveEditBtn').onclick = () => {
         document.getElementById('topBackBtn').classList.remove('hidden');
         window.openRouteDetail(selectedRouteIdx);
         if (editedRoute) {
-            showNavAlert('✅', `已儲存「${editedRoute.name}」並自動升版為 v${editedRoute.routeVersion}！`, 'bg-emerald-600');
+            showNavAlert('✅', `已儲存「${editedRoute.name}」（基於 v${editedRoute.baseVersion} 編輯，待同步版本 v${editedRoute.routeVersion}）！`, 'bg-emerald-600');
         }
     }).catch((err) => {
         alert("儲存失敗！可能是手機儲存空間不足，請清理後再試。");
@@ -4809,7 +4817,8 @@ document.getElementById('saveEditBtn').onclick = () => {
     });
 };
 
-document.getElementById('cancelEditBtn').onclick = () => {
+function executeDiscardAndExitEditMode() {
+    document.getElementById('exitEditConfirmModal')?.classList.add('hidden');
     isEditingMode = false;
     selectedEditNodeIdx = -1;
     activeDraggingEditNodeIdx = -1;
@@ -4830,7 +4839,26 @@ document.getElementById('cancelEditBtn').onclick = () => {
 
     document.getElementById('topBackBtn').classList.remove('hidden');
     window.openRouteDetail(selectedRouteIdx);
+}
+
+document.getElementById('cancelEditBtn').onclick = () => {
+    const exitConfirmModal = document.getElementById('exitEditConfirmModal');
+    if (exitConfirmModal) {
+        exitConfirmModal.classList.remove('hidden');
+        return;
+    }
+    if (confirm('確定要退出編輯嗎？所有未儲存的修改將會放棄並還原為原始路線。')) {
+        executeDiscardAndExitEditMode();
+    }
 };
+
+document.getElementById('btnContinueEditConfirm')?.addEventListener('click', () => {
+    document.getElementById('exitEditConfirmModal')?.classList.add('hidden');
+});
+
+document.getElementById('btnConfirmExitEdit')?.addEventListener('click', () => {
+    executeDiscardAndExitEditMode();
+});
 
 // 結束重播後自動歸位：將 isReplaying 設回 false，並立即將黃色垃圾車 Marker 與地圖鏡頭恢復對齊至使用者的最新真實 GPS 位置
 function restoreRealGpsAfterReplay(alignCamera = true) {
@@ -4906,6 +4934,7 @@ function backToMain() {
     if (pendingReviewBanner) pendingReviewBanner.classList.add('hidden');
     if (pendingReviewActionRow) pendingReviewActionRow.classList.add('hidden');
     if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
+    document.getElementById('exitEditConfirmModal')?.classList.add('hidden');
     document.getElementById('editRouteBar')?.classList.add('hidden');
     selectedEditNodeIdx = -1;
     activeDraggingEditNodeIdx = -1;

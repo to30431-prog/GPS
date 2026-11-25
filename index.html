@@ -620,13 +620,13 @@
                     <button id="btnEditorZoomIn" type="button" class="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-black text-xs flex items-center justify-center active:scale-90 border border-gray-200" title="放大檢視巷弄">＋</button>
                 </div>
 
-                <!-- 一般本機編輯模式：緊湊「✅ 儲存並升版」與「✕ 取消」雙按鈕 -->
+                <!-- 一般本機編輯模式：左「退出編輯」、右「✅ 儲存並升版」雙按鈕 -->
                 <div id="normalEditActionRow" class="flex items-center gap-1.5 flex-1 justify-end">
+                    <button id="cancelEditBtn" type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-black py-1.5 px-2.5 rounded-xl flex items-center justify-center gap-0.5 shadow active:scale-95 text-xs whitespace-nowrap">
+                        <span>退出編輯</span>
+                    </button>
                     <button id="saveEditBtn" type="button" class="flex-1 max-w-[140px] bg-green-600 hover:bg-green-700 text-white font-black py-1.5 px-2.5 rounded-xl flex items-center justify-center gap-1 shadow active:scale-95 text-xs whitespace-nowrap">
                         <span>✅ 儲存並升版</span>
-                    </button>
-                    <button id="cancelEditBtn" type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-black py-1.5 px-2.5 rounded-xl flex items-center justify-center gap-0.5 shadow active:scale-95 text-xs whitespace-nowrap">
-                        <span>✕ 取消</span>
                     </button>
                 </div>
 
@@ -929,7 +929,7 @@
             <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl mx-auto">
                 <i class="fa-solid fa-code-compare"></i>
             </div>
-            <h3 class="text-lg font-black text-gray-900 text-center">偵測到雲端已有同名或同 ID 路線</h3>
+            <h3 id="uploadConflictTitle" class="text-lg font-black text-gray-900 text-center">偵測到雲端已有同名或同 ID 路線</h3>
             <p id="uploadConflictDesc" class="text-xs font-bold text-gray-500 text-center leading-relaxed">
                 雲端已存在相同路線，請選擇您要執行的上傳方式：
             </p>
@@ -961,6 +961,27 @@
                 </button>
                 <button id="btnConfirmManualClear" type="button" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3 rounded-2xl shadow-md active:scale-95 transition-all text-sm">
                     確定重畫
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🚪 路線編輯模式「退出編輯」防呆確認彈窗 -->
+    <div id="exitEditConfirmModal" class="hidden fixed inset-0 bg-black/70 z-[100002] flex items-center justify-center p-4 pointer-events-auto">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl flex flex-col gap-3 border border-gray-100">
+            <div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl mx-auto">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-lg font-black text-gray-900 text-center">確定要退出編輯嗎？</h3>
+            <p class="text-xs font-bold text-gray-500 text-center leading-relaxed">
+                確定要退出編輯嗎？所有未儲存的修改將會放棄並還原為原始路線。
+            </p>
+            <div class="flex flex-col gap-2 mt-1">
+                <button id="btnConfirmExitEdit" type="button" class="bg-red-600 hover:bg-red-700 text-white font-extrabold py-3 rounded-2xl shadow-md active:scale-95 transition-all text-sm">
+                    確定退出（放棄修改）
+                </button>
+                <button id="btnContinueEditConfirm" type="button" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold py-3 rounded-2xl active:scale-95 transition-all text-sm">
+                    繼續編輯
                 </button>
             </div>
         </div>

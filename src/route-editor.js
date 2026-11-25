@@ -2321,7 +2321,7 @@ function renderPathEditNodes(route) {
     });
 }
 
-// 渲染「✍️ 手繪」模式下的路線參考節點（不強制吸附、不自動接頭尾）
+// 渲染「✍️ 手繪延伸／剪接」模式下的路線錨點（支援直接從路線任意處起筆畫到另一處直接覆蓋替換對應舊線段，或先點選舊節點鎖定起點）
 function renderFreehandSpliceNodes(route) {
     clearPathEditMarkers();
     if (!isEditingMode || editSubMode !== 'freehand' || !route || !Array.isArray(route.points) || route.points.length === 0) return;
@@ -2334,16 +2334,27 @@ function renderFreehandSpliceNodes(route) {
         const pt = pts[ptIdx];
         if (!pt) return;
         const vPt = visualPts[ptIdx] || pt;
+        const isSpliceStart = (ptIdx === freehandSpliceStartIdx);
         const isHead = (ptIdx === 0);
         const isTail = (ptIdx === pts.length - 1);
 
         const el = document.createElement('div');
-        if (isHead || isTail) {
-            el.className = 'w-5 h-5 bg-amber-400 border-[4px] border-orange-700 rounded-full shadow-lg pointer-events-none z-20';
+        if (isSpliceStart) {
+            el.className = 'w-6 h-6 bg-orange-500 text-white border-[3px] border-white ring-4 ring-orange-400/70 rounded-full shadow-xl cursor-pointer z-30 flex items-center justify-center text-[10px] font-black';
+            el.innerHTML = '✂️';
+        } else if (isHead || isTail) {
+            el.className = 'w-5 h-5 bg-amber-400 border-[4px] border-orange-700 rounded-full shadow-lg cursor-pointer z-20';
         } else {
-            el.className = 'w-3.5 h-3.5 bg-white border-[3px] border-orange-500 rounded-full shadow pointer-events-none z-20';
+            el.className = 'w-4 h-4 bg-white border-[4px] border-orange-500 hover:border-amber-400 rounded-full shadow cursor-pointer z-20';
         }
-        el.title = `路線節點 #${ptIdx + 1}`;
+        el.title = isSpliceStart
+            ? `已鎖定手繪覆蓋起點 #${ptIdx + 1}（請畫線至目標路段放開，將直接覆蓋替換中間舊路線）`
+            : `節點 #${ptIdx + 1}（可直接畫線覆蓋替換，或點擊鎖定為覆蓋起點）`;
+
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            handleFreehandNodeClick(route, ptIdx);
+        });
 
         const m = new maplibregl.Marker({
             element: el,
@@ -2357,8 +2368,26 @@ function renderFreehandSpliceNodes(route) {
     });
 }
 
-function handleFreehandNodeClick() {
-    // 手繪模式為純獨立線段，不執行節點剪接或自動接頭尾
+function handleFreehandNodeClick(route, clickedIdx) {
+    if (!route || !Array.isArray(route.points)) return;
+    const pts = route.points;
+    const clickedPt = pts[clickedIdx];
+    if (!clickedPt) return;
+    const promptEl = document.getElementById('editPromptText');
+
+    freehandSpliceStartIdx = (freehandSpliceStartIdx === clickedIdx) ? -1 : clickedIdx;
+    freehandDraftCoords = [];
+    updateFreehandTempLayer([]);
+    vibrate(25);
+    renderFreehandSpliceNodes(route);
+
+    if (promptEl) {
+        if (freehandSpliceStartIdx !== -1) {
+            promptEl.innerText = `✂️ 已鎖定節點 #${clickedIdx + 1} 為覆蓋起點！請畫線至目標位置放開，將直接替換對應舊線段`;
+        } else {
+            promptEl.innerText = `✍️ 已取消鎖定起點；直接從路線任意處畫線至另一處放開，即可直接覆蓋替換對應舊路段`;
+        }
+    }
 }
 
 // 單筆手繪點位基礎防抖抽稀：
@@ -2413,36 +2442,186 @@ function simplifyFreehandStrokeCoords(rawCoords, minStepMeters = 4.2, minTurnDeg
     return simplified;
 }
 
-// 將單筆純手繪座標線段作為「純獨立線段」寫入路線（零道路吸附 Snap、零 OSRM、零自動接頭尾，整筆畫視為獨立一段可直接按「上一步」撤銷）
-function applyPureFreehandCoordsToRoute(route, _anchorIdx, rawCoords) {
-    if (!route || !Array.isArray(route.points) || !Array.isArray(rawCoords) || rawCoords.length < 2) return;
+// 找出指定座標 (lng, lat) 對應在既有路線上的最近節點索引與最短距離（同時比對真實座標、視覺偏移座標與相鄰線段投影）
+function findClosestRouteNodeForFreehand(pts, visualPts, lng, lat, preferredBearing = null, restrictRange = null) {
+    let bestIdx = 0;
+    let bestScoreM = Infinity;
+    let bestActualDistM = Infinity;
+    const minI = restrictRange ? Math.max(0, restrictRange.min) : 0;
+    const maxI = restrictRange ? Math.min(pts.length - 1, restrictRange.max) : (pts.length - 1);
+
+    for (let i = minI; i <= maxI; i++) {
+        const p = pts[i];
+        const v = (visualPts && visualPts[i]) || p;
+        const dRawM = getDistanceKm(lng, lat, p.lng, p.lat) * 1000;
+        const dVisM = getDistanceKm(lng, lat, v.lng, v.lat) * 1000;
+        let dM = Math.min(dRawM, dVisM);
+
+        // 若與後一節點連成線段，檢查點到線段投影距離，若投影更近則選取該線段較靠近的端點
+        if (i < maxI && !pts[i + 1]?.isSegmentStart && typeof pointToSegmentDistMeters === 'function') {
+            const segRawM = pointToSegmentDistMeters(lng, lat, p.lng, p.lat, pts[i + 1].lng, pts[i + 1].lat);
+            if (segRawM < dM && dRawM <= getDistanceKm(lng, lat, pts[i + 1].lng, pts[i + 1].lat) * 1000) {
+                dM = segRawM;
+            }
+        }
+
+        let scoreM = dM;
+        // 若同一路段有去回程雙向重疊，優先匹配與手繪行進方向一致的那一側節點
+        if (typeof preferredBearing === 'number' && !isNaN(preferredBearing) && typeof p.bearing === 'number') {
+            const angDiff = getAngleDiff(preferredBearing, p.bearing);
+            if (angDiff > 110) {
+                scoreM += 18;
+            }
+        }
+
+        if (scoreM < bestScoreM) {
+            bestScoreM = scoreM;
+            bestActualDistM = dM;
+            bestIdx = i;
+        }
+    }
+    return { idx: bestIdx, distM: bestActualDistM };
+}
+
+// 將手繪軌跡直接覆蓋／替換原本主路線上對應的那一段節點（不在旁邊多長出一條平行線或分岔，且不呼叫 OSRM 自動繞路）：
+// - 自動依手繪起點、終點與沿途靠近既有路線的對應區段 [replaceStartIdx .. replaceEndIdx]，
+//   直接以 `pts.splice(replaceStartIdx, deleteCount, ...newPoints)` 原地替換掉舊節點並把新畫的手繪軌跡無縫接進去
+// - 完整寫入 pushEditUndoSnapshot(route)，按「↩️ 上一步」可 100% 撤銷該次手繪覆蓋
+function applyPureFreehandCoordsToRoute(route, explicitStartIdx, rawCoords, explicitEndIdx = -1) {
+    if (!route || !Array.isArray(route.points) || route.points.length === 0 || !Array.isArray(rawCoords) || rawCoords.length < 2) return;
 
     const simplifiedCoords = simplifyFreehandStrokeCoords(rawCoords, 4.2, 12, 18);
     if (simplifiedCoords.length < 2) return;
 
     const pts = route.points;
+    const n = pts.length;
+    const visualPts = computeVisualRightOffsetCoords(pts);
     const preservedStops = pts
         .filter(p => p.is_stop)
         .map(p => ({ lng: p.lng, lat: p.lat, stop_name: p.stop_name, scheduled_time: p.scheduled_time }));
 
+    // 記錄編輯快照，確保「↩️ 上一步」可完整撤銷本次手繪覆蓋
     pushEditUndoSnapshot(route);
 
-    const inheritedMusic = pts.length > 0 ? Boolean(pts[pts.length - 1]?.musicActive) : true;
-    const hasExistingPoints = pts.length > 0;
+    const startCoord = simplifiedCoords[0];
+    const endCoord = simplifiedCoords[simplifiedCoords.length - 1];
+    const strokeStartBearing = getBearing(
+        startCoord[0], startCoord[1],
+        simplifiedCoords[Math.min(2, simplifiedCoords.length - 1)][0],
+        simplifiedCoords[Math.min(2, simplifiedCoords.length - 1)][1]
+    );
+    const strokeEndBearing = getBearing(
+        simplifiedCoords[Math.max(0, simplifiedCoords.length - 3)][0],
+        simplifiedCoords[Math.max(0, simplifiedCoords.length - 3)][1],
+        endCoord[0], endCoord[1]
+    );
 
-    const pureFreehandPoints = simplifiedCoords.map(([lng, lat], idx) => ({
+    // 1. 判定手繪起點對應的主路線節點 startMatch
+    let startIdx = -1;
+    let startDistM = Infinity;
+    if (typeof explicitStartIdx === 'number' && explicitStartIdx >= 0 && explicitStartIdx < n) {
+        startIdx = explicitStartIdx;
+        startDistM = getDistanceKm(startCoord[0], startCoord[1], pts[startIdx].lng, pts[startIdx].lat) * 1000;
+    } else {
+        const matchS = findClosestRouteNodeForFreehand(pts, visualPts, startCoord[0], startCoord[1], strokeStartBearing);
+        startIdx = matchS.idx;
+        startDistM = matchS.distM;
+    }
+
+    // 2. 判定手繪終點對應的主路線節點 endMatch
+    let endIdx = -1;
+    let endDistM = Infinity;
+    if (typeof explicitEndIdx === 'number' && explicitEndIdx >= 0 && explicitEndIdx < n) {
+        endIdx = explicitEndIdx;
+        endDistM = getDistanceKm(endCoord[0], endCoord[1], pts[endIdx].lng, pts[endIdx].lat) * 1000;
+    } else {
+        const matchE = findClosestRouteNodeForFreehand(pts, visualPts, endCoord[0], endCoord[1], strokeEndBearing);
+        endIdx = matchE.idx;
+        endDistM = matchE.distM;
+    }
+
+    // 3. 檢查手繪軌跡沿途各點靠近主路線的索引範圍（確保平行重畫或局部修正時，完整覆蓋對應區段不殘留舊平行線）
+    const CORRIDOR_NEAR_METERS = 65;
+    let corridorMinIdx = Infinity;
+    let corridorMaxIdx = -1;
+    for (let k = 0; k < simplifiedCoords.length; k++) {
+        const [cLng, cLat] = simplifiedCoords[k];
+        const segB = (k + 1 < simplifiedCoords.length)
+            ? getBearing(cLng, cLat, simplifiedCoords[k + 1][0], simplifiedCoords[k + 1][1])
+            : strokeEndBearing;
+        const m = findClosestRouteNodeForFreehand(pts, visualPts, cLng, cLat, segB);
+        if (m.distM <= CORRIDOR_NEAR_METERS) {
+            if (m.idx < corridorMinIdx) corridorMinIdx = m.idx;
+            if (m.idx > corridorMaxIdx) corridorMaxIdx = m.idx;
+        }
+    }
+
+    // 4. 決定覆蓋／替換區間 [replaceFrom .. replaceTo] 與是否為頭尾延伸
+    let replaceFrom = Math.min(startIdx, endIdx);
+    let replaceTo = Math.max(startIdx, endIdx);
+    let strokeCoordsOrdered = simplifiedCoords.slice();
+
+    // 若使用者是由後往前逆向畫線覆蓋同一段，自動翻轉手繪點序以順接主路線方向
+    const isDrawingBackward = (startIdx > endIdx);
+    if (isDrawingBackward) {
+        strokeCoordsOrdered.reverse();
+    }
+
+    // 判斷是否為從路線終點 (E) 往外延伸，或從路線起點 (S) 往前延伸：
+    // 只有當起筆在端點 (0 或 n-1) 且收筆處遠離既有路線 (> 48m) 且整筆後半段不再貼近既有路線時，才視為純端點延伸；
+    // 其餘情況一律直接覆蓋／替換主路線上的對應區段 [replaceFrom .. replaceTo]！
+    const isPureTailExtension = (startIdx >= n - 2 && startDistM <= 55 && endDistM > 48 && endIdx >= n - 3);
+    const isPureHeadExtension = (startIdx <= 1 && startDistM <= 55 && endDistM > 48 && endIdx <= 2);
+
+    if (isPureTailExtension) {
+        replaceFrom = startIdx;
+        replaceTo = n - 1;
+        strokeCoordsOrdered = simplifiedCoords.slice();
+    } else if (isPureHeadExtension) {
+        replaceFrom = 0;
+        replaceTo = startIdx;
+        // 從起點 S 往外畫時，將畫出的最遠端作為新起點 S，連回原路線
+        strokeCoordsOrdered = simplifiedCoords.slice().reverse();
+    } else {
+        // 一般路段手繪改道或平行重畫覆蓋：結合起終點匹配索引與沿途路廊覆蓋範圍
+        if (corridorMaxIdx >= corridorMinIdx && corridorMinIdx !== Infinity) {
+            if (startDistM <= CORRIDOR_NEAR_METERS && endDistM <= CORRIDOR_NEAR_METERS) {
+                replaceFrom = Math.min(startIdx, endIdx);
+                replaceTo = Math.max(startIdx, endIdx);
+            } else {
+                replaceFrom = Math.min(replaceFrom, corridorMinIdx);
+                replaceTo = Math.max(replaceTo, corridorMaxIdx);
+            }
+        }
+        // 若起終點恰落在同一個節點索引（例如在短區段上重畫），至少替換該節點本身 (deleteCount >= 1)
+        replaceFrom = Math.max(0, Math.min(n - 1, replaceFrom));
+        replaceTo = Math.max(replaceFrom, Math.min(n - 1, replaceTo));
+    }
+
+    const inheritedMusic = Boolean(pts[replaceFrom]?.musicActive ?? pts[startIdx]?.musicActive ?? true);
+
+    // 清除舊區段上可能殘留的 isSegmentStart 斷點旗標，確保新線段直接連入主路線不產生斷裂或分岔
+    const replacementPoints = strokeCoordsOrdered.map(([lng, lat], idx) => ({
         lng: Number(Number(lng).toFixed(6)),
         lat: Number(Number(lat).toFixed(6)),
         time: Date.now() + idx * 400,
         musicActive: inheritedMusic,
         music: inheritedMusic,
         bearing: 0,
-        isKeyNode: true,
-        // 第 1 點標記為獨立手繪線段起點 (isSegmentStart: true)，避免與既有路線頭尾自動連成交叉斜線或打結
-        ...(idx === 0 && hasExistingPoints ? { isSegmentStart: true } : {})
+        isKeyNode: true
     }));
 
-    pts.push(...pureFreehandPoints);
+    const removedCount = (replaceTo - replaceFrom + 1);
+    pts.splice(replaceFrom, removedCount, ...replacementPoints);
+    // 確保接合後的下一點不帶 isSegmentStart，讓覆蓋後的路線保持單一連續主路線
+    const afterSpliceIdx = replaceFrom + replacementPoints.length;
+    if (afterSpliceIdx < pts.length && pts[afterSpliceIdx]?.isSegmentStart) {
+        delete pts[afterSpliceIdx].isSegmentStart;
+    }
+    if (replaceFrom < pts.length && pts[replaceFrom]?.isSegmentStart) {
+        delete pts[replaceFrom].isSegmentStart;
+    }
+
     route.points = pts;
 
     freehandSpliceStartIdx = -1;
@@ -2474,16 +2653,16 @@ function applyPureFreehandCoordsToRoute(route, _anchorIdx, rawCoords) {
 
     const promptEl = document.getElementById('editPromptText');
     if (promptEl) {
-        promptEl.innerText = `✅ 已新增獨立手繪線段（抽稀保留 ${pureFreehandPoints.length} 個關鍵點，可按「↩️ 上一步」整筆撤銷）`;
+        promptEl.innerText = `✅ 已用新畫手繪軌跡覆蓋替換原路段（替換舊點 ${removedCount} 處 → 新軌跡 ${replacementPoints.length} 點，可按「↩️ 上一步」還原）`;
     }
 }
 
-function applySpliceBetweenNodes(route, startIdx, _endIdx, rawCoords) {
-    applyPureFreehandCoordsToRoute(route, startIdx, rawCoords);
+function applySpliceBetweenNodes(route, startIdx, endIdx, rawCoords) {
+    applyPureFreehandCoordsToRoute(route, startIdx, rawCoords, endIdx);
 }
 
 function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
-    applyPureFreehandCoordsToRoute(route, anchorIdx, rawCoords);
+    applyPureFreehandCoordsToRoute(route, anchorIdx, rawCoords, -1);
 }
 
 // ==========================================
@@ -2659,7 +2838,7 @@ function setEditSubMode(mode) {
         updateNodeTrimPanelUI(route);
         if (promptEl) {
             promptEl.className = "bg-orange-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
-            promptEl.innerText = "✍️ 單指按住拖曳即可畫出純獨立手繪線段（零吸附、不自動接頭尾，雙指可縮放，可按「↩️ 上一步」撤銷）";
+            promptEl.innerText = "✍️ 單指畫線放開即可直接覆蓋替換原路線對應區段（雙指可縮放，可按「↩️ 上一步」還原）";
         }
         renderFreehandSpliceNodes(route);
     } else if (mode === 'marker') {
@@ -2734,6 +2913,9 @@ if (btnUndoFreehand) {
         selectedEditNodeIdx = (prevState.selectedEditNodeIdx !== undefined && prevState.selectedEditNodeIdx < route.points.length)
             ? prevState.selectedEditNodeIdx
             : -1;
+        freehandSpliceStartIdx = (prevState.freehandSpliceStartIdx !== undefined && prevState.freehandSpliceStartIdx < route.points.length)
+            ? prevState.freehandSpliceStartIdx
+            : -1;
         cancelActiveFreehandStroke(true);
         if (typeof cancelActiveBrushAnnotationStroke === 'function') {
             cancelActiveBrushAnnotationStroke();
@@ -2789,14 +2971,19 @@ if (btnUndoFreehand) {
         if (!route || !Array.isArray(route.points) || route.points.length < 2) return;
 
         const lngLat = getLngLatFromClientXY(clientX, clientY);
+        const pts = route.points;
+
+        // 若使用者有預先點選鎖定某顆覆蓋起點錨點 (freehandSpliceStartIdx)，優先採用；否則傳 -1 交由放開時的起終點與路廊覆蓋演算法自動對齊替換區段
+        const activeStartIdx = (freehandSpliceStartIdx >= 0 && freehandSpliceStartIdx < pts.length)
+            ? freehandSpliceStartIdx
+            : -1;
 
         // 停用單指 dragPan 避免畫面跟著單指跑，同時保留 touchZoomRotate 與 scrollZoom 開啟
         try { map.dragPan.disable(); } catch (e) {}
         ensureEditorMapZoomEnabled();
 
         isFreehandDrawing = true;
-        freehandStartIndex = -1;
-        // 100% 保留使用者實際落筆座標，零自動吸附、零自動接頭尾
+        freehandStartIndex = activeStartIdx;
         freehandStrokeCoords = [[Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]];
     }
 
@@ -2848,11 +3035,11 @@ if (btnUndoFreehand) {
         }
 
         // 放開手指（touchend / pointerup / mouseup）時：
-        // 不執行道路吸附（Snap）或自動覆蓋替換既有路線節點，直接將手繪座標線段原樣保留為純手繪線條／節點
+        // 直接依據手繪起點與終點（以及沿途靠近既有路線的區段）覆蓋／替換原本主路線上對應的那一段節點，把新畫的手繪軌跡接進去，不在旁邊多出一條平行線或分岔
         const committedStroke = freehandStrokeCoords.slice();
         freehandStrokeCoords = [];
         freehandStartIndex = -1;
-        applyPureFreehandCoordsToRoute(route, startIndex, committedStroke);
+        applyPureFreehandCoordsToRoute(route, startIndex, committedStroke, -1);
     }
 
     let isMultiTouchGestureActive = false;

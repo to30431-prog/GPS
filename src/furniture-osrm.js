@@ -1342,53 +1342,219 @@ async function fetchOsrmMultiWaypointRoute(waypoints, originHeading = null) {
     return combinedCoords;
 }
 
-// ⚡ 獨立前置排序函式：固定起點（第一點／當前出發點），將後續點位依最近鄰（Nearest Neighbor）由近到遠重新排列
+// 計算兩方位角之夾角差（0° ~ 180°，越接近 180° 代表原地折返／掉頭）
+function getFurnitureTurnAngleDiffDeg(headingFrom, headingTo) {
+    if (typeof headingFrom !== 'number' || typeof headingTo !== 'number' || isNaN(headingFrom) || isNaN(headingTo)) {
+        return 0;
+    }
+    return Math.abs(((headingFrom - headingTo + 540) % 360) - 180);
+}
+
+// 評估單段點位銜接成本（距離 km ＋ 順向折返懲罰權重：當轉折夾角接近 180° 急轉／掉頭時附加折返懲罰）
+function computeFurnitureStepTransitionCostKm(fromLng, fromLat, toLng, toLat, prevHeading = null) {
+    const distKm = getDistanceKm(fromLng, fromLat, toLng, toLat);
+    if (distKm < 0.003 || prevHeading === null || typeof prevHeading !== 'number' || isNaN(prevHeading)) {
+        return distKm;
+    }
+    const stepBearing = getBearing(fromLng, fromLat, toLng, toLat);
+    const turnDiffDeg = getFurnitureTurnAngleDiffDeg(prevHeading, stepBearing);
+
+    // 夾角 > 110° 開始累加折返懲罰；接近 180° 掉頭時施加顯著懲罰（固定掉頭成本 + 距離比例懲罰），優先引導順向推進
+    let turnPenaltyKm = 0;
+    if (turnDiffDeg >= 145) {
+        const ratio = (turnDiffDeg - 145) / 35; // 145°~180° -> 0~1
+        turnPenaltyKm = 0.18 + 0.27 * ratio + distKm * (0.25 + 0.35 * ratio);
+    } else if (turnDiffDeg >= 110) {
+        const ratio = (turnDiffDeg - 110) / 35; // 110°~145° -> 0~1
+        turnPenaltyKm = 0.05 * ratio + distKm * (0.12 * ratio);
+    }
+    return distKm + turnPenaltyKm;
+}
+
+// 評估整條候選點位序列之總成本（含起點銜接、各段距離與每段順向折返懲罰）
+function evaluateFurnitureSequenceTotalCost(seqPins, anchorLng, anchorLat, initialHeading = null) {
+    if (!Array.isArray(seqPins) || seqPins.length === 0) return 0;
+    let totalCost = 0;
+    let curLng = anchorLng;
+    let curLat = anchorLat;
+    let curHeading = normalizeFurnitureHeadingDeg(initialHeading);
+
+    for (let i = 0; i < seqPins.length; i++) {
+        const p = seqPins[i];
+        const segDistKm = getDistanceKm(curLng, curLat, p.lng, p.lat);
+        if (segDistKm >= 0.002) {
+            totalCost += computeFurnitureStepTransitionCostKm(curLng, curLat, p.lng, p.lat, curHeading);
+            curHeading = getBearing(curLng, curLat, p.lng, p.lat);
+        }
+        curLng = p.lng;
+        curLat = p.lat;
+    }
+    return totalCost;
+}
+
+// 對候選序列執行輕量 2-opt 路徑反轉交換優化（消除路徑交叉與跨區來回折返）
+function optimizeFurnitureSequenceWith2Opt(initialSeq, anchorLng, anchorLat, initialHeading = null, lockFirstPin = false) {
+    if (!Array.isArray(initialSeq) || initialSeq.length <= 2) {
+        return Array.isArray(initialSeq) ? [...initialSeq] : [];
+    }
+
+    let bestSeq = [...initialSeq];
+    let bestCost = evaluateFurnitureSequenceTotalCost(bestSeq, anchorLng, anchorLat, initialHeading);
+    const startSwapIdx = lockFirstPin ? 1 : 0;
+    const n = bestSeq.length;
+    const maxPasses = Math.min(24, n * 3);
+
+    for (let pass = 0; pass < maxPasses; pass++) {
+        let improved = false;
+        for (let i = startSwapIdx; i < n - 1; i++) {
+            for (let k = i + 1; k < n; k++) {
+                // 反轉區間 [i..k]
+                const candidate = [
+                    ...bestSeq.slice(0, i),
+                    ...bestSeq.slice(i, k + 1).reverse(),
+                    ...bestSeq.slice(k + 1)
+                ];
+                const candidateCost = evaluateFurnitureSequenceTotalCost(candidate, anchorLng, anchorLat, initialHeading);
+                if (candidateCost + 1e-6 < bestCost) {
+                    bestSeq = candidate;
+                    bestCost = candidateCost;
+                    improved = true;
+                }
+            }
+        }
+        if (!improved) break;
+    }
+    return bestSeq;
+}
+
+// ⚡ 獨立前置排序函式：固定起點（第一點／當前出發點），結合「環線角度掃描（Sweep 順/逆時針）＋順向折返懲罰最近鄰＋2-opt 消除交叉折返」
 function sortFurniturePinsByNearestNeighbor(pins, origin = null) {
     if (!Array.isArray(pins) || pins.length <= 1) {
         return Array.isArray(pins) ? [...pins] : [];
     }
 
-    const remainingPins = [...pins];
-    const orderedPins = [];
-
-    // 若有即時出發點 (origin) 且距離第一點 >= 12m，以當前出發點為固定起點依序找最近鄰；否則固定第一支插針 (pins[0]) 為起點排列後續點位
+    // 若有即時出發點 (origin) 且距離第一點 >= 12m，以當前出發點為固定起點；否則固定第一支插針 (pins[0]) 為起點排列後續點位
     const useOriginAsAnchor = Boolean(
         origin &&
         typeof origin.lng === 'number' &&
         typeof origin.lat === 'number' &&
         (origin.source === 'gps' || origin.source === 'vehicle_marker') &&
-        (getDistanceKm(origin.lng, origin.lat, remainingPins[0].lng, remainingPins[0].lat) * 1000 >= 12)
+        (getDistanceKm(origin.lng, origin.lat, pins[0].lng, pins[0].lat) * 1000 >= 12)
     );
 
-    let curLng;
-    let curLat;
-    if (useOriginAsAnchor) {
-        curLng = origin.lng;
-        curLat = origin.lat;
-    } else {
-        const firstPin = remainingPins.shift();
-        orderedPins.push(firstPin);
-        curLng = firstPin.lng;
-        curLat = firstPin.lat;
+    const anchorLng = useOriginAsAnchor ? origin.lng : pins[0].lng;
+    const anchorLat = useOriginAsAnchor ? origin.lat : pins[0].lat;
+    const initialHeading = useOriginAsAnchor ? normalizeFurnitureHeadingDeg(origin?.heading) : null;
+    const fixedFirstPin = useOriginAsAnchor ? null : pins[0];
+    const sortablePool = useOriginAsAnchor ? [...pins] : pins.slice(1);
+
+    if (sortablePool.length <= 1) {
+        return fixedFirstPin ? [fixedFirstPin, ...sortablePool] : [...sortablePool];
     }
 
-    while (remainingPins.length > 0) {
-        let bestIdx = 0;
-        let bestDist = Infinity;
-        for (let i = 0; i < remainingPins.length; i++) {
-            const dKm = getDistanceKm(curLng, curLat, remainingPins[i].lng, remainingPins[i].lat);
-            if (dKm < bestDist) {
-                bestDist = dKm;
-                bestIdx = i;
+    const candidateSequences = [];
+
+    // 候選策略 1：含順向折返懲罰權重的啟發式最近鄰（Greedy Nearest Neighbor with Turn Penalty）
+    {
+        const rem = [...sortablePool];
+        const seq = fixedFirstPin ? [fixedFirstPin] : [];
+        let curLng = anchorLng;
+        let curLat = anchorLat;
+        let curHeading = initialHeading;
+
+        while (rem.length > 0) {
+            let bestIdx = 0;
+            let bestStepCost = Infinity;
+            for (let i = 0; i < rem.length; i++) {
+                const stepCost = computeFurnitureStepTransitionCostKm(curLng, curLat, rem[i].lng, rem[i].lat, curHeading);
+                if (stepCost < bestStepCost) {
+                    bestStepCost = stepCost;
+                    bestIdx = i;
+                }
             }
+            const nextPin = rem.splice(bestIdx, 1)[0];
+            if (getDistanceKm(curLng, curLat, nextPin.lng, nextPin.lat) >= 0.002) {
+                curHeading = getBearing(curLng, curLat, nextPin.lng, nextPin.lat);
+            }
+            seq.push(nextPin);
+            curLng = nextPin.lng;
+            curLat = nextPin.lat;
         }
-        const nextPin = remainingPins.splice(bestIdx, 1)[0];
-        orderedPins.push(nextPin);
-        curLng = nextPin.lng;
-        curLat = nextPin.lat;
+        candidateSequences.push(seq);
     }
 
-    return orderedPins;
+    // 候選策略 2 & 3：環線角度掃描（Centroid Polar Sweep 順時針 CW 與逆時針 CCW）
+    if (sortablePool.length >= 3) {
+        let sumLng = anchorLng;
+        let sumLat = anchorLat;
+        for (let i = 0; i < sortablePool.length; i++) {
+            sumLng += sortablePool[i].lng;
+            sumLat += sortablePool[i].lat;
+        }
+        const centroidLng = sumLng / (sortablePool.length + 1);
+        const centroidLat = sumLat / (sortablePool.length + 1);
+        const baseAngle = getBearing(centroidLng, centroidLat, anchorLng, anchorLat);
+
+        const annotated = sortablePool.map(p => {
+            const rawAngle = getBearing(centroidLng, centroidLat, p.lng, p.lat);
+            const cwDelta = ((rawAngle - baseAngle) % 360 + 360) % 360;
+            const ccwDelta = ((baseAngle - rawAngle) % 360 + 360) % 360;
+            const distFromAnchor = getDistanceKm(anchorLng, anchorLat, p.lng, p.lat);
+            return { pin: p, cwDelta, ccwDelta, distFromAnchor };
+        });
+
+        const cwSorted = [...annotated]
+            .sort((a, b) => (Math.abs(a.cwDelta - b.cwDelta) > 2 ? a.cwDelta - b.cwDelta : a.distFromAnchor - b.distFromAnchor))
+            .map(item => item.pin);
+        const ccwSorted = [...annotated]
+            .sort((a, b) => (Math.abs(a.ccwDelta - b.ccwDelta) > 2 ? a.ccwDelta - b.ccwDelta : a.distFromAnchor - b.distFromAnchor))
+            .map(item => item.pin);
+
+        candidateSequences.push(fixedFirstPin ? [fixedFirstPin, ...cwSorted] : cwSorted);
+        candidateSequences.push(fixedFirstPin ? [fixedFirstPin, ...ccwSorted] : ccwSorted);
+
+        // 候選策略 4 & 5：以起點為圓心之相對方位角扇形掃描（Anchor Azimuth Sweep CW & CCW）
+        const refNearest = [...sortablePool].sort(
+            (a, b) => getDistanceKm(anchorLng, anchorLat, a.lng, a.lat) - getDistanceKm(anchorLng, anchorLat, b.lng, b.lat)
+        )[0];
+        const anchorBaseBearing = initialHeading !== null
+            ? initialHeading
+            : getBearing(anchorLng, anchorLat, refNearest.lng, refNearest.lat);
+
+        const anchorAnnotated = sortablePool.map(p => {
+            const b = getBearing(anchorLng, anchorLat, p.lng, p.lat);
+            const cw = ((b - anchorBaseBearing) % 360 + 360) % 360;
+            const ccw = ((anchorBaseBearing - b) % 360 + 360) % 360;
+            const d = getDistanceKm(anchorLng, anchorLat, p.lng, p.lat);
+            return { pin: p, cw, ccw, d };
+        });
+
+        const anchorCw = [...anchorAnnotated]
+            .sort((a, b) => (Math.abs(a.cw - b.cw) > 3 ? a.cw - b.cw : a.d - b.d))
+            .map(item => item.pin);
+        const anchorCcw = [...anchorAnnotated]
+            .sort((a, b) => (Math.abs(a.ccw - b.ccw) > 3 ? a.ccw - b.ccw : a.d - b.d))
+            .map(item => item.pin);
+
+        candidateSequences.push(fixedFirstPin ? [fixedFirstPin, ...anchorCw] : anchorCw);
+        candidateSequences.push(fixedFirstPin ? [fixedFirstPin, ...anchorCcw] : anchorCcw);
+    }
+
+    // 對所有候選序列執行 2-opt 消除路徑交叉與折返，選出總成本（距離＋順向折返懲罰）最低的最優序列
+    const lockFirstPin = Boolean(fixedFirstPin);
+    let globalBestSeq = null;
+    let globalBestCost = Infinity;
+
+    for (const candidate of candidateSequences) {
+        const optimized = optimizeFurnitureSequenceWith2Opt(candidate, anchorLng, anchorLat, initialHeading, lockFirstPin);
+        const cost = evaluateFurnitureSequenceTotalCost(optimized, anchorLng, anchorLat, initialHeading);
+        if (cost < globalBestCost) {
+            globalBestCost = cost;
+            globalBestSeq = optimized;
+        }
+    }
+
+    return globalBestSeq || [...pins];
 }
 
 let isFurnitureOsrmBusy = false;
@@ -1413,7 +1579,7 @@ async function executeFurnitureOsrmConnect(options = {}) {
 
     if (shouldSortNearestNeighbor) {
         if (sortBtn) sortBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>順排中...</span>';
-        showFurnitureToast('⚡ 正在依最近鄰由近到遠順排點位，並進行 OSRM 雙軌比對串接...');
+        showFurnitureToast('⚡ 正在以環線掃描 + 2-opt 與順向防折返演算法順排點位...');
     } else {
         if (autoBtn) autoBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
         showFurnitureToast('🤖 維持目前點位順序，進行 OSRM 順向 vs 400m 繞路門檻雙軌串接...');
@@ -1451,7 +1617,7 @@ async function executeFurnitureOsrmConnect(options = {}) {
         await syncActiveFurnitureToFirebase(false);
         showFurnitureToast(
             shouldSortNearestNeighbor
-                ? `⚡ 已完成最近鄰順排與 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
+                ? `⚡ 已完成環線 + 2-opt 順排與 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
                 : `✅ 已依目前順序完成 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
         );
     } finally {

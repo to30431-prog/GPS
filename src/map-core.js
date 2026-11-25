@@ -145,8 +145,44 @@ let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedBrushStrokesGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedBrushDraftGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureOwnRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedFurnitureManualDraftGeoJSON = { type: 'FeatureCollection', features: [] };
+
+// 📌 路線註記／備忘圖層顯示開關（預設開啟；控制預覽與導航模式下的畫筆記號、自訂插釘與引線備忘框）
+let showRouteAnnotationsLayer = localStorage.getItem('yingge_show_route_annotations_v1') !== 'false';
+
+function isRouteAnnotationsVisible() {
+    return Boolean(showRouteAnnotationsLayer);
+}
+
+function toggleRouteAnnotationsVisibility() {
+    showRouteAnnotationsLayer = !showRouteAnnotationsLayer;
+    try {
+        localStorage.setItem('yingge_show_route_annotations_v1', showRouteAnnotationsLayer ? 'true' : 'false');
+    } catch (e) {}
+    const activeRoute = (typeof getActiveWorkingRoute === 'function' ? getActiveWorkingRoute() : null)
+        || (Array.isArray(savedRoutes) && selectedRouteIdx >= 0 ? savedRoutes[selectedRouteIdx] : null);
+    if (activeRoute) {
+        refreshCurrentRouteMarkers(activeRoute);
+    } else {
+        if (typeof updateRouteBrushStrokesLayer === 'function') updateRouteBrushStrokesLayer(null);
+        if (typeof updateCalloutLeaderLines === 'function') updateCalloutLeaderLines(null);
+    }
+    if (typeof renderMapLayerMenuOptions === 'function') {
+        renderMapLayerMenuOptions();
+    }
+    if (typeof showNavAlert === 'function') {
+        showNavAlert(
+            showRouteAnnotationsLayer ? '📌' : '🙈',
+            showRouteAnnotationsLayer ? '已顯示路線畫筆記號、自訂插釘與備忘' : '已隱藏路線畫筆記號、自訂插釘與備忘',
+            showRouteAnnotationsLayer ? 'bg-indigo-600' : 'bg-slate-700'
+        );
+    }
+}
+window.isRouteAnnotationsVisible = isRouteAnnotationsVisible;
+window.toggleRouteAnnotationsVisibility = toggleRouteAnnotationsVisibility;
 
 // 記錄外部模組綁定於 map.on(...) 與 map.getCanvasContainer().addEventListener(...) 的監聽器，
 // 確保 WebGL Context Lost 真正重建 MapLibre 實例（map.remove() + new maplibregl.Map()）後自動無損重放所有互動與圖層同步事件
@@ -790,6 +826,74 @@ function ensureCustomRouteSourcesAndLayers() {
             });
         }
 
+        // 4.5 ✏️ 路線畫筆記號圖層（獨立儲存於路線 brushStrokes，不影響清運主軌跡與距離）
+        if (!map.getSource('route-brush-strokes-source')) {
+            map.addSource('route-brush-strokes-source', {
+                type: 'geojson',
+                data: cachedBrushStrokesGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('route-brush-strokes-casing')) {
+            map.addLayer({
+                id: 'route-brush-strokes-casing',
+                type: 'line',
+                source: 'route-brush-strokes-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['case', ['==', ['get', 'color'], '#ffffff'], '#0f172a', '#ffffff'],
+                    'line-width': 8.5,
+                    'line-opacity': 0.92
+                }
+            });
+        }
+        if (!map.getLayer('route-brush-strokes-layer')) {
+            map.addLayer({
+                id: 'route-brush-strokes-layer',
+                type: 'line',
+                source: 'route-brush-strokes-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#ef4444'],
+                    'line-width': ['coalesce', ['get', 'width'], 5],
+                    'line-opacity': 0.98
+                }
+            });
+        }
+
+        if (!map.getSource('route-brush-draft-source')) {
+            map.addSource('route-brush-draft-source', {
+                type: 'geojson',
+                data: cachedBrushDraftGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('route-brush-draft-casing')) {
+            map.addLayer({
+                id: 'route-brush-draft-casing',
+                type: 'line',
+                source: 'route-brush-draft-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['case', ['==', ['get', 'color'], '#ffffff'], '#0f172a', '#ffffff'],
+                    'line-width': 8.5,
+                    'line-opacity': 0.92
+                }
+            });
+        }
+        if (!map.getLayer('route-brush-draft-layer')) {
+            map.addLayer({
+                id: 'route-brush-draft-layer',
+                type: 'line',
+                source: 'route-brush-draft-source',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': ['coalesce', ['get', 'color'], '#ef4444'],
+                    'line-width': 5,
+                    'line-dasharray': [1.8, 1.2],
+                    'line-opacity': 0.98
+                }
+            });
+        }
+
         if (!map.getSource('freehand-temp-source')) {
             map.addSource('freehand-temp-source', {
                 type: 'geojson',
@@ -1021,6 +1125,8 @@ function restoreCustomLayersAndAlignmentAfterStyleLoad() {
         map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON || emptyGeoJSON());
         map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON || emptyGeoJSON());
         map.getSource('callout-lines-source')?.setData(cachedCalloutLinesGeoJSON || emptyGeoJSON());
+        map.getSource('route-brush-strokes-source')?.setData(cachedBrushStrokesGeoJSON || emptyGeoJSON());
+        map.getSource('route-brush-draft-source')?.setData(cachedBrushDraftGeoJSON || emptyGeoJSON());
         map.getSource('furniture-own-route-source')?.setData(cachedFurnitureOwnRouteGeoJSON || emptyGeoJSON());
         map.getSource('furniture-manual-draft-source')?.setData(cachedFurnitureManualDraftGeoJSON || emptyGeoJSON());
         if (currentMapLayerPreset?.isVector) {
@@ -1585,6 +1691,32 @@ function renderMapLayerMenuOptions() {
                 }
             });
             targetFeatureContainer.appendChild(buildingBtn);
+        }
+
+        // 📌 6. 路線註記／備忘開關（預設開啟；控制預覽與導航模式下的畫筆記號、自訂插釘與引線備忘框）
+        {
+            const isAnnotOn = isRouteAnnotationsVisible();
+            const annotBtn = document.createElement('button');
+            annotBtn.type = 'button';
+            annotBtn.id = 'mapLayerRouteAnnotationsToggleBtn';
+            annotBtn.className = isAnnotOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-indigo-50 border-2 border-indigo-400 text-indigo-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            annotBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">📌</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isAnnotOn ? 'text-indigo-800' : 'text-gray-800'}">路線註記／插釘</div>
+                        <div class="text-[10px] font-bold truncate ${isAnnotOn ? 'text-indigo-600' : 'text-gray-400'}">${isAnnotOn ? '已顯示 · 畫筆記號、自訂插釘與備忘' : '已隱藏 · 點擊顯示畫筆、插釘與備忘'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isAnnotOn ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'}">${isAnnotOn ? '開' : '關'}</span>
+            `;
+            annotBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleRouteAnnotationsVisibility();
+            });
+            targetFeatureContainer.appendChild(annotBtn);
         }
     }
 
@@ -2824,11 +2956,20 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
 
 function clearDomMarkers() {
     closeActiveAlertPopup();
+    if (typeof closeActiveCustomRoutePinPopup === 'function') {
+        closeActiveCustomRoutePinPopup();
+    }
     if (typeof clearPendingCalloutAnchor === 'function') {
         clearPendingCalloutAnchor();
     }
     if (typeof updateCalloutLeaderLines === 'function') {
         updateCalloutLeaderLines(null);
+    }
+    if (typeof updateRouteBrushStrokesLayer === 'function') {
+        updateRouteBrushStrokesLayer(null);
+    }
+    if (typeof updateBrushDraftLayer === 'function') {
+        updateBrushDraftLayer([]);
     }
     domMarkers.forEach(m => {
         try { m.remove(); } catch (e) {}

@@ -502,7 +502,10 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             targetFirebaseKey: conflictRoute ? conflictRoute.firebaseKey : null,
             points: r.points || [],
             events: r.events || [],
-            callouts: Array.isArray(r.callouts) ? r.callouts : []
+            callouts: Array.isArray(r.callouts) ? r.callouts : [],
+            brushStrokes: Array.isArray(r.brushStrokes) ? r.brushStrokes : [],
+            customPins: Array.isArray(r.customPins) ? r.customPins : [],
+            textLabels: Array.isArray(r.textLabels) ? r.textLabels : []
         };
 
         const syncPreviewDetailCardIfVisible = () => {
@@ -767,7 +770,10 @@ function previewPendingRoute(pendingIdx) {
         timeStr: pr.timeStr || '0m 0s',
         points: JSON.parse(JSON.stringify(pr.points || [])),
         events: JSON.parse(JSON.stringify(pr.events || [])),
-        callouts: JSON.parse(JSON.stringify(pr.callouts || []))
+        callouts: JSON.parse(JSON.stringify(pr.callouts || [])),
+        brushStrokes: JSON.parse(JSON.stringify(pr.brushStrokes || [])),
+        customPins: JSON.parse(JSON.stringify(pr.customPins || [])),
+        textLabels: JSON.parse(JSON.stringify(pr.textLabels || []))
     };
 
     // 確保距離、方位角與標記索引同步
@@ -790,6 +796,9 @@ function previewPendingRoute(pendingIdx) {
     originalEventsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.events || []));
     originalPointsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.points || []));
     originalCalloutsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.callouts || []));
+    originalBrushStrokesBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.brushStrokes || []));
+    originalCustomPinsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.customPins || []));
+    originalTextLabelsBackup = JSON.parse(JSON.stringify(reviewingPendingRoute.textLabels || []));
 
     // 切換編輯面板為「待審微調審核模式」專屬 UI
     if (pendingReviewBanner) pendingReviewBanner.classList.remove('hidden');
@@ -1227,7 +1236,10 @@ function cloneCloudRouteForLocal(cr, existingLocal = null) {
         timeStr: cr.timeStr || existingLocal?.timeStr || '0m 0s',
         points: JSON.parse(JSON.stringify(cr.points || [])),
         events: JSON.parse(JSON.stringify(cr.events || [])),
-        callouts: JSON.parse(JSON.stringify(cr.callouts || []))
+        callouts: JSON.parse(JSON.stringify(cr.callouts || [])),
+        brushStrokes: JSON.parse(JSON.stringify(cr.brushStrokes || [])),
+        customPins: JSON.parse(JSON.stringify(cr.customPins || [])),
+        textLabels: JSON.parse(JSON.stringify(cr.textLabels || []))
     };
 }
 

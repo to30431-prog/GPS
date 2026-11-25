@@ -1042,7 +1042,16 @@ function renderRouteMarkers(route) {
         if (p.is_stop) addPinMarker([p.lng, p.lat], `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`);
     });
 
-    renderRouteCallouts(route, false);
+    const showAnnotations = (typeof isRouteAnnotationsVisible === 'function') ? isRouteAnnotationsVisible() : true;
+    if (showAnnotations) {
+        renderRouteCallouts(route, false);
+        updateRouteBrushStrokesLayer(route);
+        renderRouteCustomPins(route, false);
+        renderRouteTextLabels(route, false);
+    } else {
+        updateCalloutLeaderLines(null);
+        updateRouteBrushStrokesLayer(null);
+    }
 }
 
 function openRouteDetail(idx, skipFitBounds = false) {
@@ -1122,7 +1131,7 @@ if (detailUploadCloudBtnEl) {
 // ==========================================
 // 🛠️ 統一版路線編輯引擎（拖曳微調 ＋ 虛擬中點 ＋ 節點修剪 ＋ 手繪延伸/剪接 ＋ 引線備忘框 ＋ 10步Undo）
 // ==========================================
-let isEditingMode = false, originalRouteSnapshot = null, originalEventsBackup = [], originalPointsBackup = [], originalCalloutsBackup = [];
+let isEditingMode = false, originalRouteSnapshot = null, originalEventsBackup = [], originalPointsBackup = [], originalCalloutsBackup = [], originalBrushStrokesBackup = [], originalCustomPinsBackup = [], originalTextLabelsBackup = [];
 let editStep = 0, editStartIndex = -1, tempMarkerA = null;
 let editSubMode = 'path', pathEditMarkers = [];
 let selectedEditNodeIdx = -1;
@@ -1140,6 +1149,9 @@ function restoreOriginalRouteFromEditSnapshot() {
         savedRoutes[selectedRouteIdx].events = JSON.parse(JSON.stringify(originalEventsBackup || []));
         savedRoutes[selectedRouteIdx].points = JSON.parse(JSON.stringify(originalPointsBackup || []));
         savedRoutes[selectedRouteIdx].callouts = JSON.parse(JSON.stringify(originalCalloutsBackup || []));
+        savedRoutes[selectedRouteIdx].brushStrokes = JSON.parse(JSON.stringify(originalBrushStrokesBackup || []));
+        savedRoutes[selectedRouteIdx].customPins = JSON.parse(JSON.stringify(originalCustomPinsBackup || []));
+        savedRoutes[selectedRouteIdx].textLabels = JSON.parse(JSON.stringify(originalTextLabelsBackup || []));
     }
     originalRouteSnapshot = null;
     return savedRoutes[selectedRouteIdx];
@@ -1568,6 +1580,12 @@ const modeMarkerBtn = document.getElementById('modeMarkerBtn');
 const modePathBtn = document.getElementById('modePathBtn');
 const modeFreehandBtn = document.getElementById('modeFreehandBtn');
 const modeCalloutBtn = document.getElementById('modeCalloutBtn');
+const modeBrushBtn = document.getElementById('modeBrushBtn');
+const modeCustomPinBtn = document.getElementById('modeCustomPinBtn');
+const modeTextLabelBtn = document.getElementById('modeTextLabelBtn');
+const brushAnnotationToolbar = document.getElementById('brushAnnotationToolbar');
+const brushStrokeCountText = document.getElementById('brushStrokeCountText');
+const btnBrushUndoStroke = document.getElementById('btnBrushUndoStroke');
 const btnUndoFreehand = document.getElementById('btnUndoFreehand');
 const undoStepCountBadge = document.getElementById('undoStepCountBadge');
 const editorLiveDistText = document.getElementById('editorLiveDistText');
@@ -1601,8 +1619,8 @@ function ensureEditorMapZoomEnabled() {
         if (containerEl) containerEl.style.touchAction = 'none';
         if (canvasEl) canvasEl.style.touchAction = 'none';
     } catch (e) {}
-    if ((isManualDrawingMode && manualDrawToolMode === 'freehand') || (isEditingMode && editSubMode === 'freehand')) {
-        // 手繪模式下停用雙指垂直傾斜 (touchPitch)，避免 MapLibre HandlerManager 因 touchPitch 啟動而 reset 中斷 touchPan 雙指平移
+    if ((isManualDrawingMode && manualDrawToolMode === 'freehand') || (isEditingMode && (editSubMode === 'freehand' || editSubMode === 'brush'))) {
+        // 手繪／畫筆記號模式下停用雙指垂直傾斜 (touchPitch)，避免 MapLibre HandlerManager 因 touchPitch 啟動而 reset 中斷 touchPan 雙指平移
         try { map.touchPitch?.disable(); } catch (e) {}
     }
 }
@@ -1702,6 +1720,9 @@ function pushEditUndoSnapshot(route) {
         points: JSON.parse(JSON.stringify(route.points)),
         events: JSON.parse(JSON.stringify(route.events || [])),
         callouts: JSON.parse(JSON.stringify(route.callouts || [])),
+        brushStrokes: JSON.parse(JSON.stringify(route.brushStrokes || [])),
+        customPins: JSON.parse(JSON.stringify(route.customPins || [])),
+        textLabels: JSON.parse(JSON.stringify(route.textLabels || [])),
         selectedEditNodeIdx,
         freehandSpliceStartIdx
     });
@@ -2708,8 +2729,8 @@ function setEditSubMode(mode) {
     editSubMode = mode;
     activeDraggingEditNodeIdx = -1;
     ensureEditorMapZoomEnabled();
-    if (mode === 'freehand') {
-        // 啟用「✍️ 手繪」模式：預設單指畫線、雙指平移／縮放（停用單指 dragPan 與 touchPitch，保留 touchZoomRotate）
+    if (mode === 'freehand' || mode === 'brush') {
+        // 啟用「✍️ 手繪」或「✏️ 畫筆記號」模式：預設單指畫線、雙指平移／縮放（停用單指 dragPan 與 touchPitch，保留 touchZoomRotate）
         try { map.dragPan.disable(); } catch (e) {}
         try { map.touchPitch?.disable(); } catch (e) {}
     } else {
@@ -2717,25 +2738,44 @@ function setEditSubMode(mode) {
         try { map.touchPitch?.enable(); } catch (e) {}
     }
 
-    const inactiveClass = "text-gray-600 hover:bg-white/70 font-black text-[11px] px-1 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
+    const inactiveClass = "text-gray-600 hover:bg-white/70 font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg transition-all active:scale-95 whitespace-nowrap flex items-center justify-center";
     if (modePathBtn) modePathBtn.className = (mode === 'path')
-        ? "bg-emerald-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-emerald-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeFreehandBtn) modeFreehandBtn.className = (mode === 'freehand')
-        ? "bg-orange-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-orange-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeMarkerBtn) modeMarkerBtn.className = (mode === 'marker')
-        ? "bg-blue-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-blue-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
     if (modeCalloutBtn) modeCalloutBtn.className = (mode === 'callout')
-        ? "bg-rose-600 text-white font-black text-[11px] px-1 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        ? "bg-rose-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
+    if (modeBrushBtn) modeBrushBtn.className = (mode === 'brush')
+        ? "bg-pink-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+    if (modeCustomPinBtn) modeCustomPinBtn.className = (mode === 'customPin')
+        ? "bg-indigo-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+    if (modeTextLabelBtn) modeTextLabelBtn.className = (mode === 'textLabel')
+        ? "bg-teal-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
+        : inactiveClass;
+
+    if (brushAnnotationToolbar) {
+        brushAnnotationToolbar.classList.toggle('hidden', mode !== 'brush');
+    }
 
     const promptEl = document.getElementById('editPromptText');
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
     clearPendingCalloutAnchor();
+    if (typeof clearLockedRoutePointPreviewMarker === 'function') {
+        clearLockedRoutePointPreviewMarker();
+    }
     editStep = 0;
     cancelActiveFreehandStroke(true);
+    if (typeof cancelActiveBrushAnnotationStroke === 'function') {
+        cancelActiveBrushAnnotationStroke();
+    }
 
     const route = getActiveWorkingRoute();
 
@@ -2770,6 +2810,33 @@ function setEditSubMode(mode) {
             promptEl.className = "bg-rose-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
             promptEl.innerText = "📌 請先點擊地圖上的目標地點（錨點），再點擊旁邊空位放置文字框";
         }
+    } else if (mode === 'brush') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        clearPathEditMarkers();
+        if (promptEl) {
+            promptEl.className = "bg-pink-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "✏️ 單指在地圖上自由畫圈、箭頭或禁行記號（雙指可縮放平移，點線條上✕可單筆刪除）";
+        }
+    } else if (mode === 'customPin') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        clearPathEditMarkers();
+        if (promptEl) {
+            promptEl.className = "bg-indigo-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "📍 請點擊地圖任意位置放置「自訂插釘」（可選水滴/倒錐/圓釘/旗幟、顏色與文字提醒）";
+        }
+    } else if (mode === 'textLabel') {
+        selectedEditNodeIdx = -1;
+        updateNodeTrimPanelUI(route);
+        clearPathEditMarkers();
+        if (promptEl) {
+            promptEl.className = "bg-teal-600 text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-lg pointer-events-auto transition-colors text-center max-w-md";
+            promptEl.innerText = "🔤 請點擊地圖任意位置貼上「純文字標籤」（無插釘圖示，可選紅底/黃黑/藍底/白底，按住可拖曳移動）";
+        }
+    }
+    if (route && isEditingMode) {
+        renderEditableRouteMarkers(route);
     }
     updateUndoFreehandBtnUI();
     if (route) updateEditorLiveStatsUI(route);
@@ -2779,6 +2846,9 @@ if (modeMarkerBtn) modeMarkerBtn.onclick = () => setEditSubMode('marker');
 if (modePathBtn) modePathBtn.onclick = () => setEditSubMode('path');
 if (modeFreehandBtn) modeFreehandBtn.onclick = () => setEditSubMode('freehand');
 if (modeCalloutBtn) modeCalloutBtn.onclick = () => setEditSubMode('callout');
+if (modeBrushBtn) modeBrushBtn.onclick = () => setEditSubMode('brush');
+if (modeCustomPinBtn) modeCustomPinBtn.onclick = () => setEditSubMode('customPin');
+if (modeTextLabelBtn) modeTextLabelBtn.onclick = () => setEditSubMode('textLabel');
 
 if (btnUndoFreehand) {
     btnUndoFreehand.onclick = () => {
@@ -2789,11 +2859,17 @@ if (btnUndoFreehand) {
         route.points = prevState.points;
         route.events = prevState.events;
         route.callouts = Array.isArray(prevState.callouts) ? prevState.callouts : [];
+        route.brushStrokes = Array.isArray(prevState.brushStrokes) ? prevState.brushStrokes : [];
+        route.customPins = Array.isArray(prevState.customPins) ? prevState.customPins : [];
+        route.textLabels = Array.isArray(prevState.textLabels) ? prevState.textLabels : [];
         clearPendingCalloutAnchor();
         selectedEditNodeIdx = (prevState.selectedEditNodeIdx !== undefined && prevState.selectedEditNodeIdx < route.points.length)
             ? prevState.selectedEditNodeIdx
             : -1;
         cancelActiveFreehandStroke(true);
+        if (typeof cancelActiveBrushAnnotationStroke === 'function') {
+            cancelActiveBrushAnnotationStroke();
+        }
         syncRouteMarkersAndIndicesAfterSpline(route);
         vibrate(30);
         updateRouteLayers(route.points);
@@ -3187,12 +3263,18 @@ document.getElementById('editRouteBtn').onclick = () => {
     freehandSpliceStartIdx = -1;
     freehandDraftCoords = [];
     if (!Array.isArray(route.callouts)) route.callouts = [];
+    if (!Array.isArray(route.brushStrokes)) route.brushStrokes = [];
+    if (!Array.isArray(route.customPins)) route.customPins = [];
+    if (!Array.isArray(route.textLabels)) route.textLabels = [];
 
-    // 進入編輯模式前建立整份路線物件的完整深拷貝快照（含 points、distance、events、callouts、routeVersion、updatedAt、date、timeStr 等）
+    // 進入編輯模式前建立整份路線物件的完整深拷貝快照（含 points、distance、events、callouts、brushStrokes、customPins、textLabels、routeVersion、updatedAt、date、timeStr 等）
     originalRouteSnapshot = JSON.parse(JSON.stringify(route));
     originalEventsBackup = JSON.parse(JSON.stringify(route.events || []));
     originalPointsBackup = JSON.parse(JSON.stringify(route.points || []));
     originalCalloutsBackup = JSON.parse(JSON.stringify(route.callouts || []));
+    originalBrushStrokesBackup = JSON.parse(JSON.stringify(route.brushStrokes || []));
+    originalCustomPinsBackup = JSON.parse(JSON.stringify(route.customPins || []));
+    originalTextLabelsBackup = JSON.parse(JSON.stringify(route.textLabels || []));
 
     // 以獨立深拷貝副本作為編輯期間的工作物件，確保任何拖曳或增刪節點皆不會污染原始快照
     savedRoutes[selectedRouteIdx] = JSON.parse(JSON.stringify(originalRouteSnapshot));
@@ -3284,7 +3366,1056 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
     });
 
     renderRouteCallouts(route, true, autoFocusCalloutId);
+    renderRouteBrushStrokesEditable(route);
+    renderRouteCustomPins(route, true);
+    renderRouteTextLabels(route, true);
 }
+
+// ==========================================
+// ✏️ 路線編輯模式專屬：「畫筆記號」與「📍 自訂插釘」引擎（獨立於主軌跡，絕不改動清運主軌跡座標與總距離）
+// ==========================================
+let currentBrushAnnotationColor = '#ef4444'; // 預設紅 (#ef4444 | #f59e0b | #3b82f6 | #ffffff)
+let isBrushAnnotationDrawing = false;
+let brushAnnotationDraftCoords = [];
+
+function updateRouteBrushStrokesLayer(route) {
+    const strokes = Array.isArray(route?.brushStrokes) ? route.brushStrokes : [];
+    const features = [];
+    strokes.forEach((st, idx) => {
+        if (!st || !Array.isArray(st.coords) || st.coords.length < 2) return;
+        features.push({
+            type: 'Feature',
+            properties: {
+                id: st.id || `br_${idx}`,
+                color: st.color || '#ef4444',
+                width: Number(st.width) || 5
+            },
+            geometry: {
+                type: 'LineString',
+                coordinates: st.coords
+            }
+        });
+    });
+
+    cachedBrushStrokesGeoJSON = {
+        type: 'FeatureCollection',
+        features
+    };
+
+    if (brushStrokeCountText) {
+        brushStrokeCountText.textContent = String(features.length);
+    }
+    if (btnBrushUndoStroke) {
+        btnBrushUndoStroke.disabled = (features.length === 0);
+    }
+
+    if (!map) return;
+    try {
+        ensureCustomRouteSourcesAndLayers();
+        const src = map.getSource('route-brush-strokes-source');
+        if (src && typeof src.setData === 'function') {
+            src.setData(cachedBrushStrokesGeoJSON);
+        }
+    } catch (e) {}
+}
+window.updateRouteBrushStrokesLayer = updateRouteBrushStrokesLayer;
+
+function updateBrushDraftLayer(coords, color = currentBrushAnnotationColor) {
+    const valid = Array.isArray(coords) && coords.length >= 2;
+    cachedBrushDraftGeoJSON = valid
+        ? {
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: { color: color || '#ef4444' },
+                geometry: { type: 'LineString', coordinates: coords }
+            }]
+        }
+        : emptyGeoJSON();
+
+    if (!map) return;
+    try {
+        ensureCustomRouteSourcesAndLayers();
+        const src = map.getSource('route-brush-draft-source');
+        if (src && typeof src.setData === 'function') {
+            src.setData(cachedBrushDraftGeoJSON);
+        }
+    } catch (e) {}
+}
+window.updateBrushDraftLayer = updateBrushDraftLayer;
+
+function cancelActiveBrushAnnotationStroke() {
+    isBrushAnnotationDrawing = false;
+    brushAnnotationDraftCoords = [];
+    updateBrushDraftLayer([]);
+    if (isEditingMode && (editSubMode === 'brush' || editSubMode === 'freehand')) {
+        try { map.dragPan.disable(); } catch (e) {}
+    } else {
+        try { map.dragPan.enable(); } catch (e) {}
+    }
+    ensureEditorMapZoomEnabled();
+}
+
+function renderRouteBrushStrokesEditable(route) {
+    if (!route) {
+        updateRouteBrushStrokesLayer(null);
+        return;
+    }
+    if (!Array.isArray(route.brushStrokes)) {
+        route.brushStrokes = [];
+    }
+    updateRouteBrushStrokesLayer(route);
+
+    // 在「✏️ 畫筆」子模式下，於每筆畫筆記號的中點顯示一個輕量「✕」刪除鈕，方便單筆點擊刪除
+    if (isEditingMode && editSubMode === 'brush') {
+        route.brushStrokes.forEach((st, sIdx) => {
+            if (!st || !Array.isArray(st.coords) || st.coords.length < 2) return;
+            const midPt = st.coords[Math.floor(st.coords.length / 2)];
+            if (!Array.isArray(midPt) || midPt.length < 2) return;
+
+            const wrapEl = document.createElement('div');
+            wrapEl.className = 'brush-stroke-delete-marker';
+            const pillEl = document.createElement('button');
+            pillEl.type = 'button';
+            pillEl.className = 'brush-stroke-delete-pill';
+            pillEl.style.borderColor = st.color === '#ffffff' ? '#38bdf8' : (st.color || '#ef4444');
+            pillEl.innerHTML = '<span>✏️✕</span>';
+            pillEl.title = '點擊刪除此筆畫筆記號';
+            ['pointerdown', 'mousedown', 'touchstart'].forEach(evtName => {
+                pillEl.addEventListener(evtName, (ev) => ev.stopPropagation(), { passive: true });
+            });
+            pillEl.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                pushEditUndoSnapshot(route);
+                route.brushStrokes.splice(sIdx, 1);
+                vibrate(25);
+                renderEditableRouteMarkers(route);
+                const promptEl = document.getElementById('editPromptText');
+                if (promptEl && editSubMode === 'brush') {
+                    promptEl.innerText = `🗑️ 已刪除單筆畫筆記號！（目前剩餘 ${route.brushStrokes.length} 筆，可按「↩️ 上一步」復原）`;
+                }
+            });
+            wrapEl.appendChild(pillEl);
+
+            const m = new maplibregl.Marker({
+                element: wrapEl,
+                anchor: 'center',
+                rotationAlignment: 'viewport',
+                pitchAlignment: 'viewport'
+            }).setLngLat([Number(midPt[0]), Number(midPt[1])]).addTo(map);
+            domMarkers.push(m);
+        });
+    }
+}
+
+// 綁定畫筆顏色選擇與「撤銷上一筆」按鈕
+document.querySelectorAll('.brush-color-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pickedColor = btn.getAttribute('data-brush-color') || '#ef4444';
+        currentBrushAnnotationColor = pickedColor;
+        document.querySelectorAll('.brush-color-btn').forEach(b => {
+            const isSel = (b.getAttribute('data-brush-color') === pickedColor);
+            if (isSel) {
+                b.classList.add('border-2', 'border-slate-900', 'ring-2', 'ring-pink-300', 'scale-110');
+            } else {
+                b.classList.remove('border-2', 'border-slate-900', 'ring-2', 'ring-pink-300', 'ring-red-300', 'scale-110');
+            }
+        });
+    });
+});
+
+if (btnBrushUndoStroke) {
+    btnBrushUndoStroke.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const route = getActiveWorkingRoute();
+        if (!route || !Array.isArray(route.brushStrokes) || route.brushStrokes.length === 0) return;
+        pushEditUndoSnapshot(route);
+        route.brushStrokes.pop();
+        vibrate(25);
+        renderEditableRouteMarkers(route);
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl && editSubMode === 'brush') {
+            promptEl.innerText = `↩️ 已撤銷上一筆畫筆記號！（剩餘 ${route.brushStrokes.length} 筆）`;
+        }
+    });
+}
+
+// 綁定「✏️ 畫筆記號」自由手繪事件（單指畫線、雙指縮放平移防誤畫，絕不影響清運主軌跡與距離）
+(function setupBrushAnnotationDrawing() {
+    const canvasContainer = map.getCanvasContainer();
+    const BRUSH_MIN_STROKE_METERS = 3;
+
+    function getLngLatFromClientXY(clientX, clientY) {
+        const rect = canvasContainer.getBoundingClientRect();
+        return map.unproject([clientX - rect.left, clientY - rect.top]);
+    }
+
+    function restoreBrushModeGestures() {
+        if (isEditingMode && (editSubMode === 'brush' || editSubMode === 'freehand')) {
+            try { map.dragPan.disable(); } catch (e) {}
+        } else {
+            try { map.dragPan.enable(); } catch (e) {}
+        }
+        ensureEditorMapZoomEnabled();
+    }
+
+    function startBrushStroke(clientX, clientY, rawEvent) {
+        if (!isEditingMode || editSubMode !== 'brush') return;
+        ensureEditorMapZoomEnabled();
+        const targetEl = rawEvent?.target;
+        if (targetEl && targetEl.closest && targetEl.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .callout-box-marker, .callout-anchor-marker, .brush-stroke-delete-marker, .custom-route-pin-wrapper')) {
+            return;
+        }
+        const lngLat = getLngLatFromClientXY(clientX, clientY);
+        try { map.dragPan.disable(); } catch (e) {}
+        isBrushAnnotationDrawing = true;
+        brushAnnotationDraftCoords = [[Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]];
+    }
+
+    function moveBrushStroke(clientX, clientY) {
+        if (!isBrushAnnotationDrawing || !isEditingMode || editSubMode !== 'brush') return;
+        if (brushAnnotationDraftCoords.length === 0) return;
+        const lngLat = getLngLatFromClientXY(clientX, clientY);
+        const curLng = Number(lngLat.lng.toFixed(6));
+        const curLat = Number(lngLat.lat.toFixed(6));
+        const [lastLng, lastLat] = brushAnnotationDraftCoords[brushAnnotationDraftCoords.length - 1];
+        const distM = getDistanceKm(lastLng, lastLat, curLng, curLat) * 1000;
+        if (distM >= 1.8) {
+            brushAnnotationDraftCoords.push([curLng, curLat]);
+            updateBrushDraftLayer(brushAnnotationDraftCoords, currentBrushAnnotationColor);
+        }
+    }
+
+    function endBrushStroke() {
+        if (!isBrushAnnotationDrawing) return;
+        isBrushAnnotationDrawing = false;
+        restoreBrushModeGestures();
+
+        const route = getActiveWorkingRoute();
+        if (!route || brushAnnotationDraftCoords.length < 2) {
+            brushAnnotationDraftCoords = [];
+            updateBrushDraftLayer([]);
+            return;
+        }
+
+        let lenM = 0;
+        for (let i = 1; i < brushAnnotationDraftCoords.length; i++) {
+            lenM += getDistanceKm(
+                brushAnnotationDraftCoords[i - 1][0], brushAnnotationDraftCoords[i - 1][1],
+                brushAnnotationDraftCoords[i][0], brushAnnotationDraftCoords[i][1]
+            ) * 1000;
+        }
+
+        if (lenM < BRUSH_MIN_STROKE_METERS) {
+            brushAnnotationDraftCoords = [];
+            updateBrushDraftLayer([]);
+            return;
+        }
+
+        pushEditUndoSnapshot(route);
+        if (!Array.isArray(route.brushStrokes)) {
+            route.brushStrokes = [];
+        }
+        route.brushStrokes.push({
+            id: 'br_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            color: currentBrushAnnotationColor,
+            width: 5,
+            coords: brushAnnotationDraftCoords.slice()
+        });
+
+        brushAnnotationDraftCoords = [];
+        updateBrushDraftLayer([]);
+        vibrate(20);
+        renderEditableRouteMarkers(route);
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl && editSubMode === 'brush') {
+            promptEl.innerText = `✏️ 已新增畫筆記號（共 ${route.brushStrokes.length} 筆）！點線條上「✏️✕」可單筆刪除，或按「撤銷上一筆」`;
+        }
+    }
+
+    let isBrushMultiTouch = false;
+    let pendingBrushTouch = null;
+    let activeBrushTouchId = null;
+
+    function abortBrushForMultiTouch(rawEvent) {
+        isBrushMultiTouch = true;
+        pendingBrushTouch = null;
+        activeBrushTouchId = null;
+        isBrushAnnotationDrawing = false;
+        brushAnnotationDraftCoords = [];
+        updateBrushDraftLayer([]);
+        try { map.dragPan.enable(); } catch (err) {}
+        ensureEditorMapZoomEnabled();
+        try {
+            if (rawEvent && rawEvent.type === 'touchmove' && map.dragPan?._touchPan && !map.dragPan._touchPan.isActive()) {
+                map._handlers?.handleEvent?.(rawEvent, 'touchstart');
+            }
+        } catch (err) {}
+    }
+
+    canvasContainer.addEventListener('touchstart', (e) => {
+        if (!isEditingMode || editSubMode !== 'brush') return;
+        ensureEditorMapZoomEnabled();
+        if (!e.touches || e.touches.length === 0) return;
+        if (e.touches.length >= 2) {
+            abortBrushForMultiTouch(e);
+            return;
+        }
+        if (isBrushMultiTouch) return;
+        if (e.touches.length === 1) {
+            try { map.dragPan.disable(); } catch (err) {}
+            const t = e.touches[0];
+            pendingBrushTouch = { id: t.identifier, x: t.clientX, y: t.clientY, time: Date.now(), target: e.target };
+            activeBrushTouchId = t.identifier;
+        }
+    }, { passive: true, capture: true });
+
+    canvasContainer.addEventListener('touchmove', (e) => {
+        if (!isEditingMode || editSubMode !== 'brush') return;
+        if (!e.touches || e.touches.length === 0) return;
+        if (e.touches.length >= 2) {
+            abortBrushForMultiTouch(e);
+            return;
+        }
+        if (isBrushMultiTouch) return;
+        const t = e.touches[0];
+        if (activeBrushTouchId !== null && t.identifier !== activeBrushTouchId) return;
+
+        if (!isBrushAnnotationDrawing && pendingBrushTouch) {
+            const movedPx = Math.hypot(t.clientX - pendingBrushTouch.x, t.clientY - pendingBrushTouch.y);
+            const elapsedMs = Date.now() - pendingBrushTouch.time;
+            if (movedPx < 6 && elapsedMs < 55) return;
+            const startSnap = pendingBrushTouch;
+            pendingBrushTouch = null;
+            startBrushStroke(startSnap.x, startSnap.y, { target: startSnap.target });
+            if (!isBrushAnnotationDrawing) return;
+        }
+        if (!isBrushAnnotationDrawing) return;
+        try { map.dragPan.disable(); } catch (err) {}
+        if (e.cancelable) e.preventDefault();
+        moveBrushStroke(t.clientX, t.clientY);
+    }, { passive: false, capture: true });
+
+    const handleBrushTouchRelease = (e) => {
+        const remaining = e.touches ? e.touches.length : 0;
+        if (!isEditingMode || editSubMode !== 'brush') {
+            if (remaining === 0) {
+                isBrushMultiTouch = false;
+                pendingBrushTouch = null;
+                activeBrushTouchId = null;
+                isBrushAnnotationDrawing = false;
+                brushAnnotationDraftCoords = [];
+            }
+            return;
+        }
+        if (isBrushMultiTouch) {
+            pendingBrushTouch = null;
+            activeBrushTouchId = null;
+            isBrushAnnotationDrawing = false;
+            brushAnnotationDraftCoords = [];
+            if (remaining === 0) {
+                isBrushMultiTouch = false;
+                restoreBrushModeGestures();
+            }
+            return;
+        }
+        if (remaining === 0) {
+            pendingBrushTouch = null;
+            activeBrushTouchId = null;
+            if (isBrushAnnotationDrawing) {
+                endBrushStroke();
+            }
+        }
+    };
+
+    canvasContainer.addEventListener('touchend', handleBrushTouchRelease, { passive: true });
+    canvasContainer.addEventListener('touchcancel', (e) => {
+        pendingBrushTouch = null;
+        activeBrushTouchId = null;
+        isBrushAnnotationDrawing = false;
+        brushAnnotationDraftCoords = [];
+        updateBrushDraftLayer([]);
+        if ((e.touches ? e.touches.length : 0) === 0) {
+            isBrushMultiTouch = false;
+            restoreBrushModeGestures();
+        }
+    }, { passive: true });
+
+    canvasContainer.addEventListener('mousedown', (e) => {
+        if (!isEditingMode || editSubMode !== 'brush' || e.button !== 0) return;
+        startBrushStroke(e.clientX, e.clientY, e);
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!isEditingMode || editSubMode !== 'brush' || !isBrushAnnotationDrawing) return;
+        moveBrushStroke(e.clientX, e.clientY);
+    });
+    window.addEventListener('mouseup', () => {
+        if (!isEditingMode || editSubMode !== 'brush' || !isBrushAnnotationDrawing) return;
+        endBrushStroke();
+    });
+})();
+
+// 📍 自訂插釘（Custom Route Pins）：4 種幾何外型 ＋ 5 種高對比顏色 ＋ 旁側簡短標題 ＋ 點擊展開詳細敘述
+const CUSTOM_PIN_COLOR_PALETTE = {
+    red: { fill: '#ef4444', stroke: '#991b1b', label: '紅色', badgeBg: 'bg-red-600' },
+    orange: { fill: '#f59e0b', stroke: '#92400e', label: '橘黃', badgeBg: 'bg-amber-500' },
+    blue: { fill: '#2563eb', stroke: '#1e3a8a', label: '藍色', badgeBg: 'bg-blue-600' },
+    green: { fill: '#16a34a', stroke: '#14532d', label: '綠色', badgeBg: 'bg-emerald-600' },
+    purple: { fill: '#9333ea', stroke: '#581c87', label: '紫色', badgeBg: 'bg-purple-600' }
+};
+
+const CUSTOM_PIN_SHAPE_META = {
+    teardrop: { label: '水滴型', icon: '💧' },
+    cone: { label: '倒錐指標', icon: '🔻' },
+    circle: { label: '圓形圖釘', icon: '⭕' },
+    flag: { label: '旗幟警示', icon: '🚩' }
+};
+
+function buildCustomRoutePinShapeSVG(shape, colorKey) {
+    const pal = CUSTOM_PIN_COLOR_PALETTE[colorKey] || CUSTOM_PIN_COLOR_PALETTE.red;
+    if (shape === 'cone') {
+        // 倒錐體（三角指標）：頂部寬底倒立三角錐直指下方座標點
+        return `
+            <svg width="28" height="34" viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 4H26L14 32L2 4Z" fill="${pal.fill}" stroke="#ffffff" stroke-width="2.4" stroke-linejoin="round"/>
+                <circle cx="14" cy="12" r="3.5" fill="#ffffff"/>
+            </svg>
+        `;
+    }
+    if (shape === 'circle') {
+        // 圓形圖釘：高對比雙環圓形圖釘＋底部短針尖
+        return `
+            <svg width="28" height="34" viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M14 23V32" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+                <path d="M14 23V32" stroke="${pal.stroke}" stroke-width="2.2" stroke-linecap="round"/>
+                <circle cx="14" cy="13" r="10.5" fill="${pal.fill}" stroke="#ffffff" stroke-width="2.5"/>
+                <circle cx="14" cy="13" r="4.2" fill="#ffffff"/>
+            </svg>
+        `;
+    }
+    if (shape === 'flag') {
+        // 旗幟／警示牌：左側立桿＋迎風展開警示旗面
+        return `
+            <svg width="28" height="34" viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 4V32" stroke="#ffffff" stroke-width="4.2" stroke-linecap="round"/>
+                <path d="M6 4V32" stroke="#1e293b" stroke-width="2.4" stroke-linecap="round"/>
+                <path d="M7 4H25L21 11L25 18H7V4Z" fill="${pal.fill}" stroke="#ffffff" stroke-width="2.2" stroke-linejoin="round"/>
+            </svg>
+        `;
+    }
+    // 預設 teardrop（水滴型）
+    return `
+        <svg width="28" height="34" viewBox="0 0 28 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 2C7.925 2 3 6.925 3 13C3 20.8 14 32 14 32C14 32 25 20.8 25 13C25 6.925 20.075 2 14 2Z" fill="${pal.fill}" stroke="#ffffff" stroke-width="2.4" stroke-linejoin="round"/>
+            <circle cx="14" cy="12.5" r="4.2" fill="#ffffff"/>
+        </svg>
+    `;
+}
+
+let activeCustomRoutePinPopupMarker = null;
+let activeCustomRoutePinPopupKey = null;
+
+function closeActiveCustomRoutePinPopup() {
+    if (activeCustomRoutePinPopupMarker) {
+        try { activeCustomRoutePinPopupMarker.remove(); } catch (e) {}
+        activeCustomRoutePinPopupMarker = null;
+    }
+    activeCustomRoutePinPopupKey = null;
+}
+window.closeActiveCustomRoutePinPopup = closeActiveCustomRoutePinPopup;
+
+function openCustomRoutePinPopupCard(route, pin, pinIdx) {
+    if (!route || !pin) return;
+    const key = `${pin.id || pinIdx}_${pin.lng}_${pin.lat}`;
+    if (activeCustomRoutePinPopupKey === key && activeCustomRoutePinPopupMarker) {
+        closeActiveCustomRoutePinPopup();
+        return;
+    }
+    closeActiveCustomRoutePinPopup();
+    closeActiveAlertPopup();
+    activeCustomRoutePinPopupKey = key;
+
+    const pal = CUSTOM_PIN_COLOR_PALETTE[pin.color] || CUSTOM_PIN_COLOR_PALETTE.red;
+    const shapeInfo = CUSTOM_PIN_SHAPE_META[pin.shape] || CUSTOM_PIN_SHAPE_META.teardrop;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'alert-popup-wrapper';
+    wrapper.onclick = (e) => e.stopPropagation();
+
+    const card = document.createElement('div');
+    card.className = 'custom-pin-detail-card';
+    card.style.borderColor = pal.fill;
+
+    const headerRow = document.createElement('div');
+    headerRow.className = 'custom-pin-detail-header';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'custom-pin-detail-title';
+    const iconSpan = document.createElement('span');
+    iconSpan.textContent = shapeInfo.icon;
+    const titleTextSpan = document.createElement('span');
+    titleTextSpan.textContent = (pin.title && String(pin.title).trim()) ? String(pin.title).trim() : '路線插釘提醒';
+    titleWrap.appendChild(iconSpan);
+    titleWrap.appendChild(titleTextSpan);
+    headerRow.appendChild(titleWrap);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'w-5 h-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center text-[11px] font-black active:scale-90 flex-shrink-0';
+    closeBtn.innerHTML = '✕';
+    closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        closeActiveCustomRoutePinPopup();
+    };
+    headerRow.appendChild(closeBtn);
+    card.appendChild(headerRow);
+
+    const noteEl = document.createElement('div');
+    noteEl.className = 'custom-pin-detail-desc';
+    noteEl.textContent = (pin.desc && String(pin.desc).trim()) ? String(pin.desc).trim() : (pin.title || '請注意此處路況');
+    card.appendChild(noteEl);
+
+    // 嚴格區分預覽／導航與編輯模式：
+    // 在「路線預覽」與「遵循導航」模式下（isEditingMode === false），點擊插釘只純粹顯示標題與詳細敘述，完全隱藏修改與刪除按鈕；
+    // 只有在「路線編輯模式」（isEditingMode === true）中點擊插釘時，才在右下角顯示縮小低調的「修改」與「刪除」按鈕。
+    if (isEditingMode) {
+        const actionRow = document.createElement('div');
+        actionRow.className = 'custom-pin-detail-actions';
+
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'custom-pin-detail-btn is-edit active:scale-95';
+        editBtn.innerHTML = '<span>✏️ 修改</span>';
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            closeActiveCustomRoutePinPopup();
+            openCustomRoutePinModal(route, pinIdx, [pin.lng, pin.lat]);
+        };
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'custom-pin-detail-btn is-delete active:scale-95';
+        delBtn.innerHTML = '<span>🗑️ 刪除</span>';
+        delBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (!confirm(`確定要刪除插釘【${pin.title || '提醒'}】嗎？`)) return;
+            closeActiveCustomRoutePinPopup();
+            pushEditUndoSnapshot(route);
+            route.customPins.splice(pinIdx, 1);
+            refreshCurrentRouteMarkers(route);
+        };
+
+        actionRow.appendChild(editBtn);
+        actionRow.appendChild(delBtn);
+        card.appendChild(actionRow);
+    }
+
+    const arrow = document.createElement('div');
+    arrow.className = 'alert-popup-arrow';
+    arrow.style.borderTopColor = pal.fill;
+
+    wrapper.appendChild(card);
+    wrapper.appendChild(arrow);
+
+    activeCustomRoutePinPopupMarker = new maplibregl.Marker({
+        element: wrapper,
+        anchor: 'bottom',
+        offset: [0, -38],
+        rotationAlignment: 'viewport',
+        pitchAlignment: 'viewport'
+    }).setLngLat([Number(pin.lng), Number(pin.lat)]).addTo(map);
+}
+
+function renderRouteCustomPins(route, editable = false) {
+    if (!route) return;
+    if (!Array.isArray(route.customPins)) {
+        route.customPins = [];
+    }
+
+    route.customPins.forEach((pin, pIdx) => {
+        if (!pin || typeof pin.lng !== 'number' || typeof pin.lat !== 'number') return;
+        const shapeKey = CUSTOM_PIN_SHAPE_META[pin.shape] ? pin.shape : 'teardrop';
+        const colorKey = CUSTOM_PIN_COLOR_PALETTE[pin.color] ? pin.color : 'red';
+        const shortTitle = String(pin.title || '').trim();
+        const hasDesc = Boolean(pin.desc && String(pin.desc).trim());
+
+        const wrapperEl = document.createElement('div');
+        wrapperEl.className = `custom-route-pin-wrapper ${editable ? 'is-editable' : ''}`;
+        wrapperEl.title = editable
+            ? '點擊展開插釘提醒卡片（含低調修改/刪除鈕），按住可拖曳微調位置'
+            : '點擊展開完整插釘敘述提醒';
+
+        const innerEl = document.createElement('div');
+        innerEl.className = 'custom-route-pin-inner';
+
+        const shapeBox = document.createElement('div');
+        shapeBox.className = 'custom-route-pin-shape-box';
+        shapeBox.innerHTML = buildCustomRoutePinShapeSVG(shapeKey, colorKey);
+        innerEl.appendChild(shapeBox);
+
+        if (shortTitle || hasDesc) {
+            const labelEl = document.createElement('div');
+            labelEl.className = `custom-route-pin-label color-${colorKey}`;
+            labelEl.textContent = shortTitle || '查看提醒';
+            if (hasDesc) {
+                const detailBadge = document.createElement('span');
+                detailBadge.className = 'text-[9px] opacity-90 ml-0.5';
+                detailBadge.textContent = '💬';
+                labelEl.appendChild(detailBadge);
+            }
+            innerEl.appendChild(labelEl);
+        }
+
+        wrapperEl.appendChild(innerEl);
+
+        const m = new maplibregl.Marker({
+            element: wrapperEl,
+            anchor: 'bottom-left',
+            offset: [-14, 0],
+            draggable: Boolean(editable),
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        }).setLngLat([Number(pin.lng), Number(pin.lat)]).addTo(map);
+
+        if (editable) {
+            m.on('dragstart', () => {
+                closeActiveCustomRoutePinPopup();
+                pushEditUndoSnapshot(route);
+            });
+            m.on('dragend', () => {
+                const pos = m.getLngLat();
+                pin.lng = Number(pos.lng.toFixed(6));
+                pin.lat = Number(pos.lat.toFixed(6));
+                vibrate(20);
+            });
+        }
+
+        wrapperEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openCustomRoutePinPopupCard(route, pin, pIdx);
+        });
+
+        domMarkers.push(m);
+    });
+}
+
+let pendingCustomPinEditState = null; // { route, pinIdx: number|null, lngLat: [lng, lat], shape, color }
+
+function syncCustomPinModalSelectionUI(shapeKey, colorKey) {
+    document.querySelectorAll('.custom-pin-shape-btn').forEach(btn => {
+        const isSel = (btn.getAttribute('data-pin-shape') === shapeKey);
+        btn.className = isSel
+            ? 'custom-pin-shape-btn bg-indigo-50 border-2 border-indigo-600 text-indigo-900 rounded-xl py-1.5 px-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-black active:scale-95 transition-all shadow-sm'
+            : 'custom-pin-shape-btn bg-gray-50 border border-gray-200 text-gray-700 rounded-xl py-1.5 px-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-black active:scale-95 transition-all';
+    });
+    document.querySelectorAll('.custom-pin-color-btn').forEach(btn => {
+        const c = btn.getAttribute('data-pin-color');
+        const isSel = (c === colorKey);
+        const pal = CUSTOM_PIN_COLOR_PALETTE[c] || CUSTOM_PIN_COLOR_PALETTE.red;
+        btn.className = isSel
+            ? `custom-pin-color-btn ${pal.badgeBg} text-white rounded-xl py-1.5 text-[11px] font-black border-2 border-gray-900 ring-2 ring-indigo-300 shadow-sm active:scale-95`
+            : `custom-pin-color-btn ${pal.badgeBg} text-white rounded-xl py-1.5 text-[11px] font-black border border-transparent opacity-75 active:scale-95`;
+    });
+}
+
+function closeCustomRoutePinModal() {
+    document.getElementById('customRoutePinModal')?.classList.add('hidden');
+    pendingCustomPinEditState = null;
+    if (typeof clearLockedRoutePointPreviewMarker === 'function') {
+        clearLockedRoutePointPreviewMarker();
+    }
+}
+
+function openCustomRoutePinModal(route, pinIdx = null, lngLat = null) {
+    if (!route) return;
+    if (!Array.isArray(route.customPins)) route.customPins = [];
+    const existingPin = (typeof pinIdx === 'number' && pinIdx >= 0 && pinIdx < route.customPins.length)
+        ? route.customPins[pinIdx]
+        : null;
+
+    const coords = existingPin
+        ? [Number(existingPin.lng), Number(existingPin.lat)]
+        : (Array.isArray(lngLat) && lngLat.length >= 2 ? [Number(lngLat[0]), Number(lngLat[1])] : null);
+    if (!coords) return;
+
+    const shape = existingPin?.shape || 'teardrop';
+    const color = existingPin?.color || 'red';
+
+    pendingCustomPinEditState = {
+        route,
+        pinIdx: existingPin ? pinIdx : null,
+        lngLat: coords,
+        shape,
+        color
+    };
+
+    if (typeof showLockedRoutePointPreviewMarker === 'function') {
+        showLockedRoutePointPreviewMarker(
+            coords,
+            'alert',
+            existingPin ? `📍 修改自訂插釘：${existingPin.title || '提醒'}` : '📍 已鎖定自訂插釘落點'
+        );
+    }
+    if (typeof focusMapAboveBottomModal === 'function') {
+        focusMapAboveBottomModal(coords);
+    }
+
+    const titleModalEl = document.getElementById('customRoutePinModalTitle');
+    if (titleModalEl) {
+        titleModalEl.innerHTML = existingPin ? '<span>✏️ 修改自訂插釘提醒</span>' : '<span>📍 新增自訂插釘提醒</span>';
+    }
+
+    const titleInput = document.getElementById('customRoutePinTitleInput');
+    const descInput = document.getElementById('customRoutePinDescInput');
+    const delBtn = document.getElementById('btnDeleteCustomRoutePin');
+
+    if (titleInput) titleInput.value = existingPin?.title || '';
+    if (descInput) descInput.value = existingPin?.desc || '';
+    if (delBtn) delBtn.classList.toggle('hidden', !existingPin);
+
+    syncCustomPinModalSelectionUI(shape, color);
+    document.getElementById('customRoutePinModal')?.classList.remove('hidden');
+}
+
+document.querySelectorAll('.custom-pin-shape-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!pendingCustomPinEditState) return;
+        pendingCustomPinEditState.shape = btn.getAttribute('data-pin-shape') || 'teardrop';
+        syncCustomPinModalSelectionUI(pendingCustomPinEditState.shape, pendingCustomPinEditState.color);
+    });
+});
+
+document.querySelectorAll('.custom-pin-color-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!pendingCustomPinEditState) return;
+        pendingCustomPinEditState.color = btn.getAttribute('data-pin-color') || 'red';
+        syncCustomPinModalSelectionUI(pendingCustomPinEditState.shape, pendingCustomPinEditState.color);
+    });
+});
+
+document.querySelectorAll('.custom-pin-preset-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const presetText = chip.getAttribute('data-pin-preset') || '';
+        const titleInput = document.getElementById('customRoutePinTitleInput');
+        if (titleInput && presetText) {
+            titleInput.value = presetText;
+            titleInput.focus();
+        }
+    });
+});
+
+document.getElementById('btnCloseCustomRoutePinTop')?.addEventListener('click', closeCustomRoutePinModal);
+document.getElementById('btnCancelCustomRoutePin')?.addEventListener('click', closeCustomRoutePinModal);
+
+document.getElementById('btnDeleteCustomRoutePin')?.addEventListener('click', () => {
+    if (!pendingCustomPinEditState) return;
+    const { route, pinIdx } = pendingCustomPinEditState;
+    if (!route || typeof pinIdx !== 'number' || pinIdx < 0 || pinIdx >= (route.customPins || []).length) {
+        closeCustomRoutePinModal();
+        return;
+    }
+    const targetPin = route.customPins[pinIdx];
+    if (!confirm(`確定要刪除插釘【${targetPin?.title || '提醒'}】嗎？`)) return;
+    if (isEditingMode) pushEditUndoSnapshot(route);
+    route.customPins.splice(pinIdx, 1);
+    closeCustomRoutePinModal();
+    vibrate(25);
+    if (!isEditingMode) persistSavedRoutesToStorage();
+    refreshCurrentRouteMarkers(route);
+});
+
+document.getElementById('btnSaveCustomRoutePin')?.addEventListener('click', () => {
+    if (!pendingCustomPinEditState) return;
+    const { route, pinIdx, lngLat, shape, color } = pendingCustomPinEditState;
+    if (!route || !Array.isArray(lngLat) || lngLat.length < 2) {
+        closeCustomRoutePinModal();
+        return;
+    }
+
+    const titleInput = document.getElementById('customRoutePinTitleInput');
+    const descInput = document.getElementById('customRoutePinDescInput');
+    const cleanTitle = String(titleInput?.value || '').trim();
+    const cleanDesc = String(descInput?.value || '').trim();
+
+    if (!cleanTitle && !cleanDesc) {
+        alert('請至少輸入「簡短標題」或「詳細文字敘述」其中一項！');
+        titleInput?.focus();
+        return;
+    }
+
+    if (isEditingMode) {
+        pushEditUndoSnapshot(route);
+    }
+    if (!Array.isArray(route.customPins)) {
+        route.customPins = [];
+    }
+
+    const finalTitle = cleanTitle || cleanDesc.slice(0, 10);
+    if (typeof pinIdx === 'number' && pinIdx >= 0 && pinIdx < route.customPins.length) {
+        route.customPins[pinIdx] = {
+            ...route.customPins[pinIdx],
+            lng: Number(lngLat[0].toFixed(6)),
+            lat: Number(lngLat[1].toFixed(6)),
+            shape: shape || 'teardrop',
+            color: color || 'red',
+            title: finalTitle,
+            desc: cleanDesc
+        };
+    } else {
+        route.customPins.push({
+            id: 'cpin_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            lng: Number(lngLat[0].toFixed(6)),
+            lat: Number(lngLat[1].toFixed(6)),
+            shape: shape || 'teardrop',
+            color: color || 'red',
+            title: finalTitle,
+            desc: cleanDesc
+        });
+    }
+
+    closeCustomRoutePinModal();
+    vibrate([25, 20, 25]);
+    if (!isEditingMode) {
+        persistSavedRoutesToStorage();
+    }
+    refreshCurrentRouteMarkers(route);
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl && isEditingMode && editSubMode === 'customPin') {
+        promptEl.innerText = `✅ 已儲存自訂插釘「${finalTitle}」！可按住插釘拖曳微調位置、點擊修改，或點地圖繼續新增`;
+    }
+});
+
+// ==========================================
+// 🔤 路線編輯模式專屬：「地圖純文字標籤」引擎（無大頭針圖示，直接貼在路面或路口，獨立於主軌跡，絕不改動清運主軌跡座標與總距離）
+// ==========================================
+const ROUTE_TEXT_LABEL_STYLE_META = {
+    'red-white': { label: '🚨 紅底白字警示', btnClass: 'bg-red-600 text-white' },
+    'yellow-black': { label: '⚠️ 黃黑高對比', btnClass: 'bg-yellow-400 text-slate-900' },
+    'blue-white': { label: 'ℹ️ 藍底白字', btnClass: 'bg-blue-600 text-white' },
+    'white-black': { label: '🏷️ 白底黑字', btnClass: 'bg-white text-slate-900' }
+};
+
+function renderRouteTextLabels(route, editable = false) {
+    if (!route) return;
+    if (!Array.isArray(route.textLabels)) {
+        route.textLabels = [];
+    }
+
+    route.textLabels.forEach((lbl, lIdx) => {
+        if (!lbl || typeof lbl.lng !== 'number' || typeof lbl.lat !== 'number') return;
+        const textStr = String(lbl.text || '').trim();
+        if (!textStr) return;
+        const styleKey = ROUTE_TEXT_LABEL_STYLE_META[lbl.style] ? lbl.style : 'red-white';
+
+        const wrapperEl = document.createElement('div');
+        wrapperEl.className = `route-text-label-wrapper ${editable ? 'is-editable' : ''}`;
+        if (editable) {
+            wrapperEl.title = '點擊可修改文字或配色、按住可自由拖曳移動位置';
+        }
+
+        const pillEl = document.createElement('div');
+        pillEl.className = `route-text-label-pill theme-${styleKey}`;
+        pillEl.textContent = textStr;
+        wrapperEl.appendChild(pillEl);
+
+        const m = new maplibregl.Marker({
+            element: wrapperEl,
+            anchor: 'center',
+            draggable: Boolean(editable),
+            rotationAlignment: 'viewport',
+            pitchAlignment: 'viewport'
+        }).setLngLat([Number(lbl.lng), Number(lbl.lat)]).addTo(map);
+
+        if (editable) {
+            m.on('dragstart', () => {
+                pushEditUndoSnapshot(route);
+            });
+            m.on('dragend', () => {
+                const pos = m.getLngLat();
+                lbl.lng = Number(pos.lng.toFixed(6));
+                lbl.lat = Number(pos.lat.toFixed(6));
+                vibrate(20);
+            });
+
+            wrapperEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openRouteTextLabelModal(route, lIdx, [lbl.lng, lbl.lat]);
+            });
+        }
+
+        domMarkers.push(m);
+    });
+}
+
+let pendingRouteTextLabelEditState = null; // { route, labelIdx: number|null, lngLat: [lng, lat], style }
+
+function syncRouteTextLabelModalStyleUI(styleKey) {
+    document.querySelectorAll('.route-text-label-style-btn').forEach(btn => {
+        const s = btn.getAttribute('data-text-label-style') || 'red-white';
+        const isSel = (s === styleKey);
+        const meta = ROUTE_TEXT_LABEL_STYLE_META[s] || ROUTE_TEXT_LABEL_STYLE_META['red-white'];
+        const borderBase = (s === 'white-black' || s === 'yellow-black') ? 'border-slate-800' : 'border-transparent';
+        btn.className = isSel
+            ? `route-text-label-style-btn ${meta.btnClass} rounded-xl py-2 px-2 text-xs font-black border-2 border-gray-900 ring-2 ring-teal-400 shadow-sm active:scale-95`
+            : `route-text-label-style-btn ${meta.btnClass} rounded-xl py-2 px-2 text-xs font-black border ${borderBase} opacity-75 active:scale-95`;
+    });
+}
+
+function closeRouteTextLabelModal() {
+    document.getElementById('routeTextLabelModal')?.classList.add('hidden');
+    pendingRouteTextLabelEditState = null;
+    if (typeof clearLockedRoutePointPreviewMarker === 'function') {
+        clearLockedRoutePointPreviewMarker();
+    }
+}
+
+function openRouteTextLabelModal(route, labelIdx = null, lngLat = null) {
+    if (!route) return;
+    if (!Array.isArray(route.textLabels)) route.textLabels = [];
+    const existingLabel = (typeof labelIdx === 'number' && labelIdx >= 0 && labelIdx < route.textLabels.length)
+        ? route.textLabels[labelIdx]
+        : null;
+
+    const coords = existingLabel
+        ? [Number(existingLabel.lng), Number(existingLabel.lat)]
+        : (Array.isArray(lngLat) && lngLat.length >= 2 ? [Number(lngLat[0]), Number(lngLat[1])] : null);
+    if (!coords) return;
+
+    const style = (existingLabel && ROUTE_TEXT_LABEL_STYLE_META[existingLabel.style])
+        ? existingLabel.style
+        : 'red-white';
+
+    pendingRouteTextLabelEditState = {
+        route,
+        labelIdx: existingLabel ? labelIdx : null,
+        lngLat: coords,
+        style
+    };
+
+    if (typeof showLockedRoutePointPreviewMarker === 'function') {
+        showLockedRoutePointPreviewMarker(
+            coords,
+            'select',
+            existingLabel ? `🔤 修改文字標籤：${existingLabel.text || ''}` : '🔤 已鎖定文字標籤位置'
+        );
+    }
+    if (typeof focusMapAboveBottomModal === 'function') {
+        focusMapAboveBottomModal(coords);
+    }
+
+    const titleEl = document.getElementById('routeTextLabelModalTitle');
+    if (titleEl) {
+        titleEl.innerHTML = existingLabel
+            ? '<span>✏️ 修改地圖純文字標籤</span>'
+            : '<span>🔤 新增地圖純文字標籤</span>';
+    }
+
+    const textInput = document.getElementById('routeTextLabelInput');
+    const delBtn = document.getElementById('btnDeleteRouteTextLabel');
+    if (textInput) textInput.value = existingLabel?.text || '';
+    if (delBtn) delBtn.classList.toggle('hidden', !existingLabel);
+
+    syncRouteTextLabelModalStyleUI(style);
+    document.getElementById('routeTextLabelModal')?.classList.remove('hidden');
+    setTimeout(() => {
+        textInput?.focus();
+    }, 60);
+}
+
+document.querySelectorAll('.route-text-label-style-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!pendingRouteTextLabelEditState) return;
+        pendingRouteTextLabelEditState.style = btn.getAttribute('data-text-label-style') || 'red-white';
+        syncRouteTextLabelModalStyleUI(pendingRouteTextLabelEditState.style);
+    });
+});
+
+document.querySelectorAll('.route-text-label-preset-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const preset = chip.getAttribute('data-text-preset') || '';
+        const textInput = document.getElementById('routeTextLabelInput');
+        if (textInput && preset) {
+            textInput.value = preset;
+            textInput.focus();
+        }
+    });
+});
+
+document.getElementById('btnCloseRouteTextLabelTop')?.addEventListener('click', closeRouteTextLabelModal);
+document.getElementById('btnCancelRouteTextLabel')?.addEventListener('click', closeRouteTextLabelModal);
+
+document.getElementById('btnDeleteRouteTextLabel')?.addEventListener('click', () => {
+    if (!pendingRouteTextLabelEditState) return;
+    const { route, labelIdx } = pendingRouteTextLabelEditState;
+    if (!route || typeof labelIdx !== 'number' || labelIdx < 0 || labelIdx >= (route.textLabels || []).length) {
+        closeRouteTextLabelModal();
+        return;
+    }
+    const targetLbl = route.textLabels[labelIdx];
+    if (!confirm(`確定要刪除文字標籤【${targetLbl?.text || ''}】嗎？`)) return;
+    if (isEditingMode) pushEditUndoSnapshot(route);
+    route.textLabels.splice(labelIdx, 1);
+    closeRouteTextLabelModal();
+    vibrate(25);
+    refreshCurrentRouteMarkers(route);
+});
+
+document.getElementById('btnSaveRouteTextLabel')?.addEventListener('click', () => {
+    if (!pendingRouteTextLabelEditState) return;
+    const { route, labelIdx, lngLat, style } = pendingRouteTextLabelEditState;
+    if (!route || !Array.isArray(lngLat) || lngLat.length < 2) {
+        closeRouteTextLabelModal();
+        return;
+    }
+
+    const textInput = document.getElementById('routeTextLabelInput');
+    const cleanText = String(textInput?.value || '').trim();
+    if (!cleanText) {
+        alert('請輸入要貼在地圖上的標籤文字內容！');
+        textInput?.focus();
+        return;
+    }
+
+    if (isEditingMode) {
+        pushEditUndoSnapshot(route);
+    }
+    if (!Array.isArray(route.textLabels)) {
+        route.textLabels = [];
+    }
+
+    const validStyle = ROUTE_TEXT_LABEL_STYLE_META[style] ? style : 'red-white';
+    if (typeof labelIdx === 'number' && labelIdx >= 0 && labelIdx < route.textLabels.length) {
+        route.textLabels[labelIdx] = {
+            ...route.textLabels[labelIdx],
+            lng: Number(lngLat[0].toFixed(6)),
+            lat: Number(lngLat[1].toFixed(6)),
+            text: cleanText,
+            style: validStyle
+        };
+    } else {
+        route.textLabels.push({
+            id: 'tlbl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            lng: Number(lngLat[0].toFixed(6)),
+            lat: Number(lngLat[1].toFixed(6)),
+            text: cleanText,
+            style: validStyle
+        });
+    }
+
+    closeRouteTextLabelModal();
+    vibrate([25, 20, 25]);
+    refreshCurrentRouteMarkers(route);
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl && isEditingMode && editSubMode === 'textLabel') {
+        promptEl.innerText = `✅ 已貼上文字標籤「${cleanText}」！可按住標籤拖曳移動位置、點擊修改，或點地圖繼續新增`;
+    }
+});
 
 // ==========================================
 // ✏️ 手繪自由路線 ＋ 📍 點到點拉線（邏輯徹底分離，各自獨立處理，且與家具串路線完全隔離）
@@ -4479,12 +5610,15 @@ async function handleManualPointToPointClick(e) {
 
 map.on('click', (e) => {
     const origTarget = e.originalEvent?.target;
-    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker, .furniture-pin-wrapper, .furniture-popup-wrapper')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker, .furniture-pin-wrapper, .furniture-popup-wrapper, .custom-route-pin-wrapper, .route-text-label-wrapper')) {
         return;
     }
-    // 點擊地圖空白處自動收合已展開的警示氣泡卡片與家具點位卡片
+    // 點擊地圖空白處自動收合已展開的警示氣泡卡片、自訂插釘卡片與家具點位卡片
     if (activeAlertPopupMarker) {
         closeActiveAlertPopup();
+    }
+    if (activeCustomRoutePinPopupMarker) {
+        closeActiveCustomRoutePinPopup();
     }
     if (typeof closeFurniturePinPopup === 'function') {
         closeFurniturePinPopup();
@@ -4507,11 +5641,53 @@ map.on('click', (e) => {
     const route = getActiveWorkingRoute();
     if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
 
-    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker')) {
+    if (origTarget && origTarget.closest && origTarget.closest('.music-marker, .shared-pin-wrapper, .fleet-truck-marker, .alert-compact-pin, .alert-popup-wrapper, .callout-box-marker, .callout-anchor-marker, .brush-stroke-delete-marker, .custom-route-pin-wrapper, .route-text-label-wrapper')) {
         return;
     }
 
-    if (editSubMode === 'callout') {
+    if (editSubMode === 'customPin') {
+        const clickLng = Number(e.lngLat.lng.toFixed(6));
+        const clickLat = Number(e.lngLat.lat.toFixed(6));
+        vibrate(25);
+        openCustomRoutePinModal(route, null, [clickLng, clickLat]);
+        return;
+    } else if (editSubMode === 'textLabel') {
+        const clickLng = Number(e.lngLat.lng.toFixed(6));
+        const clickLat = Number(e.lngLat.lat.toFixed(6));
+        vibrate(25);
+        openRouteTextLabelModal(route, null, [clickLng, clickLat]);
+        return;
+    } else if (editSubMode === 'brush') {
+        // 在「✏️ 畫筆」模式下若單點命中某筆畫筆記號（距離 < 12 公尺），直接刪除該筆線條
+        if (Array.isArray(route.brushStrokes) && route.brushStrokes.length > 0) {
+            const clickLng = e.lngLat.lng;
+            const clickLat = e.lngLat.lat;
+            let hitStrokeIdx = -1;
+            let minStrokeDistM = Infinity;
+            route.brushStrokes.forEach((st, sIdx) => {
+                if (!st || !Array.isArray(st.coords)) return;
+                st.coords.forEach(pt => {
+                    if (!Array.isArray(pt) || pt.length < 2) return;
+                    const dM = getDistanceKm(clickLng, clickLat, pt[0], pt[1]) * 1000;
+                    if (dM < minStrokeDistM) {
+                        minStrokeDistM = dM;
+                        hitStrokeIdx = sIdx;
+                    }
+                });
+            });
+            if (hitStrokeIdx !== -1 && minStrokeDistM <= 12) {
+                pushEditUndoSnapshot(route);
+                route.brushStrokes.splice(hitStrokeIdx, 1);
+                vibrate(25);
+                renderEditableRouteMarkers(route);
+                const promptEl = document.getElementById('editPromptText');
+                if (promptEl) {
+                    promptEl.innerText = `🗑️ 已點擊刪除單筆畫筆記號！（剩餘 ${route.brushStrokes.length} 筆，可按「↩️ 上一步」復原）`;
+                }
+            }
+        }
+        return;
+    } else if (editSubMode === 'callout') {
         const clickLng = Number(e.lngLat.lng.toFixed(6));
         const clickLat = Number(e.lngLat.lat.toFixed(6));
         const promptEl = document.getElementById('editPromptText');
@@ -4776,6 +5952,10 @@ document.getElementById('saveEditBtn').onclick = () => {
     try { map.dragPan.enable(); } catch (e) {}
     ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    closeCustomRoutePinModal();
+    closeRouteTextLabelModal();
+    closeActiveCustomRoutePinPopup();
+    cancelActiveBrushAnnotationStroke();
     document.getElementById('exitEditConfirmModal')?.classList.add('hidden');
     document.getElementById('editRouteBar').classList.add('hidden');
 
@@ -4783,6 +5963,15 @@ document.getElementById('saveEditBtn').onclick = () => {
     if (editedRoute && Array.isArray(editedRoute.points) && editedRoute.points.length >= 2) {
         if (!Array.isArray(editedRoute.callouts)) {
             editedRoute.callouts = [];
+        }
+        if (!Array.isArray(editedRoute.brushStrokes)) {
+            editedRoute.brushStrokes = [];
+        }
+        if (!Array.isArray(editedRoute.customPins)) {
+            editedRoute.customPins = [];
+        }
+        if (!Array.isArray(editedRoute.textLabels)) {
+            editedRoute.textLabels = [];
         }
         // 自動重新計算總距離 (km) 與各語音標記點的對應路徑索引
         syncRouteMarkersAndIndicesAfterSpline(editedRoute, null, true);
@@ -4831,6 +6020,10 @@ function executeDiscardAndExitEditMode() {
     try { map.dragPan.enable(); } catch (e) {}
     ensureEditorMapZoomEnabled();
     if (tempMarkerA) { tempMarkerA.remove(); tempMarkerA = null; }
+    closeCustomRoutePinModal();
+    closeRouteTextLabelModal();
+    closeActiveCustomRoutePinPopup();
+    cancelActiveBrushAnnotationStroke();
     document.getElementById('editRouteBar').classList.add('hidden');
 
     // 徹底放棄本次編輯期間的所有修改，將記憶體與本機儲存完整還原回進入編輯前的原始深拷貝快照（嚴禁呼叫 syncRouteMarkersAndIndicesAfterSpline 重算或覆寫）

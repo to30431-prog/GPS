@@ -1,0 +1,15 @@
+{
+  "name": "yingge-clean-route-pro-max",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node --check server.js && node --check src/main.js",
+    "lint": "node --check server.js && node --check src/main.js && node --check src/config-state.js && node --check src/map-core.js && node --check src/route-editor.js && node --check src/navigation.js && node --check src/approach-nav.js && node --check src/firebase-fleet.js && node --check src/shared-pins.js && node --check src/furniture-osrm.js && node --check src/caution-editor.js && node --check src/speed-cameras.js && node --check src/bgm-player.js && node --check src/fleet-radio-ptt.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.6.1",
+    "express": "^5.3.0"
+  }
+}

@@ -1017,12 +1017,16 @@ input, textarea {
 }
 
 .drag-handle {
-    touch-action: none !important;
+    touch-action: pan-y;
     user-select: none !important;
     -webkit-user-select: none !important;
     -webkit-touch-callout: none !important;
     min-width: 28px;
     min-height: 36px;
+}
+#historyList.is-sorting-routes,
+#historyList.is-sorting-routes .drag-handle {
+    touch-action: none !important;
 }
 
 .route-card-drag-unlocked {

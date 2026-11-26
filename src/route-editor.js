@@ -639,7 +639,25 @@ function unbindHistoryDragGlobalListeners() {
     document.removeEventListener('visibilitychange', onHistoryDragVisibilityChange);
 }
 
+const HISTORY_DRAG_TOUCH_HOLD_MS = 280;
+const HISTORY_DRAG_CANCEL_MOVE_PX = 10;
+const HISTORY_DRAG_MOUSE_THRESHOLD_PX = 6;
+let historyDragPending = null;
+
+function cancelPendingHistoryDrag() {
+    if (!historyDragPending) return;
+    const p = historyDragPending;
+    historyDragPending = null;
+    if (p.timerId !== null) {
+        clearTimeout(p.timerId);
+    }
+    if (p.cleanup) {
+        try { p.cleanup(); } catch (e) {}
+    }
+}
+
 function stopHistoryDragAutoScroll(listEl) {
+    cancelPendingHistoryDrag();
     if (historyDragState.active) {
         finishHistoryCardDrag(false);
         return;
@@ -655,6 +673,7 @@ function stopHistoryDragAutoScroll(listEl) {
 }
 
 function finishHistoryCardDrag(commitDrop = false) {
+    cancelPendingHistoryDrag();
     const wasActive = historyDragState.active;
     const listEl = historyDragState.listEl;
     const filteredRoutes = historyDragState.filteredRoutes;
@@ -697,6 +716,9 @@ function finishHistoryCardDrag(commitDrop = false) {
 
     if (draggedCard) {
         draggedCard.classList.remove('route-card-drag-ghost', 'route-card-drag-unlocked');
+    }
+    if (listEl) {
+        listEl.classList.remove('is-sorting-routes');
     }
 
     historyDragState.listEl = null;
@@ -790,6 +812,7 @@ function startHistoryCardDrag({ listEl, filteredRoutes, card, handleEl = null, c
     document.body.appendChild(indicatorEl);
 
     card.classList.add('route-card-drag-ghost');
+    listEl.classList.add('is-sorting-routes');
 
     historyDragState.active = true;
     historyDragState.inputMode = inputMode;
@@ -894,7 +917,7 @@ function renderHistoryList() {
             : '';
 
         card.innerHTML = `
-            <div class="drag-handle text-red-400 w-7 min-h-[36px] -ml-1 -my-1 px-1 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-red-500 flex-shrink-0 rounded-l-xl" title="按住拖曳排序">
+            <div class="drag-handle text-red-400 w-7 min-h-[36px] -ml-1 -my-1 px-1 flex items-center justify-center cursor-grab active:cursor-grabbing hover:text-red-500 flex-shrink-0 rounded-l-xl" title="長按拖曳排序">
                 <i class="fa-solid fa-grip-vertical text-base pointer-events-none"></i>
             </div>
             <div class="route-card-info flex-1 min-w-0 flex flex-col justify-center gap-1 cursor-pointer">
@@ -966,36 +989,110 @@ function renderHistoryList() {
         if (dragHandle) {
             dragHandle.addEventListener('contextmenu', (e) => e.preventDefault());
             dragHandle.addEventListener('selectstart', (e) => e.preventDefault());
+            // 🛡️ 防誤觸觸控拖曳：須長按專屬把柄 280ms 且手指位移 <= 10px 才解鎖拖曳；期間若上下滑動或清單捲動，立即取消並優先執行原生捲動
             dragHandle.addEventListener('touchstart', (e) => {
                 if (!e.changedTouches || e.changedTouches.length === 0) return;
-                if (e.touches && e.touches.length > 1) return;
-                if (e.cancelable) e.preventDefault();
-                e.stopPropagation();
+                if (e.touches && e.touches.length > 1) {
+                    cancelPendingHistoryDrag();
+                    return;
+                }
+                cancelPendingHistoryDrag();
                 const touch = e.changedTouches[0];
-                startHistoryCardDrag({
-                    listEl: list,
-                    filteredRoutes,
-                    card,
-                    handleEl: dragHandle,
-                    clientY: touch.clientY,
-                    inputMode: 'touch',
-                    touchId: touch.identifier
-                });
-            }, { passive: false });
+                const startX = touch.clientX;
+                const startY = touch.clientY;
+                const touchId = touch.identifier;
+                const startScrollTop = list.scrollTop;
+
+                const onPendingTouchMove = (mv) => {
+                    if (mv.touches && mv.touches.length > 1) {
+                        cancelPendingHistoryDrag();
+                        return;
+                    }
+                    const t = findMatchingTouch(mv.touches, touchId);
+                    if (!t) return;
+                    const dx = Math.abs(t.clientX - startX);
+                    const dy = Math.abs(t.clientY - startY);
+                    if (dx > HISTORY_DRAG_CANCEL_MOVE_PX || dy > HISTORY_DRAG_CANCEL_MOVE_PX || Math.abs(list.scrollTop - startScrollTop) > 4) {
+                        cancelPendingHistoryDrag();
+                    }
+                };
+                const onPendingTouchEnd = (endEvt) => {
+                    if (findMatchingTouch(endEvt.changedTouches, touchId)) {
+                        cancelPendingHistoryDrag();
+                    }
+                };
+                const onPendingScroll = () => cancelPendingHistoryDrag();
+
+                const cleanup = () => {
+                    window.removeEventListener('touchmove', onPendingTouchMove, { passive: true });
+                    window.removeEventListener('touchend', onPendingTouchEnd, { passive: true });
+                    window.removeEventListener('touchcancel', onPendingTouchEnd, { passive: true });
+                    list.removeEventListener('scroll', onPendingScroll, { passive: true });
+                };
+                window.addEventListener('touchmove', onPendingTouchMove, { passive: true });
+                window.addEventListener('touchend', onPendingTouchEnd, { passive: true });
+                window.addEventListener('touchcancel', onPendingTouchEnd, { passive: true });
+                list.addEventListener('scroll', onPendingScroll, { passive: true });
+
+                const timerId = setTimeout(() => {
+                    if (!historyDragPending || historyDragPending.touchId !== touchId) return;
+                    const curScrollDiff = Math.abs(list.scrollTop - startScrollTop);
+                    cancelPendingHistoryDrag();
+                    if (curScrollDiff > 4 || !card.isConnected) return;
+                    startHistoryCardDrag({
+                        listEl: list,
+                        filteredRoutes,
+                        card,
+                        handleEl: dragHandle,
+                        clientY: startY,
+                        inputMode: 'touch',
+                        touchId
+                    });
+                }, HISTORY_DRAG_TOUCH_HOLD_MS);
+
+                historyDragPending = { touchId, timerId, cleanup };
+            }, { passive: true });
+
+            // 滑鼠／觸控筆：須拖曳移動 >= 6px 才進入排序，避免輕點誤改順序
             dragHandle.addEventListener('pointerdown', (e) => {
-                if (e.pointerType === 'touch') return; // 觸控統一由 { passive: false } touchstart/touchmove 接管，相容 iOS Safari 與 Android Chrome
+                if (e.pointerType === 'touch') return;
                 if (e.button !== undefined && e.button !== 0) return;
-                if (e.cancelable) e.preventDefault();
-                e.stopPropagation();
-                startHistoryCardDrag({
-                    listEl: list,
-                    filteredRoutes,
-                    card,
-                    handleEl: dragHandle,
-                    clientY: e.clientY,
-                    inputMode: 'pointer',
-                    pointerId: e.pointerId
-                });
+                cancelPendingHistoryDrag();
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const pointerId = e.pointerId;
+
+                const onPendingPointerMove = (mv) => {
+                    if (mv.pointerId !== pointerId) return;
+                    const dx = Math.abs(mv.clientX - startX);
+                    const dy = Math.abs(mv.clientY - startY);
+                    if (Math.hypot(dx, dy) >= HISTORY_DRAG_MOUSE_THRESHOLD_PX) {
+                        if (mv.cancelable) mv.preventDefault();
+                        cancelPendingHistoryDrag();
+                        if (!card.isConnected) return;
+                        startHistoryCardDrag({
+                            listEl: list,
+                            filteredRoutes,
+                            card,
+                            handleEl: dragHandle,
+                            clientY: mv.clientY,
+                            inputMode: 'pointer',
+                            pointerId
+                        });
+                    }
+                };
+                const onPendingPointerEnd = (endEvt) => {
+                    if (endEvt.pointerId === pointerId) cancelPendingHistoryDrag();
+                };
+                const cleanup = () => {
+                    window.removeEventListener('pointermove', onPendingPointerMove);
+                    window.removeEventListener('pointerup', onPendingPointerEnd);
+                    window.removeEventListener('pointercancel', onPendingPointerEnd);
+                };
+                window.addEventListener('pointermove', onPendingPointerMove);
+                window.addEventListener('pointerup', onPendingPointerEnd);
+                window.addEventListener('pointercancel', onPendingPointerEnd);
+                historyDragPending = { pointerId, timerId: null, cleanup };
             });
         }
         list.appendChild(card);

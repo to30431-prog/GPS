@@ -1021,25 +1021,83 @@ document.getElementById('closeHistory').onclick = (e) => {
     backToMain(); 
 };
 
+function getEventBoundPointIndex(ev, ptsLen) {
+    if (!ev || !ptsLen) return -1;
+    if (typeof ev.pointIndex === 'number' && Number.isInteger(ev.pointIndex) && ev.pointIndex >= 0 && ev.pointIndex < ptsLen) {
+        return ev.pointIndex;
+    }
+    if (typeof ev.ptIdx === 'number' && Number.isInteger(ev.ptIdx) && ev.ptIdx >= 0 && ev.ptIdx < ptsLen) {
+        return ev.ptIdx;
+    }
+    return -1;
+}
+
+function resolveVisualLngLatForPoint(pts, visualPts, ptIdx, fallbackLng, fallbackLat) {
+    if (ptIdx >= 0 && ptIdx < pts.length) {
+        const vp = visualPts && visualPts[ptIdx];
+        if (vp && typeof vp.lng === 'number' && typeof vp.lat === 'number') {
+            return [vp.lng, vp.lat];
+        }
+        return [pts[ptIdx].lng, pts[ptIdx].lat];
+    }
+    return [fallbackLng, fallbackLat];
+}
+
+function hasAlertAtSameRouteNode(route, pts, stopIdx, stopPt) {
+    const events = route?.events || [];
+    for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        if (!ev || ev.type !== 'alert') continue;
+        const evIdx = getEventBoundPointIndex(ev, pts.length);
+        if (evIdx === stopIdx) return true;
+        if (evIdx === -1 && stopPt && getDistanceKm(stopPt.lng, stopPt.lat, ev.lng, ev.lat) * 1000 <= 3.5) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function renderRouteMarkers(route) {
     clearDomMarkers();
     const pts = route.points;
     if (!pts || pts.length === 0) return;
+    const visualPts = (typeof computeVisualRightOffsetCoords === 'function') ? computeVisualRightOffsetCoords(pts) : null;
     addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
     addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
-    
+
+    const alertStackCountByKey = new Map();
     (route.events || []).forEach((ev, idx) => {
+        const evIdx = getEventBoundPointIndex(ev, pts.length);
+        const renderLngLat = resolveVisualLngLatForPoint(pts, visualPts, evIdx, ev.lng, ev.lat);
         if (ev.type === 'on') {
-            addPinMarker([ev.lng, ev.lat], `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`);
+            addPinMarker(renderLngLat, `<div class="music-marker music-on-pin"><i class="fa-solid fa-music"></i> 開</div>`, { rawLngLat: [ev.lng, ev.lat] });
         } else if (ev.type === 'off') {
-            addPinMarker([ev.lng, ev.lat], `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`);
+            addPinMarker(renderLngLat, `<div class="music-marker music-off-pin"><i class="fa-solid fa-volume-xmark"></i> 關</div>`, { rawLngLat: [ev.lng, ev.lat] });
         } else if (ev.type === 'alert') {
-            createCompactAlertPinMarker(route, ev, idx);
+            const stackKey = evIdx >= 0 ? `idx_${evIdx}` : `${Number(ev.lng).toFixed(5)},${Number(ev.lat).toFixed(5)}`;
+            const stackIdx = alertStackCountByKey.get(stackKey) || 0;
+            alertStackCountByKey.set(stackKey, stackIdx + 1);
+            createCompactAlertPinMarker(route, ev, idx, {
+                lngLat: renderLngLat,
+                offsetY: -4 - stackIdx * 34
+            });
         }
     });
 
-    (route.points || []).forEach(p => {
-        if (p.is_stop) addPinMarker([p.lng, p.lat], `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`);
+    (route.points || []).forEach((p, pIdx) => {
+        if (p.is_stop) {
+            const stopLngLat = resolveVisualLngLatForPoint(pts, visualPts, pIdx, p.lng, p.lat);
+            const sharesNodeWithAlert = hasAlertAtSameRouteNode(route, pts, pIdx, p);
+            addPinMarker(
+                stopLngLat,
+                `<div class="music-marker bg-indigo-600 border border-white shadow-lg"><i class="fa-regular fa-clock"></i> ${p.scheduled_time || ''}</div>`,
+                {
+                    wrapperClass: 'stop-pin-wrapper',
+                    anchor: sharesNodeWithAlert ? 'top' : 'center',
+                    offset: sharesNodeWithAlert ? [0, 4] : [0, 0]
+                }
+            );
+        }
     });
 
     const showAnnotations = (typeof isRouteAnnotationsVisible === 'function') ? isRouteAnnotationsVisible() : true;
@@ -3296,12 +3354,22 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
     clearDomMarkers();
     const pts = route.points;
     if (!pts || pts.length === 0) return;
+    const visualPts = (typeof computeVisualRightOffsetCoords === 'function') ? computeVisualRightOffsetCoords(pts) : null;
     addPinMarker([pts[0].lng, pts[0].lat], '<div class="pin-s"><span>S</span></div>');
     addPinMarker([pts[pts.length-1].lng, pts[pts.length-1].lat], '<div class="pin-e"><span>E</span></div>');
 
+    const alertStackCountByKey = new Map();
     (route.events || []).forEach((ev, idx) => {
+        const evIdx = getEventBoundPointIndex(ev, pts.length);
+        const renderLngLat = resolveVisualLngLatForPoint(pts, visualPts, evIdx, ev.lng, ev.lat);
         if (ev.type === 'alert') {
-            const alertMarker = createCompactAlertPinMarker(route, ev, idx);
+            const stackKey = evIdx >= 0 ? `idx_${evIdx}` : `${Number(ev.lng).toFixed(5)},${Number(ev.lat).toFixed(5)}`;
+            const stackIdx = alertStackCountByKey.get(stackKey) || 0;
+            alertStackCountByKey.set(stackKey, stackIdx + 1);
+            const alertMarker = createCompactAlertPinMarker(route, ev, idx, {
+                lngLat: renderLngLat,
+                offsetY: -4 - stackIdx * 34
+            });
             if (alertMarker && typeof alertMarker.setDraggable === 'function') {
                 alertMarker.setDraggable(true);
                 alertMarker.on('dragstart', () => {
@@ -3340,7 +3408,7 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
             draggable: true,
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
-        }).setLngLat([ev.lng, ev.lat]).addTo(map);
+        }).setLngLat(renderLngLat).addTo(map);
         m.on('dragstart', () => {
             pushEditUndoSnapshot(route);
         });
@@ -3364,8 +3432,10 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
 
     (route.points || []).forEach((p, idx) => {
         if (p.is_stop) {
+            const stopLngLat = resolveVisualLngLatForPoint(pts, visualPts, idx, p.lng, p.lat);
+            const sharesNodeWithAlert = hasAlertAtSameRouteNode(route, pts, idx, p);
             const wrapperEl = document.createElement('div');
-            wrapperEl.className = 'pin-se-wrapper';
+            wrapperEl.className = 'stop-pin-wrapper';
             const markerEl = document.createElement('div');
             markerEl.className = `music-marker bg-indigo-600 border border-white shadow-lg cursor-grab active:cursor-grabbing`;
             markerEl.innerHTML = `<i class="fa-regular fa-clock"></i> ${p.scheduled_time} <i class="fa-solid fa-pen ml-1 opacity-70"></i>`;
@@ -3373,11 +3443,12 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
             
             const m = new maplibregl.Marker({
                 element: wrapperEl,
-                anchor: 'center',
+                anchor: sharesNodeWithAlert ? 'top' : 'center',
+                offset: sharesNodeWithAlert ? [0, 4] : [0, 0],
                 draggable: true,
                 rotationAlignment: 'viewport',
                 pitchAlignment: 'viewport'
-            }).setLngLat([p.lng, p.lat]).addTo(map);
+            }).setLngLat(stopLngLat).addTo(map);
 
             m.on('dragstart', () => {
                 pushEditUndoSnapshot(route);

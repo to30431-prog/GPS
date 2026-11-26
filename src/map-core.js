@@ -3060,7 +3060,7 @@ function formatCompactAlertShortText(rawNote) {
     return chars.length > 5 ? `${chars.slice(0, 5).join('')}...` : clean;
 }
 
-function createCompactAlertPinMarker(route, ev, eventIdx) {
+function createCompactAlertPinMarker(route, ev, eventIdx, options = {}) {
     // 外層 markerEl 作為傳給 new maplibregl.Marker({ element: markerEl }) 的根容器，
     // 嚴禁在外層設定 CSS transform 或負 margin，避免干擾 MapLibre 的 translate3d 經緯度定位！
     const markerEl = document.createElement('div');
@@ -3104,13 +3104,19 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
         e.stopPropagation();
         openAlertPopupCard(route, ev, eventIdx, markerEl);
     };
+    const renderLngLat = (Array.isArray(options?.lngLat) && options.lngLat.length >= 2)
+        ? options.lngLat
+        : [ev.lng, ev.lat];
+    const offsetY = (typeof options?.offsetY === 'number' && !isNaN(options.offsetY))
+        ? options.offsetY
+        : -4;
     const m = new maplibregl.Marker({
         element: markerEl,
         anchor: 'bottom',
-        offset: [0, -6],
+        offset: [0, offsetY],
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
-    }).setLngLat([ev.lng, ev.lat]).addTo(map);
+    }).setLngLat(renderLngLat).addTo(map);
     domMarkers.push(m);
     registerRouteReminderMarker('alert', ev.lng, ev.lat, markerEl);
     return m;
@@ -3147,22 +3153,24 @@ function clearDomMarkers() {
     }
 }
 
-function addPinMarker(lngLat, htmlContent) {
+function addPinMarker(lngLat, htmlContent, options = {}) {
     // 使用乾淨無 transform 的外層 el 傳給 MapLibre Marker，避免內層 .pin-s / .pin-e 的 rotate(-45deg) 與 MapLibre translate3d 衝突
     const el = document.createElement('div');
-    el.className = 'pin-se-wrapper';
+    el.className = options?.wrapperClass || 'pin-se-wrapper';
     el.innerHTML = htmlContent;
     const m = new maplibregl.Marker({
         element: el,
-        anchor: 'center',
+        anchor: options?.anchor || 'center',
+        offset: Array.isArray(options?.offset) ? options.offset : [0, 0],
         rotationAlignment: 'viewport',
         pitchAlignment: 'viewport'
     }).setLngLat(lngLat).addTo(map);
     domMarkers.push(m);
     const musicBadgeEl = el.querySelector('.music-marker.music-on-pin, .music-marker.music-off-pin');
-    if (musicBadgeEl && Array.isArray(lngLat) && lngLat.length >= 2) {
+    const keyLngLat = (Array.isArray(options?.rawLngLat) && options.rawLngLat.length >= 2) ? options.rawLngLat : lngLat;
+    if (musicBadgeEl && Array.isArray(keyLngLat) && keyLngLat.length >= 2) {
         const reminderType = musicBadgeEl.classList.contains('music-on-pin') ? 'on' : 'off';
-        registerRouteReminderMarker(reminderType, lngLat[0], lngLat[1], musicBadgeEl);
+        registerRouteReminderMarker(reminderType, keyLngLat[0], keyLngLat[1], musicBadgeEl);
     }
 }
 

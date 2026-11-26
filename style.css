@@ -49,6 +49,13 @@ html, body {
     align-items: center;
     justify-content: center;
 }
+.stop-pin-wrapper {
+    width: max-content;
+    height: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
 .pin-s, .pin-e {
     width: 32px; height: 32px; border-radius: 50% 50% 50% 0;
     transform: rotate(-45deg); display: flex; align-items: center; justify-content: center;
@@ -91,7 +98,8 @@ html, body {
    2. 內層 .alert-compact-scale-wrap 依地圖 zoom 等比例縮放（最小 0.55 倍），transform-origin: bottom center 對準底部尖端不位移。
    3. 底部 .alert-compact-arrow 為小橘色倒三角形指標，尖端精準對齊綠色路線上的觸發座標 [lng, lat]。 */
 .alert-compact-pin {
-    display: flex;
+    width: max-content;
+    display: inline-flex;
     flex-direction: column;
     align-items: center;
     cursor: pointer;

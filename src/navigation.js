@@ -689,6 +689,9 @@ function precomputeFollowRouteTurns(pts, cumMeters) {
 // ==========================================
 const FOLLOW_SUBDIVIDE_MAX_SEG_METERS = 15;
 const FOLLOW_SNAP_RADIUS_METERS = 45;
+const FOLLOW_VISIT_RADIUS_METERS = 35;
+const FOLLOW_MAX_HEADING_DIFF_DEG = 75;
+const FOLLOW_SKIP_WARN_MIN_METERS = 50;
 const FOLLOW_OFF_ROUTE_BASE_METERS = 52;
 const FOLLOW_OFF_ROUTE_MAX_METERS = 65;
 const FOLLOW_OFF_ROUTE_MIN_SPEED_KMH = 3;
@@ -697,7 +700,11 @@ const FOLLOW_OFF_ROUTE_DURATION_MS = 4500;
 const FOLLOW_DIR_ARROW_SOURCE_ID = 'follow-untraveled-arrows-src';
 const FOLLOW_DIR_ARROW_LAYER_ID = 'follow-untraveled-arrows-layer';
 const FOLLOW_DIR_ARROW_ICON_ID = 'follow-untraveled-arrow-icon';
+const FOLLOW_SKIPPED_SOURCE_ID = 'follow-skipped-segments-src';
+const FOLLOW_SKIPPED_CASING_LAYER_ID = 'follow-skipped-segments-casing';
+const FOLLOW_SKIPPED_LINE_LAYER_ID = 'follow-skipped-segments-line';
 let lastFollowArrowRenderTime = 0;
+let lastFollowSkippedRenderTime = 0;
 
 function buildFollowMatchTrack(pts) {
     const segments = [];
@@ -757,21 +764,22 @@ function projectPointOntoSegment(lng, lat, seg) {
     };
 }
 
-function matchGpsToFollowTrackWindow(matchSegments, currentMatchIdx, lng, lat, gpsHeading, isMoving) {
+function matchGpsToFollowTrackWindow(matchSegments, currentMatchIdx, lng, lat, gpsHeading, isMoving, maxForwardM = 85) {
     if (!Array.isArray(matchSegments) || matchSegments.length === 0) return null;
     const maxSegIdx = matchSegments.length - 1;
     const anchorIdx = Math.min(Math.max(currentMatchIdx || 0, 0), maxSegIdx);
     const anchorCumM = matchSegments[anchorIdx].cumM;
+    const clampedForwardM = Math.min(Math.max(maxForwardM || 85, 35), 95);
 
-    // 限制局部搜尋窗口：僅允許小幅回退（<= 25m）與合理向前推進（<= 180m），防止重疊去回程跳線
+    // 限制局部搜尋窗口：禁止大幅跨段跳躍（後退 <= 20m、單次向前 <= 35~95m），防止迴轉壓線或重疊去回程跳線
     let startIdx = anchorIdx;
-    while (startIdx > 0 && (anchorCumM - matchSegments[startIdx - 1].cumM) <= 25 && (anchorIdx - startIdx) < 4) {
+    while (startIdx > 0 && (anchorCumM - matchSegments[startIdx - 1].cumM) <= 20 && (anchorIdx - startIdx) < 3) {
         startIdx--;
     }
     let endIdx = anchorIdx;
-    while (endIdx < maxSegIdx && ((matchSegments[endIdx + 1].cumM - anchorCumM) <= 180 || (endIdx - anchorIdx) < 12)) {
+    while (endIdx < maxSegIdx && ((matchSegments[endIdx + 1].cumM - anchorCumM) <= clampedForwardM || (endIdx - anchorIdx) < 4)) {
         endIdx++;
-        if (endIdx - anchorIdx >= 48) break;
+        if (endIdx - anchorIdx >= 20) break;
     }
 
     let bestScore = Infinity;
@@ -782,13 +790,14 @@ function matchGpsToFollowTrackWindow(matchSegments, currentMatchIdx, lng, lat, g
         const seg = matchSegments[i];
         const proj = projectPointOntoSegment(lng, lat, seg);
         let score = proj.distMeters;
+        let angleDiff = 0;
 
         if (hasHeading && seg.lenM >= 1.2) {
-            const angleDiff = Math.abs(getAngleDiff(gpsHeading, seg.bearing));
+            angleDiff = Math.abs(getAngleDiff(gpsHeading, seg.bearing));
             if (angleDiff > 110) {
-                score += 45;
-            } else if (angleDiff > 70) {
-                score += 15;
+                score += 60;
+            } else if (angleDiff > FOLLOW_MAX_HEADING_DIFF_DEG) {
+                score += 28;
             }
         }
         if (i < anchorIdx) {
@@ -805,6 +814,82 @@ function matchGpsToFollowTrackWindow(matchSegments, currentMatchIdx, lng, lat, g
                 distMeters: proj.distMeters,
                 bearing: seg.bearing,
                 musicActive: seg.musicActive,
+                angleDiff,
+                hasHeading,
+                headingAligned: (!hasHeading || angleDiff <= FOLLOW_MAX_HEADING_DIFF_DEG),
+                t: proj.t
+            };
+        }
+    }
+    return bestResult;
+}
+
+// 導航「啟動當下」專用一次性全域對齊（支援中途開導航不強迫回起點，且優先順向匹配）
+function findInitialBestMatchSegment(matchSegments, lng, lat, gpsHeading, isMoving, preferStartRange = false) {
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) return null;
+    const hasHeading = isMoving && typeof gpsHeading === 'number' && !isNaN(gpsHeading);
+    let bestScore = Infinity;
+    let bestResult = null;
+    const startCumM = matchSegments[0].cumM;
+
+    for (let i = 0; i < matchSegments.length; i++) {
+        const seg = matchSegments[i];
+        if (preferStartRange && (seg.cumM - startCumM) > 120 && i > 15) break;
+        const proj = projectPointOntoSegment(lng, lat, seg);
+        let score = proj.distMeters;
+        let angleDiff = 0;
+        if (hasHeading && seg.lenM >= 1.2) {
+            angleDiff = Math.abs(getAngleDiff(gpsHeading, seg.bearing));
+            if (angleDiff > 110) score += 50;
+            else if (angleDiff > FOLLOW_MAX_HEADING_DIFF_DEG) score += 20;
+        }
+        if (score < bestScore) {
+            bestScore = score;
+            bestResult = {
+                matchIdx: i,
+                origIdx: seg.origIdx,
+                projLng: proj.projLng,
+                projLat: proj.projLat,
+                distMeters: proj.distMeters,
+                bearing: seg.bearing,
+                musicActive: seg.musicActive,
+                angleDiff,
+                hasHeading,
+                headingAligned: (!hasHeading || angleDiff <= FOLLOW_MAX_HEADING_DIFF_DEG),
+                t: proj.t
+            };
+        }
+    }
+    return bestResult;
+}
+
+// 偏離繞路後重新接回前方路線專用（僅嚴格向前搜尋、需距離 <= 35m 且方向順向 <= 65°）
+function findDetourReattachMatchSegment(matchSegments, currentMatchIdx, lng, lat, gpsHeading, isMoving) {
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) return null;
+    const startIdx = Math.min(Math.max((currentMatchIdx || 0) + 1, 0), matchSegments.length - 1);
+    const hasHeading = isMoving && typeof gpsHeading === 'number' && !isNaN(gpsHeading);
+    let bestDist = Infinity;
+    let bestResult = null;
+
+    for (let i = startIdx; i < matchSegments.length; i++) {
+        const seg = matchSegments[i];
+        const proj = projectPointOntoSegment(lng, lat, seg);
+        if (proj.distMeters > FOLLOW_VISIT_RADIUS_METERS) continue;
+        const angleDiff = (hasHeading && seg.lenM >= 1.2) ? Math.abs(getAngleDiff(gpsHeading, seg.bearing)) : 0;
+        if (hasHeading && angleDiff > 65) continue;
+        if (proj.distMeters < bestDist) {
+            bestDist = proj.distMeters;
+            bestResult = {
+                matchIdx: i,
+                origIdx: seg.origIdx,
+                projLng: proj.projLng,
+                projLat: proj.projLat,
+                distMeters: proj.distMeters,
+                bearing: seg.bearing,
+                musicActive: seg.musicActive,
+                angleDiff,
+                hasHeading,
+                headingAligned: true,
                 t: proj.t
             };
         }
@@ -818,6 +903,119 @@ function findInitialMatchSegmentIdx(matchSegments, origTrackIdx) {
         if (matchSegments[i].origIdx >= origTrackIdx) return i;
     }
     return matchSegments.length - 1;
+}
+
+function ensureFollowSkippedSegmentsLayer() {
+    if (!map || !map.isStyleLoaded?.()) return false;
+    try {
+        if (!map.getSource(FOLLOW_SKIPPED_SOURCE_ID)) {
+            map.addSource(FOLLOW_SKIPPED_SOURCE_ID, {
+                type: 'geojson',
+                data: emptyGeoJSON()
+            });
+        }
+        const beforeLayerId = map.getLayer(FOLLOW_DIR_ARROW_LAYER_ID) ? FOLLOW_DIR_ARROW_LAYER_ID : undefined;
+        if (!map.getLayer(FOLLOW_SKIPPED_CASING_LAYER_ID)) {
+            map.addLayer({
+                id: FOLLOW_SKIPPED_CASING_LAYER_ID,
+                type: 'line',
+                source: FOLLOW_SKIPPED_SOURCE_ID,
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 11,
+                    'line-opacity': 0.95
+                }
+            }, beforeLayerId);
+        }
+        if (!map.getLayer(FOLLOW_SKIPPED_LINE_LAYER_ID)) {
+            map.addLayer({
+                id: FOLLOW_SKIPPED_LINE_LAYER_ID,
+                type: 'line',
+                source: FOLLOW_SKIPPED_SOURCE_ID,
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#f97316',
+                    'line-width': 7,
+                    'line-dasharray': [1.8, 1.4],
+                    'line-opacity': 0.98
+                }
+            }, beforeLayerId);
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function updateFollowSkippedSegmentsLayer(matchSegments, visitedSegFlags, currentMatchIdx, throttleMs = 250) {
+    if (!map) return;
+    if (throttleMs > 0) {
+        const now = performance.now();
+        if (now - lastFollowSkippedRenderTime < throttleMs) return;
+        lastFollowSkippedRenderTime = now;
+    } else {
+        lastFollowSkippedRenderTime = performance.now();
+    }
+    if (!ensureFollowSkippedSegmentsLayer()) return;
+    const src = map.getSource(FOLLOW_SKIPPED_SOURCE_ID);
+    if (!src) return;
+
+    if (!Array.isArray(matchSegments) || !visitedSegFlags || currentMatchIdx <= 0) {
+        src.setData(emptyGeoJSON());
+        return;
+    }
+
+    const limit = Math.min(currentMatchIdx, matchSegments.length);
+    const features = [];
+    let coords = [];
+    for (let i = 0; i < limit; i++) {
+        if (visitedSegFlags[i] === 0) {
+            const seg = matchSegments[i];
+            if (coords.length === 0) {
+                coords.push([seg.aLng, seg.aLat], [seg.bLng, seg.bLat]);
+            } else {
+                const prev = coords[coords.length - 1];
+                if (Math.abs(prev[0] - seg.aLng) > 1e-6 || Math.abs(prev[1] - seg.aLat) > 1e-6) {
+                    if (coords.length >= 2) {
+                        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } });
+                    }
+                    coords = [[seg.aLng, seg.aLat], [seg.bLng, seg.bLat]];
+                } else {
+                    coords.push([seg.bLng, seg.bLat]);
+                }
+            }
+        } else if (coords.length >= 2) {
+            features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } });
+            coords = [];
+        } else {
+            coords = [];
+        }
+    }
+    if (coords.length >= 2) {
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } });
+    }
+    src.setData({ type: 'FeatureCollection', features });
+}
+
+function clearFollowSkippedSegmentsLayer() {
+    lastFollowSkippedRenderTime = 0;
+    try {
+        map?.getSource(FOLLOW_SKIPPED_SOURCE_ID)?.setData(emptyGeoJSON());
+    } catch (e) {}
+}
+
+function getOrCreateTacticalUndoProgressBtn() {
+    let btn = document.getElementById('tacticalUndoProgressBtn');
+    if (btn) return btn;
+    btn = document.createElement('button');
+    btn.id = 'tacticalUndoProgressBtn';
+    btn.type = 'button';
+    btn.className = 'hidden absolute bottom-[5.75rem] left-4 z-[60] bg-slate-800/90 hover:bg-slate-700 text-white px-3 py-2 rounded-full shadow-2xl flex items-center gap-1.5 text-xs font-extrabold active:scale-95 pointer-events-auto border-2 border-white whitespace-nowrap';
+    btn.title = '一鍵回退導航進度至上一個路口';
+    btn.innerHTML = '<span>↩️</span><span>進度回退</span>';
+    document.body.appendChild(btn);
+    return btn;
 }
 
 function ensureFollowDirectionArrowsLayer() {
@@ -985,6 +1183,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
     const isGeneralFollowNav = !window.isFurnitureNavOrReplayActive;
     const followCumMeters = buildCumulativeRouteMeters(pts);
     const followMatchSegments = isGeneralFollowNav ? buildFollowMatchTrack(pts) : [];
+    const visitedSegFlags = isGeneralFollowNav ? new Uint8Array(followMatchSegments.length) : null;
     const precomputedTurns = precomputeFollowRouteTurns(pts, followCumMeters);
     // 重新開始導航時，完整重置所有標記點（含語音開關與一般提醒點）的 played 與 prePlayed 狀態
     const mappedEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
@@ -1003,12 +1202,104 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
     let currentTrackIndex = 0;
     let currentMatchIdx = 0;
+    let initialStartMatchIdx = 0;
     let hasInitializedTrackIndex = false;
     let isSnappedToRoute = false;
     let offRouteStreakCount = 0;
     let offRouteFirstExceedMs = 0;
+    let lastFollowGpsTimeMs = 0;
+    let lastSkipWarnTimeMs = 0;
+    const warnedSkipGapKeys = new Set();
+    const progressCheckpoints = [];
+
+    const recordProgressCheckpoint = (mIdx, tIdx, force = false) => {
+        if (!isGeneralFollowNav || !followMatchSegments.length) return;
+        const safeMIdx = Math.min(Math.max(mIdx, 0), followMatchSegments.length - 1);
+        const curCumM = followMatchSegments[safeMIdx].cumM;
+        const lastCp = progressCheckpoints[progressCheckpoints.length - 1];
+        if (!force && lastCp && Math.abs(curCumM - lastCp.cumM) < 40) return;
+        progressCheckpoints.push({ matchIdx: safeMIdx, trackIdx: tIdx, cumM: curCumM });
+        if (progressCheckpoints.length > 30) progressCheckpoints.shift();
+    };
+
+    const undoProgressBtn = getOrCreateTacticalUndoProgressBtn();
+    if (isGeneralFollowNav) {
+        undoProgressBtn.classList.remove('hidden');
+        undoProgressBtn.onclick = () => {
+            if (!followMatchSegments.length || !visitedSegFlags) return;
+            const curCumM = followMatchSegments[Math.min(currentMatchIdx, followMatchSegments.length - 1)]?.cumM || 0;
+            let targetMatchIdx = initialStartMatchIdx;
+            let targetTrackIdx = followMatchSegments[initialStartMatchIdx]?.origIdx || 0;
+
+            // 優先回退至前一個距離目前超過 25m 的紀錄點（含跳段前存檔點）
+            while (progressCheckpoints.length > 1) {
+                const top = progressCheckpoints[progressCheckpoints.length - 1];
+                if (top.matchIdx >= currentMatchIdx || (curCumM - top.cumM) < 25) {
+                    progressCheckpoints.pop();
+                } else {
+                    break;
+                }
+            }
+            if (progressCheckpoints.length > 0 && progressCheckpoints[progressCheckpoints.length - 1].matchIdx < currentMatchIdx) {
+                const cp = progressCheckpoints.pop();
+                targetMatchIdx = Math.max(initialStartMatchIdx, cp.matchIdx);
+                targetTrackIdx = cp.trackIdx;
+            } else {
+                // 若無更早紀錄點，往回退約 60 公尺（不超過啟動初始點）
+                let backIdx = currentMatchIdx;
+                while (backIdx > initialStartMatchIdx && (curCumM - followMatchSegments[backIdx].cumM) < 60) {
+                    backIdx--;
+                }
+                targetMatchIdx = Math.max(initialStartMatchIdx, backIdx);
+                targetTrackIdx = followMatchSegments[targetMatchIdx]?.origIdx || 0;
+            }
+
+            currentMatchIdx = targetMatchIdx;
+            currentTrackIndex = targetTrackIdx;
+            window.activeFollowCurrentTrackIndex = currentTrackIndex;
+
+            // 還原回退位置之後的已通過標記與跳段警告紀錄
+            for (let k = currentMatchIdx + 1; k < visitedSegFlags.length; k++) {
+                if (visitedSegFlags[k] === 1) visitedSegFlags[k] = 0;
+            }
+            warnedSkipGapKeys.clear();
+            offRouteStreakCount = 0;
+            offRouteFirstExceedMs = 0;
+
+            // 還原回退點之後的轉彎與提醒播報狀態
+            mappedEvents.forEach(ev => {
+                if ((ev.ptIdx || 0) >= currentTrackIndex) {
+                    ev.played = false;
+                    ev.prePlayed = false;
+                    if (ev.sourceEvent) {
+                        ev.sourceEvent.played = false;
+                        ev.sourceEvent.prePlayed = false;
+                    }
+                }
+            });
+            precomputedTurns.forEach(t => {
+                if (t.turnIdx >= currentTrackIndex) {
+                    t.announced = false;
+                    triggeredTurnIndices.delete(t.turnIdx);
+                }
+            });
+
+            if (!isPowerSaveMapPaused()) {
+                updateProgressRouteLayers(pts, currentTrackIndex, null, 0);
+                updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 0);
+                updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 0);
+            }
+            vibrate([80, 40, 80]);
+            showNavAlert('↩️', '已回退至上一路段進度', 'bg-amber-600');
+        };
+    } else {
+        undoProgressBtn.classList.add('hidden');
+        undoProgressBtn.onclick = null;
+    }
+
     window.activeFollowCurrentTrackIndex = 0;
     updateProgressRouteLayers(route.points, 0, null, 0);
+    clearFollowSkippedSegmentsLayer();
     if (isGeneralFollowNav) {
         updateFollowDirectionArrows(followMatchSegments, 0, 0);
     } else {
@@ -1129,22 +1420,48 @@ document.getElementById('startFollowBtn').onclick = async () => {
         // 1. 初次進入導航：起點 80m 內優先由起點端匹配；半路切入則找最近軌跡段（排除終點末端）
         // 2. 導航進行中：嚴格限制在前方滑動視窗（沿線約 150~250m 內）順序推進，防止折返重疊跳號
         const prevTrackIndex = currentTrackIndex;
+        const nowGpsMs = Date.now();
+        const dtGpsSec = lastFollowGpsTimeMs > 0 ? Math.min(Math.max((nowGpsMs - lastFollowGpsTimeMs) / 1000, 0.5), 6) : 1.5;
+        lastFollowGpsTimeMs = nowGpsMs;
+        const rawSpeedKmh = (typeof pos?.coords?.speed === 'number' && !isNaN(pos.coords.speed) && pos.coords.speed > 0)
+            ? pos.coords.speed * 3.6
+            : 0;
+        const estSpeedKmh = Math.max(typeof filtered.speedKmh === 'number' ? filtered.speedKmh : 0, rawSpeedKmh);
+        // 依車速與時間差動態限制單次最大前進距離（35m ~ 90m），徹底禁止迴轉壓線跳躍至遠端路段
+        const maxSingleStepForwardM = Math.min(90, Math.max(35, (estSpeedKmh / 3.6) * dtGpsSec * 1.8 + 25));
+
         let progressInfo;
         let matchResult = null;
         if (!hasInitializedTrackIndex) {
-            progressInfo = (typeof findInitialFollowTrackIndex === 'function')
-                ? findInitialFollowTrackIndex(pts, lng, lat, heading, !filtered.isStationary, followCumMeters)
-                : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters);
-            currentTrackIndex = progressInfo.trackIndex;
-            hasInitializedTrackIndex = true;
             if (isGeneralFollowNav && followMatchSegments.length > 0) {
-                currentMatchIdx = findInitialMatchSegmentIdx(followMatchSegments, currentTrackIndex);
-                matchResult = matchGpsToFollowTrackWindow(followMatchSegments, currentMatchIdx, lng, lat, heading, !filtered.isStationary);
-                if (matchResult && matchResult.distMeters <= FOLLOW_OFF_ROUTE_MAX_METERS) {
+                // 🚀 啟動導航當下：允許一次性全域順向對齊（支援中途才開導航，不會強迫回起點或誤報漏段）
+                const preferStart = (distToStart <= 80);
+                matchResult = findInitialBestMatchSegment(followMatchSegments, lng, lat, heading, !filtered.isStationary, preferStart);
+                if (matchResult) {
+                    initialStartMatchIdx = matchResult.matchIdx;
                     currentMatchIdx = matchResult.matchIdx;
-                    currentTrackIndex = Math.max(currentTrackIndex, matchResult.origIdx);
+                    currentTrackIndex = matchResult.origIdx;
+                    if (visitedSegFlags) {
+                        for (let k = 0; k < initialStartMatchIdx; k++) {
+                            visitedSegFlags[k] = 2; // 導航啟動前已過段（不視為漏段）
+                        }
+                        if (matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
+                            visitedSegFlags[currentMatchIdx] = 1;
+                        }
+                    }
+                    recordProgressCheckpoint(currentMatchIdx, currentTrackIndex, true);
                 }
+                progressInfo = {
+                    trackIndex: currentTrackIndex,
+                    minDistMeters: matchResult ? matchResult.distMeters : minDistToFormalRoute
+                };
+            } else {
+                progressInfo = (typeof findInitialFollowTrackIndex === 'function')
+                    ? findInitialFollowTrackIndex(pts, lng, lat, heading, !filtered.isStationary, followCumMeters)
+                    : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters);
+                currentTrackIndex = progressInfo.trackIndex;
             }
+            hasInitializedTrackIndex = true;
             // 若為半路切入（距起點 > 80m 且起算索引 > 0），將起始點之前的舊事件與舊轉彎標記為已略過避免回溯誤報
             if (currentTrackIndex > 0) {
                 mappedEvents.forEach(ev => {
@@ -1161,11 +1478,101 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 });
             }
         } else if (isGeneralFollowNav && followMatchSegments.length > 0) {
-            matchResult = matchGpsToFollowTrackWindow(followMatchSegments, currentMatchIdx, lng, lat, heading, !filtered.isStationary);
-            if (matchResult && matchResult.distMeters <= FOLLOW_OFF_ROUTE_MAX_METERS) {
-                currentMatchIdx = matchResult.matchIdx;
-                currentTrackIndex = Math.max(currentTrackIndex, matchResult.origIdx);
+            const prevMatchIdx = currentMatchIdx;
+            matchResult = matchGpsToFollowTrackWindow(
+                followMatchSegments,
+                currentMatchIdx,
+                lng,
+                lat,
+                heading,
+                !filtered.isStationary,
+                maxSingleStepForwardM
+            );
+
+            // 若目前處於繞路偏離狀態，嘗試向前重新銜接（嚴格要求 <= 35m 且方向順向 <= 65°）
+            let didDetourReattach = false;
+            if ((!matchResult || matchResult.distMeters > FOLLOW_SNAP_RADIUS_METERS) && wasOffRoute) {
+                const reattach = findDetourReattachMatchSegment(
+                    followMatchSegments,
+                    currentMatchIdx,
+                    lng,
+                    lat,
+                    heading,
+                    !filtered.isStationary
+                );
+                if (reattach) {
+                    recordProgressCheckpoint(prevMatchIdx, currentTrackIndex, true);
+                    matchResult = reattach;
+                    didDetourReattach = true;
+                }
             }
+
+            // 🛡️ 防迴轉壓線跳段核心：僅在「距離合理」且「行進方向順向（夾角 <= 75°）」時才允許推進進度與標記實際經過
+            if (matchResult && matchResult.distMeters <= FOLLOW_SNAP_RADIUS_METERS && matchResult.headingAligned) {
+                const nextMatchIdx = matchResult.matchIdx;
+                if (nextMatchIdx >= currentMatchIdx) {
+                    const prevCumM = followMatchSegments[prevMatchIdx]?.cumM || 0;
+                    const nextCumM = followMatchSegments[nextMatchIdx]?.cumM || 0;
+                    const advanceM = nextCumM - prevCumM;
+
+                    currentMatchIdx = nextMatchIdx;
+                    currentTrackIndex = Math.max(currentTrackIndex, matchResult.origIdx);
+
+                    // 逐段實際經過驗證：只有車輛實際靠近（<= 35m）且順向通過的線段才標記為已通過 (1)
+                    if (visitedSegFlags && matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
+                        visitedSegFlags[currentMatchIdx] = 1;
+                        if (!didDetourReattach && advanceM <= 45) {
+                            for (let k = prevMatchIdx; k <= currentMatchIdx; k++) {
+                                if (visitedSegFlags[k] === 0) visitedSegFlags[k] = 1;
+                            }
+                        }
+                    }
+                    recordProgressCheckpoint(currentMatchIdx, currentTrackIndex, didDetourReattach);
+                } else if (visitedSegFlags && matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
+                    // 若駕駛繞回補收先前被跳過的橘紅警示路段，實際壓過後即標記已通過
+                    visitedSegFlags[nextMatchIdx] = 1;
+                }
+            }
+
+            // 檢查啟動點至目前進度之間是否存在 > 50 公尺的連續未實際經過路段（跳段漏收主動語音＋畫面防呆）
+            if (visitedSegFlags && currentMatchIdx > initialStartMatchIdx) {
+                let gapMeters = 0;
+                let gapStartIdx = -1;
+                for (let k = initialStartMatchIdx; k < currentMatchIdx; k++) {
+                    if (visitedSegFlags[k] === 0) {
+                        if (gapStartIdx === -1) gapStartIdx = k;
+                        gapMeters += followMatchSegments[k].lenM;
+                    } else {
+                        if (gapMeters > FOLLOW_SKIP_WARN_MIN_METERS) {
+                            const gapKey = `${gapStartIdx}_${k}`;
+                            if (!warnedSkipGapKeys.has(gapKey) && (nowGpsMs - lastSkipWarnTimeMs) > 20000) {
+                                warnedSkipGapKeys.add(gapKey);
+                                lastSkipWarnTimeMs = nowGpsMs;
+                                autoWakeScreen();
+                                showNavAlert('⚠️', '注意：中間有路段未經過，請確認是否漏收', 'bg-orange-600');
+                                speakText('注意，中間有路段未經過，請確認是否漏收');
+                                vibrate([250, 100, 250]);
+                                autoSleepScreen();
+                            }
+                        }
+                        gapMeters = 0;
+                        gapStartIdx = -1;
+                    }
+                }
+                if (gapMeters > FOLLOW_SKIP_WARN_MIN_METERS && gapStartIdx !== -1) {
+                    const gapKey = `${gapStartIdx}_${currentMatchIdx}`;
+                    if (!warnedSkipGapKeys.has(gapKey) && (nowGpsMs - lastSkipWarnTimeMs) > 20000) {
+                        warnedSkipGapKeys.add(gapKey);
+                        lastSkipWarnTimeMs = nowGpsMs;
+                        autoWakeScreen();
+                        showNavAlert('⚠️', '注意：中間有路段未經過，請確認是否漏收', 'bg-orange-600');
+                        speakText('注意，中間有路段未經過，請確認是否漏收');
+                        vibrate([250, 100, 250]);
+                        autoSleepScreen();
+                    }
+                }
+            }
+
             progressInfo = {
                 trackIndex: currentTrackIndex,
                 minDistMeters: matchResult ? matchResult.distMeters : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters).minDistMeters
@@ -1228,7 +1635,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 isOffRoute = !isSnappedToRoute && wasOffRoute;
             }
 
-            if (isSnappedToRoute && matchResult) {
+            if (isSnappedToRoute && matchResult && matchResult.headingAligned) {
                 const snappedLngLat = [matchResult.projLng, matchResult.projLat];
                 const snappedHeading = matchResult.bearing;
                 lastKnownLngLat = snappedLngLat;
@@ -1239,13 +1646,14 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 渲染為半透明淺灰色，currentTrackIndex ~ 終點維持高亮原色
+        // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 渲染為半透明淺灰色，currentTrackIndex ~ 終點維持高亮原色；未實際經過的跳過路段另以醒目橘紅虛線覆蓋防呆
         if (!isPowerSaveMapPaused()) {
-            const exactSnapPos = (isGeneralFollowNav && isSnappedToRoute && matchResult)
+            const exactSnapPos = (isGeneralFollowNav && isSnappedToRoute && matchResult && matchResult.headingAligned)
                 ? { lng: matchResult.projLng, lat: matchResult.projLat, musicActive: matchResult.musicActive }
                 : null;
             updateProgressRouteLayers(pts, currentTrackIndex, exactSnapPos, 150);
             if (isGeneralFollowNav && followMatchSegments.length > 0) {
+                updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 250);
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 350);
             }
         }
@@ -1422,6 +1830,12 @@ const endFollowAction = () => {
     window.ApproachNav?.stop(true);
     VoiceQueue.clear();
     clearFollowDirectionArrows();
+    clearFollowSkippedSegmentsLayer();
+    const undoBtnEl = document.getElementById('tacticalUndoProgressBtn');
+    if (undoBtnEl) {
+        undoBtnEl.classList.add('hidden');
+        undoBtnEl.onclick = null;
+    }
     if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     activeFollowGpsHandler = null;
     window.activeFollowCurrentTrackIndex = null;

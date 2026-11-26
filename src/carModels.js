@@ -30,7 +30,7 @@
       src: './assets/cars/recycle_white.png',
       width: 124,
       height: 124,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     claw_truck: {
@@ -39,7 +39,7 @@
       src: './assets/cars/claw_truck.png',
       width: 132,
       height: 132,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     thousand_sunny: {
@@ -48,7 +48,7 @@
       src: './assets/cars/thousand_sunny.png',
       width: 140,
       height: 140,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     turtle: {
@@ -57,7 +57,7 @@
       src: './assets/cars/turtle.png',
       width: 132,
       height: 132,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     sports_car: {
@@ -66,7 +66,7 @@
       src: './assets/cars/sports_car.png',
       width: 120,
       height: 120,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     santa_sleigh: {
@@ -80,7 +80,7 @@
       ],
       width: 136,
       height: 136,
-      mapScale: 1.0,
+      ,
       baseAngle: 0
     },
     lion_dance: {
@@ -95,7 +95,7 @@
       ],
       width: 92,
       height: 92,
-      mapScale: 1.0,
+     ,
       baseAngle: 0
     },
     pumpkin_carriage: {
@@ -109,7 +109,7 @@
       ],
       width: 136,
       height: 136,
-      mapScale: 1.0,
+      mapScale: 0.8,
       baseAngle: 0
     }
   };

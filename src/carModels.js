@@ -109,7 +109,7 @@
       ],
       width: 136,
       height: 136,
-      mapScale: 0.8,
+      mapScale: 0.7,
       baseAngle: 0
     }
   };

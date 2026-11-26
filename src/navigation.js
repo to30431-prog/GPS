@@ -49,6 +49,7 @@ document.getElementById('startReplayBtn').onclick = () => {
     // 初始化累積里程與語音標記事件，重置所有 played / prePlayed 狀態
     replayCumMeters = buildCumulativeRouteMeters(route.points);
     replayVoiceEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
+    if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
 
     // 初始狀態（currentTrackIndex = 0）：已行駛路段為空，未行駛路段完整高亮顯示
     updateProgressRouteLayers(route.points, 0, null, 0);
@@ -146,6 +147,16 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         vehicleBearing: currentHeading,
         onTriggerWake: false
     });
+    if (typeof updatePassedRouteReminders === 'function') {
+        updatePassedRouteReminders({
+            events: replayVoiceEvents,
+            pts,
+            cumMeters: replayCumMeters,
+            currentTrackIndex,
+            lng: curLng,
+            lat: curLat
+        });
+    }
 
     if (isFollowingCamera) {
         map.jumpTo({
@@ -199,6 +210,7 @@ function startSmoothPlayback() {
                 ev.sourceEvent.prePlayed = false;
             }
         });
+        if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     }
     isPlaying = true; lastFrameTime = 0;
     if (typeof window.setMyVehicleMovingState === 'function') window.setMyVehicleMovingState(true);
@@ -237,6 +249,7 @@ playbackSlider.oninput = (e) => {
             if (ev.sourceEvent) ev.sourceEvent.prePlayed = false;
         }
     });
+    if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     renderInterpolatedStep(playProgress, true);
 };
 speedToggleBtn.onclick = () => {
@@ -250,6 +263,7 @@ speedToggleBtn.onclick = () => {
 document.getElementById('stopPlaybackBtn').onclick = () => { 
     stopSmoothPlayback();
     VoiceQueue.clear();
+    if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     document.getElementById('playbackUI').classList.add('hidden'); 
     document.getElementById('musicAlertBanner').classList.add('hidden');
 
@@ -715,6 +729,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
     // 重新開始導航時，完整重置所有標記點（含語音開關與一般提醒點）的 played 與 prePlayed 狀態
     const mappedEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
     window.activeFollowMappedEvents = mappedEvents;
+    if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
 
     window.stopsQueue = (route.points || []).map((p, index) => ({ ...p, ptIdx: index })).filter(p => p.is_stop === true);
     window.currentStopIndex = 0;
@@ -1018,6 +1033,16 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 isFollowMode: true
             });
         }
+        if (typeof updatePassedRouteReminders === 'function') {
+            updatePassedRouteReminders({
+                events: mappedEvents,
+                pts,
+                cumMeters: followCumMeters,
+                currentTrackIndex,
+                lng,
+                lat
+            });
+        }
     };
 
     followWatchId = navigator.geolocation.watchPosition(
@@ -1030,6 +1055,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 const endFollowAction = () => {
     window.ApproachNav?.stop(true);
     VoiceQueue.clear();
+    if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     activeFollowGpsHandler = null;
     window.activeFollowCurrentTrackIndex = null;
     if (followWatchId !== null) {

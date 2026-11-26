@@ -64,10 +64,19 @@ html, body {
     display: flex; align-items: center; gap: 4px; white-space: nowrap;
     transform: scale(var(--map-pin-scale, 1));
     transform-origin: center center;
-    transition: transform 0.12s ease-out;
+    transition: transform 0.12s ease-out, background-color 0.22s ease, border-color 0.22s ease, opacity 0.22s ease, filter 0.22s ease;
 }
 .music-on-pin { background: #16a34a; }
 .music-off-pin { background: #dc2626; }
+.music-marker.music-on-pin.is-reminder-passed,
+.music-marker.music-off-pin.is-reminder-passed {
+    background: #94a3b8;
+    border-color: #e2e8f0;
+    color: #f8fafc;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+    filter: grayscale(0.85);
+    opacity: 0.78;
+}
 
 /* 📸 測速照相標記：內層 .speed-cam-ring 隨地圖 zoom 等比例動態縮放（下限 0.55 倍、上限 1.35 倍），不改動外層 MapLibre Marker 座標定位 */
 .speed-camera-marker .speed-cam-ring {
@@ -145,6 +154,25 @@ html, body {
     flex-shrink: 0;
     display: block;
     background: rgba(0, 0, 0, 0.15);
+}
+.alert-compact-pin.is-reminder-passed .alert-compact-pill {
+    background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+    border-color: #e2e8f0;
+    color: #f8fafc;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.28);
+    filter: grayscale(0.85);
+    opacity: 0.8;
+}
+.alert-compact-pin.is-reminder-passed .alert-compact-arrow {
+    border-top-color: #64748b;
+    opacity: 0.8;
+}
+.alert-compact-pin.is-reminder-passed .alert-compact-thumb {
+    filter: grayscale(0.9);
+    border-color: #e2e8f0;
+}
+.alert-compact-pin.is-reminder-passed.is-active .alert-compact-pill {
+    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.45), 0 3px 8px rgba(0, 0, 0, 0.35);
 }
 
 .alert-popup-wrapper {

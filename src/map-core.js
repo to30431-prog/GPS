@@ -2790,6 +2790,97 @@ function evaluateVoiceMarkersWithProgress({
     });
 }
 
+// ==========================================
+// 🔘 路線注意提醒與音樂提醒「已碰觸／已通過」變灰狀態管理
+// ==========================================
+const ROUTE_REMINDER_TOUCH_RADIUS_METERS = 30;
+const passedReminderKeys = new Set();
+let routeReminderMarkerEntries = [];
+
+function buildRouteReminderKey(type, lng, lat) {
+    if (type !== 'on' && type !== 'off' && type !== 'alert') return '';
+    const lngNum = Number(lng);
+    const latNum = Number(lat);
+    if (!Number.isFinite(lngNum) || !Number.isFinite(latNum)) return '';
+    return `${type}:${lngNum.toFixed(6)},${latNum.toFixed(6)}`;
+}
+
+function registerRouteReminderMarker(type, lng, lat, targetEl) {
+    const key = buildRouteReminderKey(type, lng, lat);
+    if (!key || !targetEl) return;
+    routeReminderMarkerEntries.push({
+        key,
+        type,
+        lng: Number(lng),
+        lat: Number(lat),
+        targetEl
+    });
+    if (passedReminderKeys.has(key)) {
+        targetEl.classList.add('is-reminder-passed');
+    }
+}
+
+function markRouteReminderKeyPassed(key) {
+    if (!key || passedReminderKeys.has(key)) return;
+    passedReminderKeys.add(key);
+    for (let i = 0; i < routeReminderMarkerEntries.length; i++) {
+        const entry = routeReminderMarkerEntries[i];
+        if (entry.key === key && entry.targetEl) {
+            entry.targetEl.classList.add('is-reminder-passed');
+        }
+    }
+}
+
+function resetPassedRouteReminders() {
+    passedReminderKeys.clear();
+    for (let i = 0; i < routeReminderMarkerEntries.length; i++) {
+        const entry = routeReminderMarkerEntries[i];
+        if (entry.targetEl) {
+            entry.targetEl.classList.remove('is-reminder-passed');
+        }
+    }
+}
+
+function updatePassedRouteReminders({
+    events,
+    pts,
+    cumMeters,
+    currentTrackIndex,
+    lng,
+    lat,
+    touchRadiusMeters = ROUTE_REMINDER_TOUCH_RADIUS_METERS
+}) {
+    if (!Array.isArray(events) || events.length === 0 || !Array.isArray(pts) || pts.length < 2) return;
+    const maxIdx = pts.length - 1;
+    const trackIdx = Math.min(Math.max(Math.floor(currentTrackIndex), 0), maxIdx);
+    const currentTrackCumM = (Array.isArray(cumMeters) && cumMeters.length > trackIdx) ? (cumMeters[trackIdx] || 0) : 0;
+
+    for (let i = 0; i < events.length; i++) {
+        const ev = events[i];
+        if (!ev || (ev.type !== 'on' && ev.type !== 'off' && ev.type !== 'alert')) continue;
+        const key = buildRouteReminderKey(ev.type, ev.lng, ev.lat);
+        if (!key || passedReminderKeys.has(key)) continue;
+
+        const evIdx = Math.min(Math.max(typeof ev.ptIdx === 'number' ? ev.ptIdx : 0, 0), maxIdx);
+        const evCumM = (Array.isArray(cumMeters) && cumMeters.length > evIdx) ? (cumMeters[evIdx] || 0) : 0;
+        const aheadRouteMeters = evCumM - currentTrackCumM;
+        const directDistMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
+
+        // 雙重條件（不干擾原語音觸發時機）：
+        // 1. 車輛座標進入合理觸發半徑（約 30 公尺）且位於該提醒對應的軌跡進度區間內（避免回程重疊路段提前變灰）
+        const enteredTouchRadius = (
+            directDistMeters <= touchRadiusMeters &&
+            ((aheadRouteMeters <= (touchRadiusMeters + 35) && aheadRouteMeters >= -60) || Math.abs(evIdx - trackIdx) <= 25)
+        );
+        // 2. 路線行進／重播進度已通過該提醒綁定的軌跡節點
+        const passedTrackNode = (trackIdx >= evIdx);
+
+        if (enteredTouchRadius || passedTrackNode) {
+            markRouteReminderKeyPassed(key);
+        }
+    }
+}
+
 let activeAlertPopupMarker = null;
 let activeAlertPopupKey = null;
 let activeAlertPinElement = null;
@@ -3002,6 +3093,7 @@ function createCompactAlertPinMarker(route, ev, eventIdx) {
         pitchAlignment: 'viewport'
     }).setLngLat([ev.lng, ev.lat]).addTo(map);
     domMarkers.push(m);
+    registerRouteReminderMarker('alert', ev.lng, ev.lat, markerEl);
     return m;
 }
 
@@ -3026,6 +3118,14 @@ function clearDomMarkers() {
         try { m.remove(); } catch (e) {}
     });
     domMarkers = [];
+    routeReminderMarkerEntries = [];
+    const isActiveRouteRun = Boolean(
+        (typeof isReplaying !== 'undefined' && isReplaying) ||
+        (typeof followWatchId !== 'undefined' && followWatchId !== null)
+    );
+    if (!isActiveRouteRun) {
+        passedReminderKeys.clear();
+    }
 }
 
 function addPinMarker(lngLat, htmlContent) {
@@ -3040,5 +3140,10 @@ function addPinMarker(lngLat, htmlContent) {
         pitchAlignment: 'viewport'
     }).setLngLat(lngLat).addTo(map);
     domMarkers.push(m);
+    const musicBadgeEl = el.querySelector('.music-marker.music-on-pin, .music-marker.music-off-pin');
+    if (musicBadgeEl && Array.isArray(lngLat) && lngLat.length >= 2) {
+        const reminderType = musicBadgeEl.classList.contains('music-on-pin') ? 'on' : 'off';
+        registerRouteReminderMarker(reminderType, lngLat[0], lngLat[1], musicBadgeEl);
+    }
 }
 

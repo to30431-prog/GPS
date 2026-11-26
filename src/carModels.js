@@ -3,6 +3,17 @@
   let stylesInjected = false;
   let lastAppliedHeading = 0;
 
+  // ==========================================
+  // 🎯 地圖本機車標大小設定（直接修改此處即可調整地圖上的專屬車款圖標大小）
+  // 1. globalMapScale: 全車款統一縮放倍率（預設 1.0；例如改 1.15 整體放大 15%，改 0.85 整體縮小 15%）
+  // 2. defaultMapSizePx: 未指定個別寬高時的預設基準像素尺寸
+  // 3. 各車款也可直接在下方 CAR_MODELS[車款ID] 修改 width / height（單位 px）或 mapScale（個別倍率）
+  // ==========================================
+  const CAR_MARKER_SIZE_CONFIG = {
+    globalMapScale: 1.0,
+    defaultMapSizePx: 124
+  };
+
   const CAR_MODELS = {
     garbage_yellow: {
       id: 'garbage_yellow',
@@ -10,6 +21,7 @@
       src: './assets/cars/garbage_yellow.png',
       width: 124,
       height: 124,
+      mapScale: 1.0,
       baseAngle: 0
     },
     recycle_white: {
@@ -18,6 +30,7 @@
       src: './assets/cars/recycle_white.png',
       width: 124,
       height: 124,
+      mapScale: 1.0,
       baseAngle: 0
     },
     claw_truck: {
@@ -26,6 +39,7 @@
       src: './assets/cars/claw_truck.png',
       width: 132,
       height: 132,
+      mapScale: 1.0,
       baseAngle: 0
     },
     thousand_sunny: {
@@ -34,6 +48,7 @@
       src: './assets/cars/thousand_sunny.png',
       width: 140,
       height: 140,
+      mapScale: 1.0,
       baseAngle: 0
     },
     turtle: {
@@ -42,6 +57,7 @@
       src: './assets/cars/turtle.png',
       width: 132,
       height: 132,
+      mapScale: 1.0,
       baseAngle: 0
     },
     sports_car: {
@@ -50,6 +66,7 @@
       src: './assets/cars/sports_car.png',
       width: 120,
       height: 120,
+      mapScale: 1.0,
       baseAngle: 0
     },
     santa_sleigh: {
@@ -63,6 +80,7 @@
       ],
       width: 136,
       height: 136,
+      mapScale: 1.0,
       baseAngle: 0
     },
     lion_dance: {
@@ -77,6 +95,7 @@
       ],
       width: 92,
       height: 92,
+      mapScale: 1.0,
       baseAngle: 0
     },
     pumpkin_carriage: {
@@ -90,9 +109,28 @@
       ],
       width: 136,
       height: 136,
+      mapScale: 1.0,
       baseAngle: 0
     }
   };
+
+  function getCarMapDisplaySize(modelOrId) {
+    const model = (typeof modelOrId === 'string' ? CAR_MODELS[modelOrId] : modelOrId) || CAR_MODELS.garbage_yellow;
+    const baseW = Number(model.width) || CAR_MARKER_SIZE_CONFIG.defaultMapSizePx;
+    const baseH = Number(model.height) || CAR_MARKER_SIZE_CONFIG.defaultMapSizePx;
+    const globalScale = (typeof CAR_MARKER_SIZE_CONFIG.globalMapScale === 'number' && CAR_MARKER_SIZE_CONFIG.globalMapScale > 0)
+      ? CAR_MARKER_SIZE_CONFIG.globalMapScale
+      : 1.0;
+    const modelScale = (typeof model.mapScale === 'number' && model.mapScale > 0)
+      ? model.mapScale
+      : 1.0;
+    const finalScale = globalScale * modelScale;
+    return {
+      width: Math.max(24, Math.round(baseW * finalScale)),
+      height: Math.max(24, Math.round(baseH * finalScale)),
+      scale: finalScale
+    };
+  }
 
   function injectCarAnimations() {
     if (stylesInjected) return;
@@ -106,6 +144,7 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex-shrink: 0;
         line-height: 1;
         overflow: visible;
         user-select: none;
@@ -121,6 +160,8 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex-shrink: 0;
+        transform-origin: 50% 50%;
         overflow: visible;
         will-change: transform;
         pointer-events: none;
@@ -130,6 +171,9 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex-shrink: 0;
+        width: var(--car-map-w, 124px);
+        height: var(--car-map-h, 124px);
         overflow: visible;
         pointer-events: none;
       }
@@ -137,6 +181,8 @@
         position: relative;
         z-index: 2;
         display: block;
+        width: var(--car-map-w, 124px) !important;
+        height: var(--car-map-h, 124px) !important;
         object-fit: contain;
         max-width: none !important;
         max-height: none !important;
@@ -147,6 +193,9 @@
       .vehicle-sprite-stack {
         position: relative;
         display: inline-block;
+        flex-shrink: 0;
+        width: var(--car-map-w, 124px);
+        height: var(--car-map-h, 124px);
         overflow: visible;
         pointer-events: none;
       }
@@ -154,8 +203,8 @@
         position: absolute;
         top: 0;
         left: 0;
-        width: 100%;
-        height: 100%;
+        width: 100% !important;
+        height: 100% !important;
         object-fit: contain;
         max-width: none !important;
         max-height: none !important;
@@ -424,19 +473,29 @@
         object-fit: contain !important;
       }
 
-      button .vehicle-img-wrap img,
-      .car-option .vehicle-img-wrap img,
-      [data-car-select] .vehicle-img-wrap img,
-      .car-picker-item .vehicle-img-wrap img,
-      .vehicle-card .vehicle-img-wrap img {
+      button .vehicle-img-wrap,
+      .car-option .vehicle-img-wrap,
+      [data-car-select] .vehicle-img-wrap,
+      .car-picker-item .vehicle-img-wrap,
+      .vehicle-card .vehicle-img-wrap {
+        width: auto !important;
+        height: auto !important;
+      }
+      button .vehicle-img-wrap > img,
+      .car-option .vehicle-img-wrap > img,
+      [data-car-select] .vehicle-img-wrap > img,
+      .car-picker-item .vehicle-img-wrap > img,
+      .vehicle-card .vehicle-img-wrap > img {
+        width: auto !important;
+        height: auto !important;
         max-width: 72px !important;
         max-height: 72px !important;
       }
-button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
-      .car-option .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
-      [data-car-select] .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
-      .car-picker-item .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
-      .vehicle-card .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack {
+      button .vehicle-img-wrap .vehicle-sprite-stack,
+      .car-option .vehicle-img-wrap .vehicle-sprite-stack,
+      [data-car-select] .vehicle-img-wrap .vehicle-sprite-stack,
+      .car-picker-item .vehicle-img-wrap .vehicle-sprite-stack,
+      .vehicle-card .vehicle-img-wrap .vehicle-sprite-stack {
         width: 58px !important;
         height: 58px !important;
       }
@@ -509,23 +568,24 @@ button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
     `;
   }
 
-  function renderVehicleVisual(model) {
+  function renderVehicleVisual(model, displaySize) {
+    const size = displaySize || getCarMapDisplaySize(model);
     if (Array.isArray(model.frames) && model.frames.length >= 3) {
       const framesHtml = model.frames
         .map((frameSrc, idx) => {
           const altText = idx === 0 ? model.name : '';
           const ariaHidden = idx === 0 ? '' : ' aria-hidden="true"';
-          return `<img class="sprite-frame sprite-frame-${idx}" src="${frameSrc}" alt="${altText}" width="${model.width}" height="${model.height}" loading="eager"${ariaHidden} />`;
+          return `<img class="sprite-frame sprite-frame-${idx}" src="${frameSrc}" alt="${altText}" width="${size.width}" height="${size.height}" loading="eager"${ariaHidden} />`;
         })
         .join('');
 
       return `
-        <span class="vehicle-sprite-stack" style="width:${model.width}px;height:${model.height}px;">
+        <span class="vehicle-sprite-stack" style="width:${size.width}px;height:${size.height}px;">
           ${framesHtml}
         </span>
       `;
     }
-    return `<img src="${model.src}" alt="${model.name}" width="${model.width}" height="${model.height}" loading="eager" />`;
+    return `<img src="${model.src}" alt="${model.name}" width="${size.width}" height="${size.height}" loading="eager" />`;
   }
 
   function syncCarMovingState(isMoving) {
@@ -572,6 +632,7 @@ button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
   function getCarSvg(carTypeId, isMoving = false) {
     injectCarAnimations();
     const model = CAR_MODELS[carTypeId] || CAR_MODELS.garbage_yellow;
+    const displaySize = getCarMapDisplaySize(model);
     const movingClass = isMoving ? ' is-moving' : '';
 
     let effectHtml = '';
@@ -586,16 +647,18 @@ button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
     return `
       <span class="vehicle-puck-stage">
         <span class="vehicle-heading-rotator">
-          <span class="vehicle-anim vehicle-img-wrap${movingClass}" data-car="${model.id}">
+          <span class="vehicle-anim vehicle-img-wrap${movingClass}" data-car="${model.id}" style="--car-map-w:${displaySize.width}px;--car-map-h:${displaySize.height}px;">
             ${effectHtml}
-            ${renderVehicleVisual(model)}
+            ${renderVehicleVisual(model, displaySize)}
           </span>
         </span>
       </span>
     `;
   }
 
+  window.CAR_MARKER_SIZE_CONFIG = CAR_MARKER_SIZE_CONFIG;
   window.CAR_MODELS = CAR_MODELS;
+  window.getCarMapDisplaySize = getCarMapDisplaySize;
   window.injectCarAnimations = injectCarAnimations;
   window.syncCarMovingState = syncCarMovingState;
   window.syncCarHeading = syncCarHeading;

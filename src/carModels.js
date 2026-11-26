@@ -78,6 +78,19 @@
       width: 92,
       height: 92,
       baseAngle: 0
+    },
+    pumpkin_carriage: {
+      id: 'pumpkin_carriage',
+      name: '🎃 萬聖節南瓜馬車',
+      src: './assets/cars/pumpkin_carriage_1.png',
+      frames: [
+        './assets/cars/pumpkin_carriage_1.png',
+        './assets/cars/pumpkin_carriage_2.png',
+        './assets/cars/pumpkin_carriage_3.png'
+      ],
+      width: 136,
+      height: 136,
+      baseAngle: 0
     }
   };
 
@@ -159,13 +172,16 @@
       .vehicle-sprite-stack .sprite-frame-2 { z-index: 4; }
       .vehicle-sprite-stack .sprite-frame-3 { z-index: 5; }
 
-      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-0 {
+      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-0,
+      .vehicle-img-wrap.is-moving[data-car="pumpkin_carriage"] .vehicle-sprite-stack .sprite-frame-0 {
         animation: spriteFrame0Run 0.36s steps(1, end) infinite;
       }
-      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-1 {
+      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-1,
+      .vehicle-img-wrap.is-moving[data-car="pumpkin_carriage"] .vehicle-sprite-stack .sprite-frame-1 {
         animation: spriteFrame1Run 0.36s steps(1, end) infinite;
       }
-      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-2 {
+      .vehicle-img-wrap.is-moving[data-car="santa_sleigh"] .vehicle-sprite-stack .sprite-frame-2,
+      .vehicle-img-wrap.is-moving[data-car="pumpkin_carriage"] .vehicle-sprite-stack .sprite-frame-2 {
         animation: spriteFrame2Run 0.36s steps(1, end) infinite;
       }
 
@@ -292,7 +308,7 @@
         opacity: 0;
         transition: opacity 0.2s ease;
       }
-      .vehicle-img-wrap.is-moving:not([data-car="thousand_sunny"]):not([data-car="turtle"]):not([data-car="santa_sleigh"]):not([data-car="lion_dance"]) .car-exhaust-svg {
+      .vehicle-img-wrap.is-moving:not([data-car="thousand_sunny"]):not([data-car="turtle"]):not([data-car="santa_sleigh"]):not([data-car="lion_dance"]):not([data-car="pumpkin_carriage"]) .car-exhaust-svg {
         opacity: 1;
       }
       .exhaust-puff-1 {
@@ -430,7 +446,7 @@ button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
       .vehicle-img-wrap.is-moving[data-car="thousand_sunny"] > img {
         animation: sunnyBobTopDown 1.2s ease-in-out infinite;
       }
-      .vehicle-img-wrap.is-moving:not([data-car="turtle"]):not([data-car="thousand_sunny"]):not([data-car="santa_sleigh"]):not([data-car="lion_dance"]) > img {
+      .vehicle-img-wrap.is-moving:not([data-car="turtle"]):not([data-car="thousand_sunny"]):not([data-car="santa_sleigh"]):not([data-car="lion_dance"]):not([data-car="pumpkin_carriage"]) > img {
         animation: carDriveBounceTopDown 0.5s ease-in-out infinite;
       }
       .vehicle-img-wrap:not(.is-moving) > img,
@@ -563,7 +579,7 @@ button .vehicle-img-wrap[data-car="lion_dance"] .vehicle-sprite-stack,
       effectHtml = getSunnyWakeSvg();
     } else if (model.id === 'turtle') {
       effectHtml = getTurtleWakeSvg();
-    } else if (model.id !== 'santa_sleigh' && model.id !== 'lion_dance') {
+    } else if (model.id !== 'santa_sleigh' && model.id !== 'lion_dance' && model.id !== 'pumpkin_carriage') {
       effectHtml = getCarExhaustSvg();
     }
 

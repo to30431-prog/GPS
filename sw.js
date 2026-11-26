@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.66';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.66';
+const CACHE_VERSION = 'v3.67';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.67';
 const CACHE_ASSETS = [
   './',
   './index.html',
@@ -35,7 +35,10 @@ const CACHE_ASSETS = [
   './assets/cars/lion_dance_1.png',
   './assets/cars/lion_dance_2.png',
   './assets/cars/lion_dance_3.png',
-  './assets/cars/lion_dance_4.png'
+  './assets/cars/lion_dance_4.png',
+  './assets/cars/pumpkin_carriage_1.png',
+  './assets/cars/pumpkin_carriage_2.png',
+  './assets/cars/pumpkin_carriage_3.png'
 ];
 
 // 判斷是否為 MapLibre GL 向量圖磚 (*.pbf, *.mvt) 或地圖圖磚請求

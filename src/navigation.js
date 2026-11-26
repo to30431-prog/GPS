@@ -10,6 +10,127 @@ let replayCumMeters = [];
 const speedOptions = [1, 2, 4, 6];
 let speedMultiplier = 1;
 
+// ==========================================
+// 🎮 左側遊戲化垂直路線進度條（Route Progress HUD，僅一般清運遵循導航／路線重播顯示）
+// ==========================================
+let routeProgressHudEls = null;
+let routeProgressHudTickEls = [];
+
+function getOrCreateRouteProgressHud() {
+    if (routeProgressHudEls && routeProgressHudEls.root?.isConnected) {
+        return routeProgressHudEls;
+    }
+    const root = document.createElement('div');
+    root.id = 'routeProgressHud';
+    root.className = 'route-progress-hud hidden';
+    root.setAttribute('aria-hidden', 'true');
+    root.innerHTML = `
+        <div class="route-progress-hud-top">
+            <span class="route-progress-hud-flag">🏁</span>
+            <span class="route-progress-hud-pct">0%</span>
+        </div>
+        <div class="route-progress-hud-track-wrap">
+            <div class="route-progress-hud-track">
+                <div class="route-progress-hud-fill"></div>
+            </div>
+            <div class="route-progress-hud-ticks"></div>
+            <div class="route-progress-hud-cursor">🚛</div>
+        </div>
+        <div class="route-progress-hud-start">S</div>
+    `;
+    document.body.appendChild(root);
+    routeProgressHudEls = {
+        root,
+        pctEl: root.querySelector('.route-progress-hud-pct'),
+        fillEl: root.querySelector('.route-progress-hud-fill'),
+        ticksEl: root.querySelector('.route-progress-hud-ticks'),
+        cursorEl: root.querySelector('.route-progress-hud-cursor')
+    };
+    return routeProgressHudEls;
+}
+
+function showRouteProgressHud(route) {
+    if (!route || !Array.isArray(route.points) || route.points.length < 2) return;
+    const hud = getOrCreateRouteProgressHud();
+    const totalPts = route.points.length;
+    const denom = Math.max(1, totalPts - 1);
+
+    // 萃取時刻站牌與注意／音樂提醒的關卡刻度點（依路線點索引比例定位）
+    const milestones = [];
+    route.points.forEach((p, idx) => {
+        if (p && p.is_stop) {
+            milestones.push({ ratio: Math.min(1, Math.max(0, idx / denom)), kind: 'stop' });
+        }
+    });
+    (route.events || []).forEach(ev => {
+        if (!ev || (ev.type !== 'alert' && ev.type !== 'on' && ev.type !== 'off')) return;
+        let ptIdx = -1;
+        if (typeof ev.pointIndex === 'number' && ev.pointIndex >= 0 && ev.pointIndex < totalPts) {
+            ptIdx = ev.pointIndex;
+        } else if (typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < totalPts) {
+            ptIdx = ev.ptIdx;
+        } else {
+            let bestD = Infinity;
+            for (let i = 0; i < totalPts; i++) {
+                const d = getDistanceKm(ev.lng, ev.lat, route.points[i].lng, route.points[i].lat);
+                if (d < bestD) { bestD = d; ptIdx = i; }
+            }
+        }
+        if (ptIdx >= 0) {
+            milestones.push({
+                ratio: Math.min(1, Math.max(0, ptIdx / denom)),
+                kind: ev.type === 'alert' ? 'alert' : 'music'
+            });
+        }
+    });
+    milestones.sort((a, b) => a.ratio - b.ratio);
+
+    hud.ticksEl.innerHTML = '';
+    routeProgressHudTickEls = [];
+    let lastRatio = -1;
+    for (let i = 0; i < milestones.length; i++) {
+        const ms = milestones[i];
+        if (ms.ratio <= 0.02 || ms.ratio >= 0.98) continue;
+        // 若刻度間距過近（< 1.8%），優先保留站牌或警示點，避免視覺堆疊雜亂
+        if (lastRatio >= 0 && (ms.ratio - lastRatio) < 0.018 && ms.kind === 'music') continue;
+        lastRatio = ms.ratio;
+        const tick = document.createElement('div');
+        tick.className = `route-progress-hud-tick${ms.kind === 'stop' ? ' is-stop' : (ms.kind === 'alert' ? ' is-alert' : '')}`;
+        tick.style.bottom = `${(ms.ratio * 100).toFixed(2)}%`;
+        tick.dataset.ratio = String(ms.ratio);
+        hud.ticksEl.appendChild(tick);
+        routeProgressHudTickEls.push({ el: tick, ratio: ms.ratio });
+    }
+
+    hud.root.classList.remove('hidden');
+    updateRouteProgressHud(0, totalPts);
+}
+
+function updateRouteProgressHud(currentIdx, totalPoints) {
+    if (!routeProgressHudEls || !routeProgressHudEls.root || routeProgressHudEls.root.classList.contains('hidden')) return;
+    const denom = Math.max(1, (totalPoints || 2) - 1);
+    const ratio = Math.min(1, Math.max(0, (Number(currentIdx) || 0) / denom));
+    const pctStr = `${(ratio * 100).toFixed(2)}%`;
+    routeProgressHudEls.fillEl.style.height = pctStr;
+    routeProgressHudEls.cursorEl.style.bottom = pctStr;
+    routeProgressHudEls.pctEl.textContent = `${Math.round(ratio * 100)}%`;
+
+    for (let i = 0; i < routeProgressHudTickEls.length; i++) {
+        const item = routeProgressHudTickEls[i];
+        const passed = ratio >= item.ratio;
+        if (item.el.classList.contains('is-passed') !== passed) {
+            item.el.classList.toggle('is-passed', passed);
+        }
+    }
+}
+
+function hideRouteProgressHud() {
+    if (!routeProgressHudEls || !routeProgressHudEls.root) return;
+    routeProgressHudEls.root.classList.add('hidden');
+    if (routeProgressHudEls.ticksEl) routeProgressHudEls.ticksEl.innerHTML = '';
+    routeProgressHudTickEls = [];
+}
+
 function getActivePlaybackOrFollowRoute() {
     if (window.isFurnitureNavOrReplayActive && window.activeFurnitureSyntheticRoute) {
         return window.activeFurnitureSyntheticRoute;
@@ -54,9 +175,11 @@ document.getElementById('startReplayBtn').onclick = () => {
     // 初始狀態（currentTrackIndex = 0）：已行駛路段為空，未行駛路段完整高亮顯示
     updateProgressRouteLayers(route.points, 0, null, 0);
     if (window.isFurnitureNavOrReplayActive) {
+        hideRouteProgressHud();
         if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
     } else {
         renderRouteMarkers(route);
+        showRouteProgressHud(route);
     }
 
     playProgress = 0; playbackSlider.max = (route.points.length - 1) * 100; playbackSlider.value = 0;
@@ -123,6 +246,9 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         { lng: curLng, lat: curLat, musicActive: p2.musicActive },
         forceLayerUpdate ? 0 : 40
     );
+    if (!window.isFurnitureNavOrReplayActive) {
+        updateRouteProgressHud(clamped, pts.length);
+    }
 
     const badge = document.getElementById('replayMusicBadge');
     if (window.isFurnitureNavOrReplayActive) {
@@ -211,6 +337,7 @@ function startSmoothPlayback() {
             }
         });
         if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
+        if (!window.isFurnitureNavOrReplayActive) updateRouteProgressHud(0, route.points.length);
     }
     isPlaying = true; lastFrameTime = 0;
     if (typeof window.setMyVehicleMovingState === 'function') window.setMyVehicleMovingState(true);
@@ -263,6 +390,7 @@ speedToggleBtn.onclick = () => {
 document.getElementById('stopPlaybackBtn').onclick = () => { 
     stopSmoothPlayback();
     VoiceQueue.clear();
+    hideRouteProgressHud();
     if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     document.getElementById('playbackUI').classList.add('hidden'); 
     document.getElementById('musicAlertBanner').classList.add('hidden');
@@ -1288,6 +1416,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 updateProgressRouteLayers(pts, currentTrackIndex, null, 0);
                 updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 0);
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 0);
+                updateRouteProgressHud(currentTrackIndex, pts.length);
             }
             vibrate([80, 40, 80]);
             showNavAlert('↩️', '已回退至上一路段進度', 'bg-amber-600');
@@ -1306,9 +1435,11 @@ document.getElementById('startFollowBtn').onclick = async () => {
         clearFollowDirectionArrows();
     }
     if (window.isFurnitureNavOrReplayActive) {
+        hideRouteProgressHud();
         if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
     } else {
         renderRouteMarkers(route);
+        showRouteProgressHud(route);
     }
     setCameraFollow(true);
     window.ApproachNav?.onFollowStart(route, lastKnownLngLat);
@@ -1655,6 +1786,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
             if (isGeneralFollowNav && followMatchSegments.length > 0) {
                 updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 250);
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 350);
+                updateRouteProgressHud(currentTrackIndex, pts.length);
             }
         }
 
@@ -1829,6 +1961,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 const endFollowAction = () => {
     window.ApproachNav?.stop(true);
     VoiceQueue.clear();
+    hideRouteProgressHud();
     clearFollowDirectionArrows();
     clearFollowSkippedSegmentsLayer();
     const undoBtnEl = document.getElementById('tacticalUndoProgressBtn');

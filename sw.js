@@ -1,5 +1,5 @@
-const CACHE_VERSION = 'v3.78';
-const TILE_CACHE_NAME = 'yingge-map-tiles-v3.78';
+const CACHE_VERSION = 'v3.79';
+const TILE_CACHE_NAME = 'yingge-map-tiles-v3.79';
 const CACHE_ASSETS = [
   './',
   './index.html',

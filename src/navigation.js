@@ -968,7 +968,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     continue;
                 }
 
-                // 距離轉彎頂點進入 110 公尺內時，預先在背景查詢轉入路段路名並快取，確保抵達 20m 播報點時立即可用不延遲
+                // 距離轉彎頂點進入 110 公尺內時，預先在背景查詢轉入路段路名並快取，確保抵達 30m 播報點時立即可用不延遲
                 if (!turnItem.roadName && !turnItem.prefetching && alongToTurnM <= 110 && alongToTurnM >= 0) {
                     turnItem.roadName = lookupRoadNameFromMapOrPoint(pts, turnItem.afterIdx, turnItem.outBearing);
                     if (!turnItem.roadName) {
@@ -991,8 +991,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 // 結合沿線剩餘距離與直線距離（避免節點較疏時沿線距離跳階）
                 const effectiveDistToTurnM = Math.min(alongToTurnM, directToCornerM);
 
-                // 當距離前方轉彎節點約 20 公尺（容許 GPS 更新步進視窗 6m ~ 28m）時，提前觸發單次左右轉語音提示
-                if (alongToTurnM <= 32 && effectiveDistToTurnM <= 28 && effectiveDistToTurnM >= 4) {
+                // 當距離前方轉彎節點剩餘 <= 30 公尺（搭配沿線容差 <= 38m 吸收定位步進）時，提前觸發單次左右轉語音提示
+                if (alongToTurnM <= 38 && effectiveDistToTurnM <= 30 && effectiveDistToTurnM >= 0) {
                     turnItem.announced = true;
                     for (let k = Math.max(0, turnItem.turnIdx - 4); k <= Math.min(pts.length - 1, turnItem.afterIdx + 2); k++) {
                         triggeredTurnIndices.add(k);
@@ -1003,8 +1003,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     }
                     const cleanRoad = sanitizeDetectedRoadName(turnItem.roadName);
                     const voiceMsg = cleanRoad
-                        ? `前方20公尺${turnItem.actionZh}${cleanRoad}`
-                        : `前方20公尺${turnItem.actionZh}`;
+                        ? `前方準備${turnItem.actionZh}進${cleanRoad}`
+                        : `前方準備${turnItem.actionZh}`;
 
                     autoWakeScreen();
                     showNavAlert(turnItem.iconHtml, '', 'bg-blue-600');

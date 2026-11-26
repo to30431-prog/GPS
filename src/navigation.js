@@ -684,6 +684,264 @@ function precomputeFollowRouteTurns(pts, cumMeters) {
     return turns;
 }
 
+// ==========================================
+// 🧭 一般清運遵循導航：軌跡進度吸附（Map Matching）、防偏離滯後、未行駛方向箭頭引導
+// ==========================================
+const FOLLOW_SUBDIVIDE_MAX_SEG_METERS = 15;
+const FOLLOW_SNAP_RADIUS_METERS = 45;
+const FOLLOW_OFF_ROUTE_BASE_METERS = 52;
+const FOLLOW_OFF_ROUTE_MAX_METERS = 65;
+const FOLLOW_OFF_ROUTE_MIN_SPEED_KMH = 3;
+const FOLLOW_OFF_ROUTE_STREAK_LIMIT = 3;
+const FOLLOW_OFF_ROUTE_DURATION_MS = 4500;
+const FOLLOW_DIR_ARROW_SOURCE_ID = 'follow-untraveled-arrows-src';
+const FOLLOW_DIR_ARROW_LAYER_ID = 'follow-untraveled-arrows-layer';
+const FOLLOW_DIR_ARROW_ICON_ID = 'follow-untraveled-arrow-icon';
+let lastFollowArrowRenderTime = 0;
+
+function buildFollowMatchTrack(pts) {
+    const segments = [];
+    if (!Array.isArray(pts) || pts.length < 2) return segments;
+    let cumM = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        if (!p1 || !p2 || p2.isSegmentStart) continue;
+        const segLenM = getDistanceKm(p1.lng, p1.lat, p2.lng, p2.lat) * 1000;
+        if (segLenM < 0.2) continue;
+        const steps = segLenM > FOLLOW_SUBDIVIDE_MAX_SEG_METERS
+            ? Math.ceil(segLenM / FOLLOW_SUBDIVIDE_MAX_SEG_METERS)
+            : 1;
+        const bearing = getBearing(p1.lng, p1.lat, p2.lng, p2.lat);
+        const musicActive = Boolean(p2.musicActive);
+        const stepLenM = segLenM / steps;
+        for (let s = 0; s < steps; s++) {
+            const t0 = s / steps;
+            const t1 = (s + 1) / steps;
+            segments.push({
+                aLng: p1.lng + (p2.lng - p1.lng) * t0,
+                aLat: p1.lat + (p2.lat - p1.lat) * t0,
+                bLng: p1.lng + (p2.lng - p1.lng) * t1,
+                bLat: p1.lat + (p2.lat - p1.lat) * t1,
+                origIdx: i,
+                cumM,
+                lenM: stepLenM,
+                bearing,
+                musicActive
+            });
+            cumM += stepLenM;
+        }
+    }
+    return segments;
+}
+
+function projectPointOntoSegment(lng, lat, seg) {
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    const mPerDegLat = 111320;
+    const mPerDegLng = 111320 * cosLat;
+    const ax = (seg.aLng - lng) * mPerDegLng;
+    const ay = (seg.aLat - lat) * mPerDegLat;
+    const bx = (seg.bLng - lng) * mPerDegLng;
+    const by = (seg.bLat - lat) * mPerDegLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq > 1e-6 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / lenSq)) : 0;
+    const px = ax + dx * t;
+    const py = ay + dy * t;
+    return {
+        t,
+        distMeters: Math.hypot(px, py),
+        projLng: seg.aLng + (seg.bLng - seg.aLng) * t,
+        projLat: seg.aLat + (seg.bLat - seg.aLat) * t
+    };
+}
+
+function matchGpsToFollowTrackWindow(matchSegments, currentMatchIdx, lng, lat, gpsHeading, isMoving) {
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) return null;
+    const maxSegIdx = matchSegments.length - 1;
+    const anchorIdx = Math.min(Math.max(currentMatchIdx || 0, 0), maxSegIdx);
+    const anchorCumM = matchSegments[anchorIdx].cumM;
+
+    // 限制局部搜尋窗口：僅允許小幅回退（<= 25m）與合理向前推進（<= 180m），防止重疊去回程跳線
+    let startIdx = anchorIdx;
+    while (startIdx > 0 && (anchorCumM - matchSegments[startIdx - 1].cumM) <= 25 && (anchorIdx - startIdx) < 4) {
+        startIdx--;
+    }
+    let endIdx = anchorIdx;
+    while (endIdx < maxSegIdx && ((matchSegments[endIdx + 1].cumM - anchorCumM) <= 180 || (endIdx - anchorIdx) < 12)) {
+        endIdx++;
+        if (endIdx - anchorIdx >= 48) break;
+    }
+
+    let bestScore = Infinity;
+    let bestResult = null;
+    const hasHeading = isMoving && typeof gpsHeading === 'number' && !isNaN(gpsHeading);
+
+    for (let i = startIdx; i <= endIdx; i++) {
+        const seg = matchSegments[i];
+        const proj = projectPointOntoSegment(lng, lat, seg);
+        let score = proj.distMeters;
+
+        if (hasHeading && seg.lenM >= 1.2) {
+            const angleDiff = Math.abs(getAngleDiff(gpsHeading, seg.bearing));
+            if (angleDiff > 110) {
+                score += 45;
+            } else if (angleDiff > 70) {
+                score += 15;
+            }
+        }
+        if (i < anchorIdx) {
+            score += 6;
+        }
+
+        if (score < bestScore) {
+            bestScore = score;
+            bestResult = {
+                matchIdx: i,
+                origIdx: seg.origIdx,
+                projLng: proj.projLng,
+                projLat: proj.projLat,
+                distMeters: proj.distMeters,
+                bearing: seg.bearing,
+                musicActive: seg.musicActive,
+                t: proj.t
+            };
+        }
+    }
+    return bestResult;
+}
+
+function findInitialMatchSegmentIdx(matchSegments, origTrackIdx) {
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) return 0;
+    for (let i = 0; i < matchSegments.length; i++) {
+        if (matchSegments[i].origIdx >= origTrackIdx) return i;
+    }
+    return matchSegments.length - 1;
+}
+
+function ensureFollowDirectionArrowsLayer() {
+    if (!map || !map.isStyleLoaded?.()) return false;
+    try {
+        if (!map.hasImage(FOLLOW_DIR_ARROW_ICON_ID)) {
+            const size = 32;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, size, size);
+                ctx.beginPath();
+                ctx.moveTo(size / 2, 5);
+                ctx.lineTo(size - 6, size - 7);
+                ctx.lineTo(size / 2, size - 13);
+                ctx.lineTo(6, size - 7);
+                ctx.closePath();
+                ctx.lineJoin = 'round';
+                ctx.lineWidth = 4.5;
+                ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
+                ctx.stroke();
+                ctx.fillStyle = '#ffffff';
+                ctx.fill();
+                const imgData = ctx.getImageData(0, 0, size, size);
+                map.addImage(
+                    FOLLOW_DIR_ARROW_ICON_ID,
+                    { width: size, height: size, data: new Uint8Array(imgData.data.buffer) },
+                    { pixelRatio: 2 }
+                );
+            }
+        }
+        if (!map.getSource(FOLLOW_DIR_ARROW_SOURCE_ID)) {
+            map.addSource(FOLLOW_DIR_ARROW_SOURCE_ID, {
+                type: 'geojson',
+                data: emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer(FOLLOW_DIR_ARROW_LAYER_ID)) {
+            map.addLayer({
+                id: FOLLOW_DIR_ARROW_LAYER_ID,
+                type: 'symbol',
+                source: FOLLOW_DIR_ARROW_SOURCE_ID,
+                layout: {
+                    'icon-image': FOLLOW_DIR_ARROW_ICON_ID,
+                    'icon-size': [
+                        'interpolate', ['linear'], ['zoom'],
+                        14, 0.65,
+                        17, 0.85,
+                        19.5, 1.0
+                    ],
+                    'icon-rotate': ['get', 'bearing'],
+                    'icon-rotation-alignment': 'map',
+                    'icon-pitch-alignment': 'map',
+                    'icon-allow-overlap': true,
+                    'icon-ignore-placement': true
+                },
+                paint: {
+                    'icon-opacity': 0.92
+                }
+            });
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function updateFollowDirectionArrows(matchSegments, currentMatchIdx, throttleMs = 350) {
+    if (!map) return;
+    if (throttleMs > 0) {
+        const now = performance.now();
+        if (now - lastFollowArrowRenderTime < throttleMs) return;
+        lastFollowArrowRenderTime = now;
+    } else {
+        lastFollowArrowRenderTime = performance.now();
+    }
+    if (!ensureFollowDirectionArrowsLayer()) return;
+    const src = map.getSource(FOLLOW_DIR_ARROW_SOURCE_ID);
+    if (!src) return;
+
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) {
+        src.setData(emptyGeoJSON());
+        return;
+    }
+
+    const startIdx = Math.min(Math.max(currentMatchIdx || 0, 0), matchSegments.length - 1);
+    const baseCumM = matchSegments[startIdx].cumM;
+    const features = [];
+    let nextArrowDistM = baseCumM + 18;
+    const maxLookaheadM = 900;
+
+    for (let i = startIdx; i < matchSegments.length; i++) {
+        const seg = matchSegments[i];
+        const segEndCumM = seg.cumM + seg.lenM;
+        const aheadM = seg.cumM - baseCumM;
+        if (aheadM > maxLookaheadM || features.length >= 45) break;
+
+        while (nextArrowDistM <= segEndCumM && features.length < 45) {
+            const frac = seg.lenM > 0 ? Math.min(1, Math.max(0, (nextArrowDistM - seg.cumM) / seg.lenM)) : 0.5;
+            const arrowLng = seg.aLng + (seg.bLng - seg.aLng) * frac;
+            const arrowLat = seg.aLat + (seg.bLat - seg.aLat) * frac;
+            features.push({
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: [arrowLng, arrowLat] },
+                properties: { bearing: seg.bearing }
+            });
+            // 前方 280m 內較密（每 24m 一個箭頭），更遠處每 45m 一個箭頭
+            const stepM = (nextArrowDistM - baseCumM) < 280 ? 24 : 45;
+            nextArrowDistM += stepM;
+        }
+    }
+
+    src.setData({ type: 'FeatureCollection', features });
+}
+
+function clearFollowDirectionArrows() {
+    lastFollowArrowRenderTime = 0;
+    try {
+        map?.getSource(FOLLOW_DIR_ARROW_SOURCE_ID)?.setData(emptyGeoJSON());
+    } catch (e) {}
+}
+
 document.getElementById('startFollowBtn').onclick = async () => {
     window.BgmPlayer?.unlockAndSync();
     isReplaying = false;
@@ -724,7 +982,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
     isBlackScreenActive = false; isScreenAutoWoken = false;
 
     const pts = route.points;
+    const isGeneralFollowNav = !window.isFurnitureNavOrReplayActive;
     const followCumMeters = buildCumulativeRouteMeters(pts);
+    const followMatchSegments = isGeneralFollowNav ? buildFollowMatchTrack(pts) : [];
     const precomputedTurns = precomputeFollowRouteTurns(pts, followCumMeters);
     // 重新開始導航時，完整重置所有標記點（含語音開關與一般提醒點）的 played 與 prePlayed 狀態
     const mappedEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
@@ -742,9 +1002,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
     }
 
     let currentTrackIndex = 0;
+    let currentMatchIdx = 0;
     let hasInitializedTrackIndex = false;
+    let isSnappedToRoute = false;
+    let offRouteStreakCount = 0;
+    let offRouteFirstExceedMs = 0;
     window.activeFollowCurrentTrackIndex = 0;
     updateProgressRouteLayers(route.points, 0, null, 0);
+    if (isGeneralFollowNav) {
+        updateFollowDirectionArrows(followMatchSegments, 0, 0);
+    } else {
+        clearFollowDirectionArrows();
+    }
     if (window.isFurnitureNavOrReplayActive) {
         if (typeof renderAllFurnitureMapElements === 'function') renderAllFurnitureMapElements();
     } else {
@@ -787,17 +1056,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
             window.onFleetPositionUpdate(lat, lng);
         }
 
-        if (!isPowerSaveMapPaused()) {
-            if (!filtered.isStationary || filtered.isWakeupFix) {
+        const updateFollowVehicleAndCamera = (targetLngLat, targetHeading, forceUpdate = false) => {
+            if (isPowerSaveMapPaused()) return;
+            if (forceUpdate || !filtered.isStationary || filtered.isWakeupFix) {
                 if (vehicleMarker) {
-                    smoothMoveVehicleMarker(lastKnownLngLat, heading, 750);
+                    smoothMoveVehicleMarker(targetLngLat, targetHeading, 750);
                 }
 
                 if (isFollowingCamera) {
                     const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
-                    const targetBearing = isHeadingUpMode ? heading : map.getBearing();
+                    const targetBearing = isHeadingUpMode ? targetHeading : map.getBearing();
                     map.easeTo({
-                        center: lastKnownLngLat,
+                        center: targetLngLat,
                         zoom: targetZoom,
                         bearing: targetBearing,
                         offset: [0, 100],
@@ -805,7 +1075,11 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     });
                 }
             }
-            window.syncCarHeading?.(heading, map ? map.getBearing() : 0);
+            window.syncCarHeading?.(targetHeading, map ? map.getBearing() : 0);
+        };
+
+        if (!isGeneralFollowNav) {
+            updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
         }
 
         // 純唯讀計算距起點與距正式路線最短距離（絕不提前推進 currentTrackIndex 或把正式路線變灰）
@@ -829,7 +1103,10 @@ document.getElementById('startFollowBtn').onclick = async () => {
         });
 
         // 🛡️ 前往起點導航中：完全隔離正式路線進度與灰色已通過渲染，保持原本清運路線顏色正常
-        if (window.ApproachNav?.isActive()) return;
+        if (window.ApproachNav?.isActive()) {
+            if (isGeneralFollowNav) updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
+            return;
+        }
 
         // 尚未抵達起點或正式路線前（待命前往起點階段）：同樣不提前推進 currentTrackIndex 或將正式路線變灰
         if (!hasAnnouncedStart) {
@@ -840,6 +1117,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 speakText("我們任務開始，路上請注意安全。");
                 vibrate([200, 100, 200]);
             } else {
+                if (isGeneralFollowNav) updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
                 if (!window.ApproachNav?.isPromptVisible?.()) {
                     document.getElementById('appStatusTitle').innerText = `前往起點 (${Math.round(distToStart)}m)`;
                 }
@@ -852,12 +1130,21 @@ document.getElementById('startFollowBtn').onclick = async () => {
         // 2. 導航進行中：嚴格限制在前方滑動視窗（沿線約 150~250m 內）順序推進，防止折返重疊跳號
         const prevTrackIndex = currentTrackIndex;
         let progressInfo;
+        let matchResult = null;
         if (!hasInitializedTrackIndex) {
             progressInfo = (typeof findInitialFollowTrackIndex === 'function')
                 ? findInitialFollowTrackIndex(pts, lng, lat, heading, !filtered.isStationary, followCumMeters)
                 : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters);
             currentTrackIndex = progressInfo.trackIndex;
             hasInitializedTrackIndex = true;
+            if (isGeneralFollowNav && followMatchSegments.length > 0) {
+                currentMatchIdx = findInitialMatchSegmentIdx(followMatchSegments, currentTrackIndex);
+                matchResult = matchGpsToFollowTrackWindow(followMatchSegments, currentMatchIdx, lng, lat, heading, !filtered.isStationary);
+                if (matchResult && matchResult.distMeters <= FOLLOW_OFF_ROUTE_MAX_METERS) {
+                    currentMatchIdx = matchResult.matchIdx;
+                    currentTrackIndex = Math.max(currentTrackIndex, matchResult.origIdx);
+                }
+            }
             // 若為半路切入（距起點 > 80m 且起算索引 > 0），將起始點之前的舊事件與舊轉彎標記為已略過避免回溯誤報
             if (currentTrackIndex > 0) {
                 mappedEvents.forEach(ev => {
@@ -873,6 +1160,16 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     }
                 });
             }
+        } else if (isGeneralFollowNav && followMatchSegments.length > 0) {
+            matchResult = matchGpsToFollowTrackWindow(followMatchSegments, currentMatchIdx, lng, lat, heading, !filtered.isStationary);
+            if (matchResult && matchResult.distMeters <= FOLLOW_OFF_ROUTE_MAX_METERS) {
+                currentMatchIdx = matchResult.matchIdx;
+                currentTrackIndex = Math.max(currentTrackIndex, matchResult.origIdx);
+            }
+            progressInfo = {
+                trackIndex: currentTrackIndex,
+                minDistMeters: matchResult ? matchResult.distMeters : computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters).minDistMeters
+            };
         } else {
             progressInfo = computeNextTrackIndex(pts, currentTrackIndex, lng, lat, heading, !filtered.isStationary, followCumMeters);
             currentTrackIndex = progressInfo.trackIndex;
@@ -881,9 +1178,76 @@ document.getElementById('startFollowBtn').onclick = async () => {
         const minDist = progressInfo.minDistMeters;
         let isOffRoute = true;
 
+        if (isGeneralFollowNav) {
+            const rawDistToTrack = matchResult ? matchResult.distMeters : minDist;
+            const gpsAcc = (typeof filtered.accuracy === 'number' && !isNaN(filtered.accuracy)) ? filtered.accuracy : 0;
+            const accBufferM = gpsAcc > 15
+                ? Math.min(FOLLOW_OFF_ROUTE_MAX_METERS - FOLLOW_OFF_ROUTE_BASE_METERS, (gpsAcc - 15) * 0.5)
+                : 0;
+            const offRouteThresholdM = Math.min(FOLLOW_OFF_ROUTE_MAX_METERS, FOLLOW_OFF_ROUTE_BASE_METERS + accBufferM);
+            const rawHardwareKmh = (typeof pos?.coords?.speed === 'number' && !isNaN(pos.coords.speed) && pos.coords.speed > 0)
+                ? pos.coords.speed * 3.6
+                : 0;
+            const speedKmhForOffRoute = Math.max(typeof filtered.speedKmh === 'number' ? filtered.speedKmh : 0, rawHardwareKmh);
+
+            const wasAlreadySnapped = isSnappedToRoute;
+            if (matchResult && rawDistToTrack <= FOLLOW_SNAP_RADIUS_METERS) {
+                isSnappedToRoute = true;
+                offRouteStreakCount = 0;
+                offRouteFirstExceedMs = 0;
+                isOffRoute = false;
+                offRouteWarning.classList.add('hidden');
+                if (wasOffRoute) {
+                    speakText("已重新回到原定路線。");
+                    wasOffRoute = false;
+                }
+            } else if (rawDistToTrack > offRouteThresholdM) {
+                if (speedKmhForOffRoute > FOLLOW_OFF_ROUTE_MIN_SPEED_KMH) {
+                    offRouteStreakCount++;
+                    if (offRouteFirstExceedMs === 0) offRouteFirstExceedMs = Date.now();
+                    const offRouteElapsedMs = Date.now() - offRouteFirstExceedMs;
+                    if (offRouteStreakCount >= FOLLOW_OFF_ROUTE_STREAK_LIMIT || offRouteElapsedMs >= FOLLOW_OFF_ROUTE_DURATION_MS) {
+                        isSnappedToRoute = false;
+                        isOffRoute = true;
+                        wasOffRoute = true;
+                        offRouteWarning.classList.remove('hidden');
+                        if (Date.now() - window.lastOffRouteTime > 15000) {
+                            speakText("已偏離路線，請注意。");
+                            vibrate([200, 100, 200]);
+                            autoWakeScreen();
+                            window.lastOffRouteTime = Date.now();
+                        }
+                    } else {
+                        isOffRoute = wasOffRoute;
+                    }
+                } else {
+                    isOffRoute = wasOffRoute;
+                }
+            } else {
+                // 磁吸滯後緩衝區（45m ~ offRouteThresholdM）：維持原吸附狀態不抖動
+                isOffRoute = !isSnappedToRoute && wasOffRoute;
+            }
+
+            if (isSnappedToRoute && matchResult) {
+                const snappedLngLat = [matchResult.projLng, matchResult.projLat];
+                const snappedHeading = matchResult.bearing;
+                lastKnownLngLat = snappedLngLat;
+                currentHeading = snappedHeading;
+                updateFollowVehicleAndCamera(snappedLngLat, snappedHeading, !wasAlreadySnapped);
+            } else {
+                updateFollowVehicleAndCamera([lng, lat], heading, wasAlreadySnapped);
+            }
+        }
+
         // 👾 動態軌跡變色（小精靈吃路線）：0 ~ currentTrackIndex 渲染為半透明淺灰色，currentTrackIndex ~ 終點維持高亮原色
         if (!isPowerSaveMapPaused()) {
-            updateProgressRouteLayers(pts, currentTrackIndex, null, 150);
+            const exactSnapPos = (isGeneralFollowNav && isSnappedToRoute && matchResult)
+                ? { lng: matchResult.projLng, lat: matchResult.projLat, musicActive: matchResult.musicActive }
+                : null;
+            updateProgressRouteLayers(pts, currentTrackIndex, exactSnapPos, 150);
+            if (isGeneralFollowNav && followMatchSegments.length > 0) {
+                updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 350);
+            }
         }
 
         if (window.stopsQueue && window.currentStopIndex < window.stopsQueue.length) {
@@ -940,14 +1304,16 @@ document.getElementById('startFollowBtn').onclick = async () => {
             }
         }
 
-        if (minDist < 25) {
-            isOffRoute = false; offRouteWarning.classList.add('hidden');
-            if (wasOffRoute) { speakText("已重新回到原定路線。"); wasOffRoute = false; }
-        } else {
-            isOffRoute = true; wasOffRoute = true; offRouteWarning.classList.remove('hidden');
-            if (Date.now() - window.lastOffRouteTime > 15000) {
-                speakText("已偏離路線，請注意。"); vibrate([200, 100, 200]); autoWakeScreen();
-                window.lastOffRouteTime = Date.now();
+        if (!isGeneralFollowNav) {
+            if (minDist < 25) {
+                isOffRoute = false; offRouteWarning.classList.add('hidden');
+                if (wasOffRoute) { speakText("已重新回到原定路線。"); wasOffRoute = false; }
+            } else {
+                isOffRoute = true; wasOffRoute = true; offRouteWarning.classList.remove('hidden');
+                if (Date.now() - window.lastOffRouteTime > 15000) {
+                    speakText("已偏離路線，請注意。"); vibrate([200, 100, 200]); autoWakeScreen();
+                    window.lastOffRouteTime = Date.now();
+                }
             }
         }
 
@@ -1055,6 +1421,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
 const endFollowAction = () => {
     window.ApproachNav?.stop(true);
     VoiceQueue.clear();
+    clearFollowDirectionArrows();
     if (typeof resetPassedRouteReminders === 'function') resetPassedRouteReminders();
     activeFollowGpsHandler = null;
     window.activeFollowCurrentTrackIndex = null;

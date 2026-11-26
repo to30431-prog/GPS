@@ -46,6 +46,9 @@ let furnitureManualTargetPinIdx = 1;
 let furnitureManualConnectedCoords = [];
 let furnitureManualSegmentDraft = [];
 let isFurnitureDrawingStroke = false;
+let furnitureManualSelectedPinIndices = [];
+let furnitureManualRollingHeading = null;
+let isFurnitureManualRouting = false;
 
 // 左上角火紅提醒輪播索引
 let woodSupportAlertCycleIdx = 0;
@@ -255,7 +258,7 @@ function updateFurniturePanelUI() {
         manualConnectBtn.disabled = (pinsCount < 2);
         if (isFurnitureManualConnecting) {
             manualConnectBtn.className = 'bg-amber-500/95 hover:bg-amber-600 backdrop-blur text-white font-black py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-amber-200 active:scale-95 transition-all flex items-center gap-1.5 ring-2 ring-amber-300 whitespace-nowrap';
-            if (manualConnectText) manualConnectText.textContent = `✅ 完成手拉 (#${Math.min(furnitureManualTargetPinIdx + 1, pinsCount)})`;
+            if (manualConnectText) manualConnectText.textContent = `✅ 完成手拉 (${furnitureManualSelectedPinIndices.length}/${pinsCount})`;
         } else {
             manualConnectBtn.className = 'bg-orange-600/95 hover:bg-orange-700 backdrop-blur text-white font-extrabold py-2.5 px-3.5 rounded-2xl text-xs shadow-lg border border-orange-300/80 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-45 whitespace-nowrap';
             if (manualConnectText) manualConnectText.textContent = '✍️ 手動拉線串';
@@ -1153,6 +1156,7 @@ function normalizeFurnitureHeadingDeg(rawHeading) {
 
 // 家具模式 OSRM 雙軌距離比對門檻：順向抑制迴轉 (路徑A) 若比允許迴轉保底 (路徑B) 多繞超過 400 公尺，即改採路徑B
 const FURNITURE_OSRM_DETOUR_THRESHOLD_M = 400;
+const FURNITURE_OSRM_SNAP_RADIUS_M = 50;
 
 function parseFurnitureOsrmRoutePayload(data, startLng, startLat, fallbackHeading) {
     const routeObj = data?.routes?.[0];
@@ -1177,28 +1181,38 @@ function parseFurnitureOsrmRoutePayload(data, startLng, startLat, fallbackHeadin
     return { coords: alignedCoords, distM, endHeading };
 }
 
-// 家具模式專屬：兩點間 OSRM driving 雙軌比對（路徑A：continue_straight=true 順向抑制迴轉 vs 路徑B：不強制直行允許迴轉保底，門檻 400 公尺）
+// 家具模式專屬：兩點間 OSRM driving 雙軌比對（路徑A：continue_straight=true 順向抑制迴轉 vs 路徑B：不強制直行允許迴轉保底，門檻 400 公尺，並附 radiuses 吸附容許半徑）
 async function fetchFurnitureOsrmSegmentGeometry(lng1, lat1, lng2, lat2, options = {}) {
     const validHeading = normalizeFurnitureHeadingDeg(options?.startHeading);
     const bearingsQuery = validHeading !== null ? `&bearings=${validHeading},45;` : '';
+    const snapRadius = (typeof options?.snapRadiusM === 'number' && options.snapRadiusM > 0)
+        ? Math.round(options.snapRadiusM)
+        : FURNITURE_OSRM_SNAP_RADIUS_M;
+    const radiusesQuery = `&radiuses=${snapRadius};${snapRadius}`;
 
-    // 1. 請求路徑 B（允許迴轉保底版：不帶 continue_straight=true 與強制航向，取得最短距離 D_最短）
-    const pathBUrl = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
+    // 1. 請求路徑 B（允許迴轉保底版：不帶 continue_straight=true 與強制航向，優先帶 radiuses 避免門牌微偏跨街繞路，失敗時退回無 radiuses）
+    const pathBUrls = [
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson${radiusesQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`
+    ];
     const fetchPathBPromise = (async () => {
-        try {
-            const res = await fetchWithTimeout(pathBUrl, {}, 4000);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return parseFurnitureOsrmRoutePayload(data, lng1, lat1, validHeading);
-        } catch (e) {
-            return null;
+        for (const pathBUrl of pathBUrls) {
+            try {
+                const res = await fetchWithTimeout(pathBUrl, {}, 4000);
+                if (!res.ok) continue;
+                const data = await res.json();
+                const parsed = parseFurnitureOsrmRoutePayload(data, lng1, lat1, validHeading);
+                if (parsed) return parsed;
+            } catch (e) {}
         }
+        return null;
     })();
 
-    // 2. 請求路徑 A（順向抑制迴轉版：補上 continue_straight=true 與起點車頭方位角 bearings，取得順向距離 D_順向）
+    // 2. 請求路徑 A（順向抑制迴轉版：補上 continue_straight=true、radiuses 與起點車頭方位角 bearings，取得順向距離 D_順向）
     const pathAUrls = [
-        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb'}${bearingsQuery}`,
-        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true${bearingsQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true&approaches=${options?.originUnrestricted ? 'unrestricted;curb' : 'curb;curb'}${bearingsQuery}${radiusesQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true${bearingsQuery}${radiusesQuery}`,
+        `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true${radiusesQuery}`,
         `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson&continue_straight=true`
     ];
 
@@ -1557,6 +1571,147 @@ function sortFurniturePinsByNearestNeighbor(pins, origin = null) {
     return globalBestSeq || [...pins];
 }
 
+// ==========================================
+// ⚡ OSRM /table/v1/driving/ 實際行車距離矩陣（meters）＋ 開放式最短路徑排序（Nearest Neighbor + 2-opt）
+// ==========================================
+async function fetchFurnitureOsrmDistanceMatrix(points) {
+    if (!Array.isArray(points) || points.length < 2) return null;
+    const coordStr = points.map(p => `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`).join(';');
+    const radiusStr = points.map(() => String(FURNITURE_OSRM_SNAP_RADIUS_M)).join(';');
+    const tableUrls = [
+        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=distance&radiuses=${radiusStr}`,
+        `https://router.project-osrm.org/table/v1/driving/${coordStr}?annotations=distance`
+    ];
+
+    for (const url of tableUrls) {
+        try {
+            const res = await fetchWithTimeout(url, {}, 5500);
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (data?.code === 'Ok' && Array.isArray(data.distances) && data.distances.length === points.length) {
+                const n = points.length;
+                const matrix = Array.from({ length: n }, (_, i) =>
+                    Array.from({ length: n }, (_, j) => {
+                        if (i === j) return 0;
+                        const raw = data.distances[i]?.[j];
+                        if (typeof raw === 'number' && isFinite(raw) && raw >= 0) {
+                            return raw;
+                        }
+                        return getDistanceKm(points[i].lng, points[i].lat, points[j].lng, points[j].lat) * 1000;
+                    })
+                );
+                return matrix;
+            }
+        } catch (e) {
+            // 嘗試下一組備援 URL
+        }
+    }
+    return null;
+}
+
+function computeOpenPathMatrixDistanceM(order, matrix) {
+    let total = 0;
+    for (let i = 0; i < order.length - 1; i++) {
+        total += matrix[order[i]][order[i + 1]];
+    }
+    return total;
+}
+
+function optimizeOpenOrderWithNNAnd2Opt(n, matrix) {
+    if (n <= 2) return Array.from({ length: n }, (_, i) => i);
+
+    // 1. 開放式最近鄰（Nearest Neighbor）：固定索引 0 為起點，不返回起點
+    const visited = new Array(n).fill(false);
+    const order = [0];
+    visited[0] = true;
+    let cur = 0;
+
+    for (let step = 1; step < n; step++) {
+        let bestNext = -1;
+        let bestDist = Infinity;
+        for (let cand = 1; cand < n; cand++) {
+            if (visited[cand]) continue;
+            const d = matrix[cur][cand];
+            if (d < bestDist) {
+                bestDist = d;
+                bestNext = cand;
+            }
+        }
+        if (bestNext === -1) break;
+        visited[bestNext] = true;
+        order.push(bestNext);
+        cur = bestNext;
+    }
+
+    // 2. 開放式 2-opt 局部交換優化（固定索引 0 不動，支援非對稱單行道矩陣精準重算開放總距離）
+    let bestOrder = order;
+    let bestDist = computeOpenPathMatrixDistanceM(bestOrder, matrix);
+    const maxPasses = Math.min(30, n * 3);
+
+    for (let pass = 0; pass < maxPasses; pass++) {
+        let improved = false;
+        for (let i = 1; i < bestOrder.length - 1; i++) {
+            for (let k = i + 1; k < bestOrder.length; k++) {
+                const candidate = [
+                    ...bestOrder.slice(0, i),
+                    ...bestOrder.slice(i, k + 1).reverse(),
+                    ...bestOrder.slice(k + 1)
+                ];
+                const candDist = computeOpenPathMatrixDistanceM(candidate, matrix);
+                if (candDist + 0.5 < bestDist) {
+                    bestOrder = candidate;
+                    bestDist = candDist;
+                    improved = true;
+                }
+            }
+        }
+        if (!improved) break;
+    }
+
+    return bestOrder;
+}
+
+async function sortFurniturePinsWithOsrmTable(pins, origin = null) {
+    if (!Array.isArray(pins) || pins.length <= 1) {
+        return {
+            sortedPins: Array.isArray(pins) ? [...pins] : [],
+            usedOsrmTable: false,
+            usedGpsOrigin: Boolean(origin && (origin.source === 'gps' || origin.source === 'vehicle_marker'))
+        };
+    }
+
+    // 僅在已取得 GPS／車輛即時定位座標時，強制作為第 0 站起點（不納入插針編號）；完全無 GPS 時才退回第 1 支插針
+    const hasGpsOrigin = Boolean(
+        origin &&
+        typeof origin.lng === 'number' &&
+        typeof origin.lat === 'number' &&
+        !isNaN(origin.lng) &&
+        !isNaN(origin.lat) &&
+        (origin.source === 'gps' || origin.source === 'vehicle_marker')
+    );
+
+    const matrixPoints = hasGpsOrigin
+        ? [{ lng: origin.lng, lat: origin.lat }, ...pins]
+        : [...pins];
+
+    const distMatrix = await fetchFurnitureOsrmDistanceMatrix(matrixPoints);
+    if (distMatrix) {
+        const bestOrder = optimizeOpenOrderWithNNAnd2Opt(matrixPoints.length, distMatrix);
+        const sortedPins = hasGpsOrigin
+            ? bestOrder.slice(1).map(idx => pins[idx - 1])
+            : bestOrder.map(idx => pins[idx]);
+        return { sortedPins, usedOsrmTable: true, usedGpsOrigin: hasGpsOrigin };
+    }
+
+    // OSRM /table/v1/driving/ 失敗或逾時時，優雅退回既有直線／順向 2-opt 排序
+    const fallbackOrigin = hasGpsOrigin ? origin : null;
+    return {
+        sortedPins: sortFurniturePinsByNearestNeighbor(pins, fallbackOrigin),
+        usedOsrmTable: false,
+        usedGpsOrigin: hasGpsOrigin
+    };
+}
+
 let isFurnitureOsrmBusy = false;
 
 async function executeFurnitureOsrmConnect(options = {}) {
@@ -1579,7 +1734,7 @@ async function executeFurnitureOsrmConnect(options = {}) {
 
     if (shouldSortNearestNeighbor) {
         if (sortBtn) sortBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>順排中...</span>';
-        showFurnitureToast('⚡ 正在以環線掃描 + 2-opt 與順向防折返演算法順排點位...');
+        showFurnitureToast('⚡ 正在以車輛 GPS 為起點計算 OSRM 道路距離矩陣與 2-opt 順排...');
     } else {
         if (autoBtn) autoBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>沿路串聯中...</span>';
         showFurnitureToast('🤖 維持目前點位順序，進行 OSRM 順向 vs 400m 繞路門檻雙軌串接...');
@@ -1587,17 +1742,30 @@ async function executeFurnitureOsrmConnect(options = {}) {
 
     try {
         const origin = await resolveVehicleOriginForFurnitureOsrm();
+        const hasGpsOrigin = Boolean(
+            origin &&
+            typeof origin.lng === 'number' &&
+            typeof origin.lat === 'number' &&
+            (origin.source === 'gps' || origin.source === 'vehicle_marker')
+        );
 
+        let sortResult = { usedOsrmTable: false, usedGpsOrigin: hasGpsOrigin };
         // 僅在使用者主動點擊「⚡ 順排」時才重新排列 furnitureActiveData.pins；未點擊時完全維持原本手動順序
         if (shouldSortNearestNeighbor && furnitureActiveData.pins.length >= 2) {
-            furnitureActiveData.pins = sortFurniturePinsByNearestNeighbor(furnitureActiveData.pins, origin);
+            sortResult = await sortFurniturePinsWithOsrmTable(furnitureActiveData.pins, origin);
+            furnitureActiveData.pins = sortResult.sortedPins;
             renderAllFurnitureMapElements();
         }
 
         const activePins = furnitureActiveData.pins;
         const waypoints = [];
         const distOriginToFirstM = getDistanceKm(origin.lng, origin.lat, activePins[0].lng, activePins[0].lat) * 1000;
-        if (distOriginToFirstM >= 12) {
+        if (shouldSortNearestNeighbor) {
+            // 「⚡ 順排」：有 GPS 時強制從 GPS 起點連到第 1 針（除非與第 1 針完全重疊 < 1m）；無 GPS 時才從第 1 針起算
+            if (hasGpsOrigin && distOriginToFirstM >= 1) {
+                waypoints.push({ lng: origin.lng, lat: origin.lat, isOrigin: true });
+            }
+        } else if (distOriginToFirstM >= 12) {
             waypoints.push({ lng: origin.lng, lat: origin.lat, isOrigin: true });
         }
         activePins.forEach(p => {
@@ -1617,7 +1785,9 @@ async function executeFurnitureOsrmConnect(options = {}) {
         await syncActiveFurnitureToFirebase(false);
         showFurnitureToast(
             shouldSortNearestNeighbor
-                ? `⚡ 已完成環線 + 2-opt 順排與 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
+                ? (sortResult.usedGpsOrigin
+                    ? `⚡ 已從車輛 GPS 起點完成 OSRM ${sortResult.usedOsrmTable ? '距離矩陣 + 2-opt' : '備援'} 順排與沿路串接（共 ${furnitureActiveData.distanceKm} km）`
+                    : `⚡ 尚未取得 GPS，已從 #1 號針完成 OSRM 順排與沿路串接（共 ${furnitureActiveData.distanceKm} km）`)
                 : `✅ 已依目前順序完成 OSRM 雙軌路線串接（共 ${furnitureActiveData.distanceKm} km）`
         );
     } finally {
@@ -1643,20 +1813,22 @@ document.getElementById('btnFurnitureSmartSortConnect')?.addEventListener('click
 });
 
 // ==========================================
-// ✍️ 串聯方式 2：手動拉線串（依序從 1 號針手繪或點連向 2、3… 號針，靠近目標針 25m 內自動吸附）
+// ✍️ 串聯方式 2：手動拉線串（依序點選插針 A ➔ B ➔ C，立即透過 OSRM 雙軌道路規則自動依附實際道路最短路徑）
 // ==========================================
 function startFurnitureManualConnectMode() {
     if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length < 2) return;
 
     isFurnitureManualConnecting = true;
-    furnitureManualTargetPinIdx = 1;
-    const p0 = furnitureActiveData.pins[0];
-    furnitureManualConnectedCoords = [[p0.lng, p0.lat]];
-    furnitureManualSegmentDraft = [[p0.lng, p0.lat]];
+    isFurnitureManualRouting = false;
+    furnitureManualSelectedPinIndices = [];
+    furnitureManualRollingHeading = getCurrentValidVehicleHeading();
+    furnitureManualTargetPinIdx = 0;
+    furnitureManualConnectedCoords = [];
+    furnitureManualSegmentDraft = [];
     isFurnitureDrawingStroke = false;
 
-    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
-    showFurnitureToast('✍️ 手動拉線串：請從 #1 號針拉線或點選路面連向 #2 號針');
+    furnitureActiveData.routeCoords = [];
+    showFurnitureToast('✍️ 手動拉線串：請依序點選插針（A ➔ B ➔ C），將自動依附道路最短路徑繪製');
     renderAllFurnitureMapElements();
 }
 
@@ -1670,157 +1842,134 @@ function stopFurnitureManualConnectMode(commitDraft = true) {
         syncActiveFurnitureToFirebase(false);
     }
     isFurnitureManualConnecting = false;
+    isFurnitureManualRouting = false;
     isFurnitureDrawingStroke = false;
     furnitureManualSegmentDraft = [];
+    furnitureManualSelectedPinIndices = [];
+    furnitureManualRollingHeading = null;
     try { map.dragPan.enable(); } catch (e) {}
     renderAllFurnitureMapElements();
 }
 
-function handleManualConnectSnapToPin(targetIdx) {
+async function handleManualConnectSnapToPin(targetIdx) {
     if (!isFurnitureManualConnecting) return;
-    if (targetIdx < 1 || targetIdx >= furnitureActiveData.pins.length) return;
+    if (targetIdx < 0 || targetIdx >= furnitureActiveData.pins.length) return;
+    if (isFurnitureManualRouting) {
+        showFurnitureToast('⏳ 正在計算上一段道路路徑，請稍候...');
+        return;
+    }
 
     const targetPin = furnitureActiveData.pins[targetIdx];
     const targetCoord = [targetPin.lng, targetPin.lat];
-    const segCoords = furnitureManualSegmentDraft.length >= 1
-        ? [...furnitureManualSegmentDraft, targetCoord]
-        : [furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1], targetCoord];
 
-    const densified = densifyRoadCoordinates(segCoords, 8);
-    for (let i = 1; i < densified.length; i++) {
-        furnitureManualConnectedCoords.push(densified[i]);
+    // 1. 點選第 1 支起點插針（A）
+    if (furnitureManualSelectedPinIndices.length === 0) {
+        furnitureManualSelectedPinIndices.push(targetIdx);
+        furnitureManualConnectedCoords = [targetCoord];
+        furnitureManualSegmentDraft = [targetCoord];
+        furnitureManualTargetPinIdx = 1;
+        furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+        vibrate(25);
+        renderAllFurnitureMapElements();
+        showFurnitureToast(`📍 已設定起點 #${targetIdx + 1} 號針！請點選下一支要串接的插針`);
+        return;
     }
 
-    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
-    furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
-    furnitureActiveData.updatedAt = Date.now();
-    isLocalFurnitureDirty = true;
-    saveLocalFurnitureBackup();
-    vibrate(35);
+    // 避免連續重複點擊同一支針
+    const prevIdx = furnitureManualSelectedPinIndices[furnitureManualSelectedPinIndices.length - 1];
+    if (targetIdx === prevIdx) {
+        showFurnitureToast(`ℹ️ 目前已停在 #${targetIdx + 1} 號針，請點選其他插針`);
+        return;
+    }
 
-    if (targetIdx >= furnitureActiveData.pins.length - 1) {
-        stopFurnitureManualConnectMode(true);
-        showFurnitureToast(`🎉 已完成手動拉線串聯 1 ➔ ${furnitureActiveData.pins.length} 號針（${furnitureActiveData.distanceKm} km）`);
-    } else {
-        furnitureManualTargetPinIdx = targetIdx + 1;
+    const prevPin = furnitureActiveData.pins[prevIdx];
+    isFurnitureManualRouting = true;
+    showFurnitureToast(`🛣️ 正在依附道路串接 #${prevIdx + 1} ➔ #${targetIdx + 1}...`);
+
+    try {
+        const { coords, usedOsrm, endHeading } = await fetchFurnitureOsrmSegmentGeometry(
+            prevPin.lng,
+            prevPin.lat,
+            targetPin.lng,
+            targetPin.lat,
+            {
+                startHeading: furnitureManualRollingHeading,
+                originUnrestricted: (furnitureManualSelectedPinIndices.length === 1),
+                snapRadiusM: FURNITURE_OSRM_SNAP_RADIUS_M
+            }
+        );
+
+        // 若等待 OSRM 回傳期間使用者已結束手動模式，安全中止不覆寫
+        if (!isFurnitureManualConnecting) return;
+
+        if (typeof endHeading === 'number' && !isNaN(endHeading)) {
+            furnitureManualRollingHeading = endHeading;
+        }
+
+        const densified = densifyRoadCoordinates(coords, 8);
+        if (furnitureManualConnectedCoords.length === 0 && densified.length > 0) {
+            furnitureManualConnectedCoords.push(densified[0]);
+        }
+        for (let i = 1; i < densified.length; i++) {
+            furnitureManualConnectedCoords.push(densified[i]);
+        }
+
+        furnitureManualSelectedPinIndices.push(targetIdx);
+        furnitureManualTargetPinIdx = furnitureManualSelectedPinIndices.length;
         furnitureManualSegmentDraft = [targetCoord];
-        renderAllFurnitureMapElements();
-        showFurnitureToast(`✅ 已吸附 #${targetIdx + 1} 號針！請繼續連向 #${furnitureManualTargetPinIdx + 1} 號針`);
+
+        furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
+        furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
+        furnitureActiveData.updatedAt = Date.now();
+        isLocalFurnitureDirty = true;
+        saveLocalFurnitureBackup();
+        vibrate(35);
+
+        const uniqueSelectedCount = new Set(furnitureManualSelectedPinIndices).size;
+        if (uniqueSelectedCount >= furnitureActiveData.pins.length) {
+            const totalKm = furnitureActiveData.distanceKm;
+            const totalCount = furnitureManualSelectedPinIndices.length;
+            stopFurnitureManualConnectMode(true);
+            showFurnitureToast(
+                usedOsrm
+                    ? `🎉 已完成手動沿路串聯（共 ${totalCount} 針，${totalKm} km）`
+                    : `⚠️ 末段道路算路逾時改以直線保底，已完成手動串聯（${totalKm} km）`
+            );
+        } else {
+            renderAllFurnitureMapElements();
+            showFurnitureToast(
+                usedOsrm
+                    ? `✅ 已沿路串接 #${prevIdx + 1} ➔ #${targetIdx + 1}（累計 ${furnitureActiveData.distanceKm} km），請點選下一支針或按「完成手拉」`
+                    : `⚠️ #${prevIdx + 1} ➔ #${targetIdx + 1} 道路算路逾時／失敗，已暫以直線連接該段`
+            );
+        }
+    } finally {
+        isFurnitureManualRouting = false;
     }
 }
 
 function handleFurnitureManualClickPoint(lng, lat) {
-    if (!isFurnitureManualConnecting) return;
-    const targetPin = furnitureActiveData.pins[furnitureManualTargetPinIdx];
-    if (!targetPin) return;
+    if (!isFurnitureManualConnecting || isFurnitureManualRouting) return;
+    if (!Array.isArray(furnitureActiveData.pins) || furnitureActiveData.pins.length === 0) return;
 
-    const distToTargetM = getDistanceKm(lng, lat, targetPin.lng, targetPin.lat) * 1000;
-    if (distToTargetM <= 25) {
-        handleManualConnectSnapToPin(furnitureManualTargetPinIdx);
-        return;
+    // 點擊地圖時自動搜尋 35m 內最近的插針並觸發道路吸附串接（不再繪製任意直線飛鳥線）
+    let nearestIdx = -1;
+    let nearestDistM = 35;
+    for (let i = 0; i < furnitureActiveData.pins.length; i++) {
+        const p = furnitureActiveData.pins[i];
+        const d = getDistanceKm(lng, lat, p.lng, p.lat) * 1000;
+        if (d <= nearestDistM) {
+            nearestDistM = d;
+            nearestIdx = i;
+        }
     }
-
-    furnitureManualSegmentDraft.push([lng, lat]);
-    furnitureManualConnectedCoords.push([lng, lat]);
-    furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
-    furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
-    renderAllFurnitureMapElements();
+    if (nearestIdx !== -1) {
+        handleManualConnectSnapToPin(nearestIdx);
+    }
 }
 
 (function setupFurnitureManualFreehandGesture() {
-    const canvasContainer = map.getCanvasContainer();
-
-    function getLngLat(clientX, clientY) {
-        const rect = canvasContainer.getBoundingClientRect();
-        return map.unproject([clientX - rect.left, clientY - rect.top]);
-    }
-
-    function onStart(clientX, clientY, rawEv) {
-        if (!isFurnitureModeActive || !isFurnitureManualConnecting) return;
-        const targetEl = rawEv?.target;
-        if (targetEl && targetEl.closest && targetEl.closest('.furniture-pin-wrapper, .furniture-popup-wrapper')) return;
-        if (furnitureManualConnectedCoords.length === 0) return;
-
-        const lngLat = getLngLat(clientX, clientY);
-        const lastAnchor = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
-        const distFromAnchorM = getDistanceKm(lngLat.lng, lngLat.lat, lastAnchor[0], lastAnchor[1]) * 1000;
-        if (distFromAnchorM > 55) return;
-
-        isFurnitureDrawingStroke = true;
-        furnitureManualSegmentDraft = [lastAnchor, [Number(lngLat.lng.toFixed(6)), Number(lngLat.lat.toFixed(6))]];
-        try { map.dragPan.disable(); } catch (e) {}
-    }
-
-    function onMove(clientX, clientY) {
-        if (!isFurnitureModeActive || !isFurnitureManualConnecting || !isFurnitureDrawingStroke) return;
-        const targetPin = furnitureActiveData?.pins?.[furnitureManualTargetPinIdx];
-        if (!targetPin) return;
-
-        const lngLat = getLngLat(clientX, clientY);
-        const curLng = Number(lngLat.lng.toFixed(6));
-        const curLat = Number(lngLat.lat.toFixed(6));
-
-        const [lastLng, lastLat] = furnitureManualSegmentDraft[furnitureManualSegmentDraft.length - 1];
-        if (getDistanceKm(lastLng, lastLat, curLng, curLat) * 1000 >= 4) {
-            furnitureManualSegmentDraft.push([curLng, curLat]);
-            renderAllFurnitureMapElements();
-        }
-
-        const distToTargetM = getDistanceKm(curLng, curLat, targetPin.lng, targetPin.lat) * 1000;
-        if (distToTargetM <= 25) {
-            isFurnitureDrawingStroke = false;
-            try { map.dragPan.enable(); } catch (e) {}
-            handleManualConnectSnapToPin(furnitureManualTargetPinIdx);
-        }
-    }
-
-    function onEnd() {
-        if (!isFurnitureDrawingStroke) return;
-        isFurnitureDrawingStroke = false;
-        try { map.dragPan.enable(); } catch (e) {}
-        if (furnitureManualSegmentDraft.length >= 2) {
-            for (let i = 1; i < furnitureManualSegmentDraft.length; i++) {
-                furnitureManualConnectedCoords.push(furnitureManualSegmentDraft[i]);
-            }
-            const lastPt = furnitureManualConnectedCoords[furnitureManualConnectedCoords.length - 1];
-            furnitureManualSegmentDraft = [lastPt];
-            furnitureActiveData.routeCoords = [...furnitureManualConnectedCoords];
-            furnitureActiveData.distanceKm = computeCoordsDistanceKm(furnitureActiveData.routeCoords);
-            renderAllFurnitureMapElements();
-        }
-    }
-
-    canvasContainer.addEventListener('touchstart', (e) => {
-        if (!isFurnitureModeActive || !isFurnitureManualConnecting) return;
-        if (e.touches && e.touches.length >= 2) {
-            isFurnitureDrawingStroke = false;
-            try { map.dragPan.enable(); } catch (err) {}
-            return;
-        }
-        if (e.touches && e.touches.length === 1) {
-            onStart(e.touches[0].clientX, e.touches[0].clientY, e);
-        }
-    }, { passive: true });
-
-    canvasContainer.addEventListener('touchmove', (e) => {
-        if (!isFurnitureModeActive || !isFurnitureManualConnecting || !isFurnitureDrawingStroke) return;
-        if (e.touches && e.touches.length >= 2) {
-            isFurnitureDrawingStroke = false;
-            try { map.dragPan.enable(); } catch (err) {}
-            return;
-        }
-        if (e.touches && e.touches.length === 1) {
-            if (e.cancelable) e.preventDefault();
-            onMove(e.touches[0].clientX, e.touches[0].clientY);
-        }
-    }, { passive: false });
-
-    canvasContainer.addEventListener('touchend', () => onEnd(), { passive: true });
-    canvasContainer.addEventListener('mousedown', (e) => {
-        if (e.button === 0) onStart(e.clientX, e.clientY, e);
-    });
-    window.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
-    window.addEventListener('mouseup', () => onEnd());
+    // 手動拉線串已升級為「點選插針自動依附 OSRM 道路最短路徑」，保留地圖正常拖曳縮放，不再攔截手繪直線
 })();
 
 document.getElementById('btnFurnitureManualConnect')?.addEventListener('click', () => {

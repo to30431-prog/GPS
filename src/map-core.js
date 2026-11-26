@@ -2607,7 +2607,15 @@ function prepareVoiceMarkerEvents(route, includeImplicitMusicTransitions = false
         ev.played = false;
         ev.prePlayed = false;
 
-        let evPtIdx = (typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : -1;
+        const hasExplicitPointIndex = (
+            typeof ev.pointIndex === 'number' &&
+            Number.isInteger(ev.pointIndex) &&
+            ev.pointIndex >= 0 &&
+            ev.pointIndex < pts.length
+        );
+        let evPtIdx = hasExplicitPointIndex
+            ? ev.pointIndex
+            : ((typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : -1);
         if (evPtIdx === -1) {
             let bestScore = Infinity;
             let bestIdx = 0;
@@ -2629,6 +2637,8 @@ function prepareVoiceMarkerEvents(route, includeImplicitMusicTransitions = false
         return {
             ...ev,
             ptIdx: evPtIdx,
+            pointIndex: hasExplicitPointIndex ? ev.pointIndex : undefined,
+            hasExplicitPointIndex,
             segmentBearing,
             played: false,
             prePlayed: false,
@@ -2707,28 +2717,34 @@ function evaluateVoiceMarkersWithProgress({
             ? ev.segmentBearing
             : getRouteSegmentBearing(pts, evIdx);
 
+        const REMINDER_POINT_INDEX_WINDOW = 20;
+        const idxDeltaToEvent = Math.abs(trackIdx - evIdx);
+        const isInPointIndexWindow = (!ev.hasExplicitPointIndex || idxDeltaToEvent <= REMINDER_POINT_INDEX_WINDOW);
+
         // --- 第二層：近距離確認提醒（含語音開啟、關閉、注意點） ---
         let shouldTriggerConfirm = false;
         if (isFollowMode) {
-            // 雙重防呆觸發條件（任一條件成立即觸發，確保沿線經過絕不漏接）：
-            // A. 實際座標進入容錯半徑（35~45m 以上），且位於該路段合理前後區間內（避免誤觸遠端重疊回程）
+            // 雙重防呆觸發條件（具 pointIndex 時須同步落於前後 20 個節點窗口內，防止去回程重疊路線跨趟誤報）：
+            // A. 實際座標進入容錯半徑（35~45m 以上），且位於該路段合理前後區間內
             const enteredRadius = (
+                isInPointIndexWindow &&
                 directDistMeters <= confirmDist &&
-                ((aheadRouteMeters <= (confirmDist + 35) && aheadRouteMeters >= -75) || Math.abs(evIdx - trackIdx) <= 35)
+                ((aheadRouteMeters <= (confirmDist + 35) && aheadRouteMeters >= -75) || (!ev.hasExplicitPointIndex && idxDeltaToEvent <= 35))
             );
             // B. 路線進度索引已順序推進越過該提醒點所在軌跡位置（且該點尚未觸發過）
             const passedByProgress = (
+                isInPointIndexWindow &&
                 trackIdx >= evIdx &&
                 (prevIdx <= evIdx || (trackIdx - evIdx) <= 20) &&
                 aheadRouteMeters >= -90
             );
             shouldTriggerConfirm = (enteredRadius || passedByProgress);
         } else {
-            // 重播模式維持原有嚴格三條件
+            // 重播模式維持原有嚴格三條件（具 pointIndex 時同步套用前後 20 個節點窗口保護）
             const isWithinConfirmRadius = (directDistMeters <= confirmDist && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
             const bearingDiffConfirm = Math.abs(getAngleDiff(vehicleBearing, markerSegBearing));
             const isConfirmDirectionAligned = (bearingDiffConfirm <= bearingTol);
-            const isConfirmIndexInZone = (trackIdx <= evIdx + 12 && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
+            const isConfirmIndexInZone = (isInPointIndexWindow && trackIdx <= evIdx + 12 && aheadRouteMeters <= (confirmDist + 5) && aheadRouteMeters >= -30);
             shouldTriggerConfirm = (isWithinConfirmRadius && isConfirmDirectionAligned && isConfirmIndexInZone);
         }
 
@@ -2766,8 +2782,8 @@ function evaluateVoiceMarkersWithProgress({
         const isLookAheadDirectionAligned = isFollowMode
             ? (bearingDiffCurrentSeg <= Math.max(bearingTol, 60) || bearingDiffConfirm <= Math.max(bearingTol, 60))
             : (bearingDiffCurrentSeg <= bearingTol || bearingDiffConfirm <= bearingTol);
-        // 條件 3：currentTrackIndex 位於標記點前瞻索引區間（trackIdx < evIdx）且尚未播報
-        const isLookAheadIndexInZone = (trackIdx < evIdx);
+        // 條件 3：currentTrackIndex 位於標記點前瞻索引區間（trackIdx < evIdx）且尚未播報（具 pointIndex 時限制於合理前瞻節點範圍內）
+        const isLookAheadIndexInZone = (trackIdx < evIdx && (!ev.hasExplicitPointIndex || (evIdx - trackIdx) <= 45));
 
         if (isWithinLookAheadZone && isLookAheadDirectionAligned && isLookAheadIndexInZone && ev.prePlayed !== true) {
             ev.prePlayed = true;
@@ -2866,14 +2882,17 @@ function updatePassedRouteReminders({
         const aheadRouteMeters = evCumM - currentTrackCumM;
         const directDistMeters = getDistanceKm(lng, lat, ev.lng, ev.lat) * 1000;
 
-        // 雙重條件（不干擾原語音觸發時機）：
-        // 1. 車輛座標進入合理觸發半徑（約 30 公尺）且位於該提醒對應的軌跡進度區間內（避免回程重疊路段提前變灰）
+        // 雙重條件（不干擾原語音觸發時機；具 pointIndex 時嚴格限定前後 20 個節點窗口內才允許觸發變灰，避免重疊路段跨趟提前變灰）：
+        const idxDelta = Math.abs(evIdx - trackIdx);
+        const withinPointWindow = (!ev.hasExplicitPointIndex || idxDelta <= 20);
+        // 1. 車輛座標進入合理觸發半徑（約 30 公尺）且位於該提醒對應的軌跡進度區間內
         const enteredTouchRadius = (
+            withinPointWindow &&
             directDistMeters <= touchRadiusMeters &&
-            ((aheadRouteMeters <= (touchRadiusMeters + 35) && aheadRouteMeters >= -60) || Math.abs(evIdx - trackIdx) <= 25)
+            ((aheadRouteMeters <= (touchRadiusMeters + 35) && aheadRouteMeters >= -60) || (!ev.hasExplicitPointIndex && idxDelta <= 25))
         );
         // 2. 路線行進／重播進度已通過該提醒綁定的軌跡節點
-        const passedTrackNode = (trackIdx >= evIdx);
+        const passedTrackNode = (trackIdx >= evIdx && (!ev.hasExplicitPointIndex || (trackIdx - evIdx) <= 20));
 
         if (enteredTouchRadius || passedTrackNode) {
             markRouteReminderKeyPassed(key);

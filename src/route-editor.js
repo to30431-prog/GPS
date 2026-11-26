@@ -1982,15 +1982,19 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = null, dro
     const updatedAlerts = [];
     (route.events || []).forEach(ev => {
         if (!ev || ev.type !== 'alert') return;
-        let minD = Infinity, bestIdx = 0;
-        for (let i = 0; i < pts.length; i++) {
-            const d = getDistanceKm(ev.lng, ev.lat, pts[i].lng, pts[i].lat);
-            if (d < minD) { minD = d; bestIdx = i; }
-        }
-        if (dropTrimmedOutliers && minD * 1000 > 55) return;
+        const preferredIdx = (typeof ev.pointIndex === 'number' && ev.pointIndex >= 0 && ev.pointIndex < pts.length)
+            ? ev.pointIndex
+            : ((typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : -1);
+        const snapped = findNearestRoutePointIndexForReminder(pts, ev.lng, ev.lat, preferredIdx);
+        if (!snapped) return;
+        if (dropTrimmedOutliers && snapped.distMeters > 55) return;
+        const bestIdx = snapped.idx;
         updatedAlerts.push({
             ...ev,
+            lng: pts[bestIdx].lng,
+            lat: pts[bestIdx].lat,
             ptIdx: bestIdx,
+            pointIndex: bestIdx,
             bearing: pts[bestIdx].bearing || 0
         });
     });
@@ -2003,6 +2007,7 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = null, dro
             lng: pts[0].lng,
             lat: pts[0].lat,
             ptIdx: 0,
+            pointIndex: 0,
             bearing: pts[0].bearing || 0
         });
     }
@@ -2015,6 +2020,7 @@ function syncRouteMarkersAndIndicesAfterSpline(route, preservedStops = null, dro
                 lng: pts[i].lng,
                 lat: pts[i].lat,
                 ptIdx: i,
+                pointIndex: i,
                 bearing: pts[i].bearing || 0
             });
         }
@@ -3260,6 +3266,32 @@ document.getElementById('editRouteBtn').onclick = () => {
     renderEditableRouteMarkers(workingRoute);
 };
 
+function findNearestRoutePointIndexForReminder(pts, lng, lat, preferredIdx = -1) {
+    if (!Array.isArray(pts) || pts.length === 0) return null;
+    const hasPreferred = (typeof preferredIdx === 'number' && preferredIdx >= 0 && preferredIdx < pts.length);
+    let bestScore = Infinity;
+    let bestIdx = 0;
+    let bestDistM = Infinity;
+
+    for (let i = 0; i < pts.length; i++) {
+        const dMeters = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
+        let score = dMeters;
+        // 若同一路線有去回程重疊且距離接近，優先吸附至鄰近既有／選取區段的節點，避免跨趟吸附錯位
+        if (hasPreferred) {
+            const idxGap = Math.abs(i - preferredIdx);
+            if (idxGap > 25) {
+                score += Math.min(18, 6 + idxGap * 0.05);
+            }
+        }
+        if (score < bestScore) {
+            bestScore = score;
+            bestIdx = i;
+            bestDistM = dMeters;
+        }
+    }
+    return { idx: bestIdx, pt: pts[bestIdx], distMeters: bestDistM };
+}
+
 function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
     clearDomMarkers();
     const pts = route.points;
@@ -3269,7 +3301,28 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
 
     (route.events || []).forEach((ev, idx) => {
         if (ev.type === 'alert') {
-            createCompactAlertPinMarker(route, ev, idx);
+            const alertMarker = createCompactAlertPinMarker(route, ev, idx);
+            if (alertMarker && typeof alertMarker.setDraggable === 'function') {
+                alertMarker.setDraggable(true);
+                alertMarker.on('dragstart', () => {
+                    pushEditUndoSnapshot(route);
+                });
+                alertMarker.on('dragend', () => {
+                    const newLngLat = alertMarker.getLngLat();
+                    const prefIdx = (typeof ev.pointIndex === 'number' && ev.pointIndex >= 0 && ev.pointIndex < pts.length)
+                        ? ev.pointIndex
+                        : ((typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : selectedEditNodeIdx);
+                    const snapped = findNearestRoutePointIndexForReminder(pts, newLngLat.lng, newLngLat.lat, prefIdx);
+                    if (snapped && snapped.pt) {
+                        ev.lng = snapped.pt.lng;
+                        ev.lat = snapped.pt.lat;
+                        ev.pointIndex = snapped.idx;
+                        ev.ptIdx = snapped.idx;
+                        ev.bearing = snapped.pt.bearing || 0;
+                    }
+                    renderEditableRouteMarkers(route);
+                });
+            }
             return;
         }
         const badgeClass = ev.type === 'on' ? 'music-on-pin' : 'music-off-pin';
@@ -3278,15 +3331,34 @@ function renderEditableRouteMarkers(route, autoFocusCalloutId = null) {
         const wrapperEl = document.createElement('div');
         wrapperEl.className = 'pin-se-wrapper';
         const markerEl = document.createElement('div');
-        markerEl.className = `music-marker ${badgeClass}`;
+        markerEl.className = `music-marker ${badgeClass} cursor-grab active:cursor-grabbing`;
         markerEl.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
         wrapperEl.appendChild(markerEl);
         const m = new maplibregl.Marker({
             element: wrapperEl,
             anchor: 'center',
+            draggable: true,
             rotationAlignment: 'viewport',
             pitchAlignment: 'viewport'
         }).setLngLat([ev.lng, ev.lat]).addTo(map);
+        m.on('dragstart', () => {
+            pushEditUndoSnapshot(route);
+        });
+        m.on('dragend', () => {
+            const newLngLat = m.getLngLat();
+            const prefIdx = (typeof ev.pointIndex === 'number' && ev.pointIndex >= 0 && ev.pointIndex < pts.length)
+                ? ev.pointIndex
+                : ((typeof ev.ptIdx === 'number' && ev.ptIdx >= 0 && ev.ptIdx < pts.length) ? ev.ptIdx : selectedEditNodeIdx);
+            const snapped = findNearestRoutePointIndexForReminder(pts, newLngLat.lng, newLngLat.lat, prefIdx);
+            if (snapped && snapped.pt) {
+                ev.lng = snapped.pt.lng;
+                ev.lat = snapped.pt.lat;
+                ev.pointIndex = snapped.idx;
+                ev.ptIdx = snapped.idx;
+                ev.bearing = snapped.pt.bearing || 0;
+            }
+            renderEditableRouteMarkers(route);
+        });
         domMarkers.push(m);
     });
 
@@ -4659,6 +4731,7 @@ function buildManualRouteFromSteps() {
                     lng: lng0,
                     lat: lat0,
                     ptIdx: 0,
+                    pointIndex: 0,
                     bearing: 0
                 });
             }
@@ -4672,6 +4745,7 @@ function buildManualRouteFromSteps() {
                     lng: transPt.lng,
                     lat: transPt.lat,
                     ptIdx: transIdx,
+                    pointIndex: transIdx,
                     bearing: transPt.bearing || 0
                 });
             }
@@ -6600,6 +6674,7 @@ function openAlertModalForCreate(route, ptIndex) {
                     lng: lockedLng,
                     lat: lockedLat,
                     ptIdx: ptIndex,
+                    pointIndex: ptIndex,
                     bearing: lockedBearing,
                     createdAt: lockedTime
                 };
@@ -6642,6 +6717,7 @@ function openAlertModalForCreate(route, ptIndex) {
             lng: lockedLng,
             lat: lockedLat,
             ptIdx: ptIndex,
+            pointIndex: ptIndex,
             bearing: lockedBearing
         };
         if (currentAlertPhotoBase64) newEv.photo = currentAlertPhotoBase64;

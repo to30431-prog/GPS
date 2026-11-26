@@ -499,6 +499,14 @@
         width: 58px !important;
         height: 58px !important;
       }
+      button .vehicle-img-wrap[data-car="santa_sleigh"] .vehicle-sprite-stack,
+.car-option .vehicle-img-wrap[data-car="santa_sleigh"] .vehicle-sprite-stack,
+[data-car-select] .vehicle-img-wrap[data-car="santa_sleigh"] .vehicle-sprite-stack,
+.car-picker-item .vehicle-img-wrap[data-car="santa_sleigh"] .vehicle-sprite-stack,
+.vehicle-card .vehicle-img-wrap[data-car="santa_sleigh"] .vehicle-sprite-stack {
+  transform: scale(1.35);
+  transform-origin: center center;
+}
       .vehicle-img-wrap.is-moving[data-car="turtle"] > img {
         animation: turtleWaddleTopDown 0.55s ease-in-out infinite alternate;
       }

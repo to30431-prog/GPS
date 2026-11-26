@@ -46,6 +46,7 @@
       src: './assets/cars/thousand_sunny.png',
       width: 140,
       height: 140,
+      mapScale: 0.76,
       baseAngle: 0
     },
     turtle: {
@@ -75,6 +76,7 @@
       ],
       width: 136,
       height: 136,
+      mapScale: 1.32,
       baseAngle: 0
     },
     lion_dance: {
@@ -89,6 +91,7 @@
       ],
       width: 92,
       height: 92,
+      mapScale: 1.15,
       baseAngle: 0
     },
     pumpkin_carriage: {
@@ -102,7 +105,7 @@
       ],
       width: 136,
       height: 136,
-      mapScale: 0.7,
+      mapScale: 0.80,
       baseAngle: 0
     }
   };

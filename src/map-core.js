@@ -2748,7 +2748,7 @@ function evaluateVoiceMarkersWithProgress({
                 speakText('請關閉音樂');
             } else if (ev.type === 'alert') {
                 showNavAlert('⚠️', ev.note || '注意路況', 'bg-amber-600', ev.photo || null);
-                speakText(`前方提醒，${ev.note || '注意路況'}`);
+                speakText(ev.note || '注意路況');
             }
             if (onTriggerWake) autoSleepScreen();
             return;

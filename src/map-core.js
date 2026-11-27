@@ -2103,6 +2103,19 @@ function clearTemporaryPanResumeTimer() {
     }
 }
 
+function cancelTemporaryCameraAutoResume() {
+    isTemporarilyPanning = false;
+    clearTemporaryPanResumeTimer();
+}
+
+// 嚴格限定僅在「遵循導航進行中（followWatchId !== null）＋ 跟隨中（非自由看）＋ 非路線編輯／手繪模式」才允許 3 秒暫停後自動吸回
+function canAutoResumeCameraFollow() {
+    if (!isFollowingCamera) return false;
+    if (typeof isEditingMode !== 'undefined' && isEditingMode) return false;
+    if (typeof isManualDrawMode !== 'undefined' && isManualDrawMode) return false;
+    return (typeof followWatchId !== 'undefined' && followWatchId !== null);
+}
+
 function recenterCameraToVehicle(durationMs = 450) {
     if (!map || !lastKnownLngLat) return;
     const resumeZoom = (followWatchId !== null || isRecording)
@@ -2125,7 +2138,10 @@ function recenterCameraToVehicle(durationMs = 450) {
 }
 
 function pauseCameraFollowTemporarily(scheduleImmediately = false) {
-    if (!isFollowingCamera) return;
+    if (!canAutoResumeCameraFollow()) {
+        cancelTemporaryCameraAutoResume();
+        return;
+    }
     isTemporarilyPanning = true;
     clearTemporaryPanResumeTimer();
     if (scheduleImmediately) {
@@ -2134,11 +2150,15 @@ function pauseCameraFollowTemporarily(scheduleImmediately = false) {
 }
 
 function scheduleCameraFollowAutoResume() {
-    if (!isFollowingCamera || !isTemporarilyPanning) return;
+    if (!canAutoResumeCameraFollow() || !isTemporarilyPanning) {
+        clearTemporaryPanResumeTimer();
+        if (!canAutoResumeCameraFollow()) isTemporarilyPanning = false;
+        return;
+    }
     clearTemporaryPanResumeTimer();
     temporaryPanResumeTimer = setTimeout(() => {
         temporaryPanResumeTimer = null;
-        if (!isFollowingCamera) {
+        if (!canAutoResumeCameraFollow()) {
             isTemporarilyPanning = false;
             return;
         }

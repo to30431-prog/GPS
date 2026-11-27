@@ -4266,6 +4266,9 @@ document.getElementById('editRouteBtn').onclick = () => {
     if (normalEditActionRow) normalEditActionRow.classList.remove('hidden');
 
     isEditingMode = true;
+    if (typeof cancelTemporaryCameraAutoResume === 'function') {
+        cancelTemporaryCameraAutoResume();
+    }
     editStep = 0;
     selectedEditNodeIdx = -1;
     freehandUndoStack = [];

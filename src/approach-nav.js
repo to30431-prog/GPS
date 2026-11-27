@@ -1635,6 +1635,7 @@
         hidePromptButton();
         setRightToolbarCollapsed(true);
         enterActiveNavChrome();
+        if (typeof requestScreenWakeLock === 'function') requestScreenWakeLock();
 
         // 保底確認正式清運路線維持完整原色（未走過進度 index = 0），不被誤染為灰色
         try {
@@ -1723,6 +1724,7 @@
             hasSpokenNearStart80m = false;
             lastDistToStartM = Infinity;
             hidePromptButton();
+            if (typeof releaseScreenWakeLockIfIdle === 'function') releaseScreenWakeLockIfIdle();
             return;
         }
 
@@ -1769,6 +1771,7 @@
             clearApproachMapLine();
             hideTurnCardUI();
             exitActiveNavChrome();
+            if (typeof releaseScreenWakeLockIfIdle === 'function') releaseScreenWakeLockIfIdle();
         }
     }
 
@@ -1882,6 +1885,7 @@
 
         setRightToolbarCollapsed(true);
         enterActiveNavChrome();
+        if (typeof requestScreenWakeLock === 'function') requestScreenWakeLock();
         if (typeof setCameraFollow === 'function') setCameraFollow(true);
         setApproachMapLine(approachPolylineCoords, isApproachFallbackMode);
         evaluateActiveGuidance(origin.lng, origin.lat, true);
@@ -2153,6 +2157,11 @@
         isActive() {
             // 僅在「前往起點導航」進行中回傳 true 以隔離正式清運路線進度與灰線渲染
             return Boolean(isApproachActive && activeNavMode === 'approach');
+        },
+
+        isAnyNavActive() {
+            // 「前往起點導航」或「自由導航」任一進行中皆回傳 true，供 Wake Lock 防休眠判定
+            return Boolean(isApproachActive);
         },
 
         isPromptVisible() {

@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.81';
+const APP_VERSION = 'v3.82';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.81
+// 確保畫面上所有版本號膠囊同步顯示為 v3.82
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -450,7 +450,11 @@ async function requestScreenWakeLock() {
 }
 
 async function releaseScreenWakeLockIfIdle(forceRelease = false) {
-    if (!forceRelease && (isBlackScreenActive || isRecording || followWatchId !== null)) return;
+    const isApproachOrFreeNavActive = Boolean(
+        window.ApproachNav?.isAnyNavActive?.() ||
+        window.ApproachNav?.isActive?.()
+    );
+    if (!forceRelease && (isBlackScreenActive || isRecording || followWatchId !== null || isApproachOrFreeNavActive)) return;
     try {
         if (wakeLock) {
             await wakeLock.release();
@@ -460,6 +464,21 @@ async function releaseScreenWakeLockIfIdle(forceRelease = false) {
         wakeLock = null;
     }
 }
+
+// 頁面由背景返回前景時，若任一導航模式（遵循導航／前往起點導航／自由導航）或錄製／省電進行中，自動重新申請 Wake Lock 維持螢幕恆亮
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const shouldKeepAwake = Boolean(
+        isBlackScreenActive ||
+        isRecording ||
+        followWatchId !== null ||
+        window.ApproachNav?.isAnyNavActive?.() ||
+        window.ApproachNav?.isActive?.()
+    );
+    if (shouldKeepAwake) {
+        requestScreenWakeLock();
+    }
+});
 
 // 徹底停用手機電子羅盤（deviceorientation / deviceorientationabsolute），防止駕駛室金屬磁場干擾
 (function disableDeviceCompass() {

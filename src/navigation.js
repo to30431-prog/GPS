@@ -1504,12 +1504,18 @@ document.getElementById('startFollowBtn').onclick = async () => {
             updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
         }
 
-        // 純唯讀計算距起點與距正式路線最短距離（絕不提前推進 currentTrackIndex 或把正式路線變灰）
+        // 計算距起點與距正式路線最短距離（一般清運同時計算細分線段垂直投影距離，避免節點較疏時在路線上卻誤判離線而卡在前往起點階段）
         const distToStart = getDistanceKm(lng, lat, pts[0].lng, pts[0].lat) * 1000;
         let minDistToFormalRoute = Infinity;
         for (let i = 0; i < pts.length; i++) {
             const dM = getDistanceKm(lng, lat, pts[i].lng, pts[i].lat) * 1000;
             if (dM < minDistToFormalRoute) minDistToFormalRoute = dM;
+        }
+        const preStartRouteMatch = (isGeneralFollowNav && !hasAnnouncedStart && followMatchSegments.length > 0)
+            ? findInitialBestMatchSegment(followMatchSegments, lng, lat, heading, !filtered.isStationary, distToStart <= 80)
+            : null;
+        if (preStartRouteMatch && preStartRouteMatch.distMeters < minDistToFormalRoute) {
+            minDistToFormalRoute = preStartRouteMatch.distMeters;
         }
 
         window.ApproachNav?.onGpsUpdate({
@@ -1524,16 +1530,38 @@ document.getElementById('startFollowBtn').onclick = async () => {
             hasAnnouncedStart
         });
 
-        // 🛡️ 前往起點導航中：完全隔離正式路線進度與灰色已通過渲染，保持原本清運路線顏色正常
+        // 🛡️ 前往起點導航中：若車輛已實際進入起點（<= 45m）或順向行經正式路線區段（垂直距離 <= 35m），立即無縫切換至正式遵循導航並啟動經過變灰
+        let justTransitionedFromApproach = false;
         if (window.ApproachNav?.isActive()) {
-            if (isGeneralFollowNav) updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
-            return;
+            const enteredRouteDuringApproach = (
+                distToStart <= 45 ||
+                (preStartRouteMatch && preStartRouteMatch.distMeters <= FOLLOW_VISIT_RADIUS_METERS && preStartRouteMatch.headingAligned)
+            );
+            if (enteredRouteDuringApproach) {
+                window.ApproachNav.stop(false);
+                justTransitionedFromApproach = true;
+            } else {
+                if (isGeneralFollowNav) updateFollowVehicleAndCamera(lastKnownLngLat, heading, false);
+                return;
+            }
         }
 
-        // 尚未抵達起點或正式路線前（待命前往起點階段）：同樣不提前推進 currentTrackIndex 或將正式路線變灰
+        // 尚未抵達起點或正式路線前（待命前往起點階段）：抵達起點或正式路線 45m 內即啟動正式任務與經過變灰
         if (!hasAnnouncedStart) {
-            if (distToStart <= 45 || minDistToFormalRoute <= 45) {
+            if (justTransitionedFromApproach || distToStart <= 45 || minDistToFormalRoute <= 45) {
                 hasAnnouncedStart = true;
+                justTransitionedFromApproach = true;
+                window.ApproachNav?.onGpsUpdate({
+                    lng,
+                    lat,
+                    heading,
+                    speedKmh: filtered.speedKmh,
+                    rawSpeedMps: (typeof pos?.coords?.speed === 'number' ? pos.coords.speed : null),
+                    route,
+                    minDistToRoute: minDistToFormalRoute,
+                    distToStart,
+                    hasAnnouncedStart: true
+                });
                 document.getElementById('appStatusTitle').innerText = `導航：${route.name}`;
                 showNavAlert('✅', '抵達路線，開始任務', 'bg-green-600');
                 speakText("我們任務開始，路上請注意安全。");
@@ -1782,10 +1810,10 @@ document.getElementById('startFollowBtn').onclick = async () => {
             const exactSnapPos = (isGeneralFollowNav && isSnappedToRoute && matchResult && matchResult.headingAligned)
                 ? { lng: matchResult.projLng, lat: matchResult.projLat, musicActive: matchResult.musicActive }
                 : null;
-            updateProgressRouteLayers(pts, currentTrackIndex, exactSnapPos, 150);
+            updateProgressRouteLayers(pts, currentTrackIndex, exactSnapPos, justTransitionedFromApproach ? 0 : 150);
             if (isGeneralFollowNav && followMatchSegments.length > 0) {
-                updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 250);
-                updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 350);
+                updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, justTransitionedFromApproach ? 0 : 250);
+                updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, justTransitionedFromApproach ? 0 : 350);
                 updateRouteProgressHud(currentTrackIndex, pts.length);
             }
         }

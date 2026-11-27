@@ -2439,6 +2439,252 @@ function computeRouteKeyNodeIndices(pts) {
     return Array.from(keySet).sort((a, b) => a - b);
 }
 
+// ==========================================
+// 🧲 路線編輯器：嚴格區間鎖定（僅修改 i-1 → i → i+1）＋ 道路自動貼合（OSRM）即時開關 ＋ 原始經緯度標記保護
+// ==========================================
+const STORAGE_KEY_EDITOR_AUTO_SNAP_ROAD = 'yingge_editor_auto_snap_road_v1';
+let editorAutoSnapRoad = false; // 預設關閉（純手動直線拉點），可於編輯器工具列即時切換開啟局部 OSRM 貼路
+try {
+    editorAutoSnapRoad = localStorage.getItem(STORAGE_KEY_EDITOR_AUTO_SNAP_ROAD) === 'true';
+} catch (e) {}
+let editorLocalSnapRequestSeq = 0;
+
+function syncEditorAutoSnapRoadUI() {
+    const btn = document.getElementById('btnEditorAutoSnapRoad');
+    const hintEl = document.getElementById('editorSnapHintText');
+    if (btn) {
+        if (editorAutoSnapRoad) {
+            btn.textContent = '🧲 道路貼合：開';
+            btn.className = 'px-2.5 py-1 rounded-lg text-[10.5px] font-black shadow-sm active:scale-95 transition-all whitespace-nowrap flex-shrink-0 border bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700';
+        } else {
+            btn.textContent = '🧲 道路貼合：關';
+            btn.className = 'px-2.5 py-1 rounded-lg text-[10.5px] font-black shadow-sm active:scale-95 transition-all whitespace-nowrap flex-shrink-0 border bg-white hover:bg-gray-100 text-gray-700 border-gray-300';
+        }
+    }
+    if (hintEl) {
+        hintEl.textContent = editorAutoSnapRoad
+            ? '🧲 局部貼路（僅鎖定前後相鄰段 i-1→i→i+1）'
+            : '🔒 鎖定相鄰 1 節點 · 純手動直線拉點';
+    }
+}
+
+document.getElementById('btnEditorAutoSnapRoad')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    editorAutoSnapRoad = !editorAutoSnapRoad;
+    try {
+        localStorage.setItem(STORAGE_KEY_EDITOR_AUTO_SNAP_ROAD, editorAutoSnapRoad ? 'true' : 'false');
+    } catch (err) {}
+    syncEditorAutoSnapRoadUI();
+    try { vibrate(20); } catch (err) {}
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl && isEditingMode && editSubMode === 'path') {
+        promptEl.innerText = editorAutoSnapRoad
+            ? '🧲 已開啟道路貼合（拖曳或刪點僅局部貼齊前後相鄰段，其餘路段完全凍結）'
+            : '✏️ 已切換純手動直線拉點（關閉 OSRM 貼路，巷弄／中庭絕不亂繞路）';
+    }
+});
+syncEditorAutoSnapRoadUI();
+
+// 🛡️ 依既有標記（時刻站牌 / 黃色提醒點 / 音樂事件）原始經緯度重新匹配最近節點索引，避免點數增減造成標記飄移
+function rebindRouteMarkersByOriginalCoords(route, preservedStops = null, dropTrimmedOutliers = false, affectedStartIdx = 1, affectedEndIdx = -1) {
+    if (!route || !Array.isArray(route.points) || route.points.length === 0) return;
+    const pts = route.points;
+
+    const stopsToRestore = Array.isArray(preservedStops)
+        ? preservedStops
+        : pts.filter(p => p.is_stop).map(p => ({
+            lng: p.lng,
+            lat: p.lat,
+            stop_name: p.stop_name,
+            scheduled_time: p.scheduled_time
+        }));
+
+    // 1. 僅重算受影響相鄰區段的方位角，並計算總里程（完全不更動任何既有座標經緯度）
+    const fromIdx = Math.max(1, Number(affectedStartIdx) || 1);
+    const toIdx = affectedEndIdx >= 0
+        ? Math.min(pts.length - 1, affectedEndIdx)
+        : (pts.length - 1);
+    for (let i = fromIdx; i <= toIdx; i++) {
+        if (pts[i].isSegmentStart) continue;
+        const prev = pts[i - 1];
+        const curr = pts[i];
+        const dKm = getDistanceKm(prev.lng, prev.lat, curr.lng, curr.lat);
+        if (dKm * 1000 > 0.05) {
+            curr.bearing = getBearing(prev.lng, prev.lat, curr.lng, curr.lat);
+        }
+    }
+    if (pts.length >= 2 && fromIdx <= 1 && !pts[1].isSegmentStart) {
+        pts[0].bearing = pts[1].bearing || 0;
+    }
+
+    let totalDistKm = 0;
+    for (let i = 1; i < pts.length; i++) {
+        if (pts[i].isSegmentStart) continue;
+        totalDistKm += getDistanceKm(pts[i - 1].lng, pts[i - 1].lat, pts[i].lng, pts[i].lat);
+    }
+    route.distance = totalDistKm.toFixed(2);
+
+    // 2. 依原始經緯度重新匹配時刻站牌 (is_stop) 至最近節點
+    pts.forEach(p => {
+        delete p.is_stop;
+        delete p.stop_name;
+        delete p.scheduled_time;
+    });
+    if (stopsToRestore.length > 0) {
+        stopsToRestore.forEach(st => {
+            let minD = Infinity;
+            let bestIdx = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const d = getDistanceKm(st.lng, st.lat, pts[i].lng, pts[i].lat);
+                if (d < minD) { minD = d; bestIdx = i; }
+            }
+            if (dropTrimmedOutliers && minD * 1000 > 55) return;
+            pts[bestIdx].is_stop = true;
+            pts[bestIdx].stop_name = st.stop_name;
+            pts[bestIdx].scheduled_time = st.scheduled_time;
+        });
+    }
+
+    // 3. 依原始經緯度重新匹配黃色提醒點 (alert) 之最近節點索引（傳入 preferredIdx = -1，杜絕舊索引偏移誤配）
+    const updatedAlerts = [];
+    (route.events || []).forEach(ev => {
+        if (!ev || ev.type !== 'alert') return;
+        const origLng = Number(ev.lng);
+        const origLat = Number(ev.lat);
+        if (isNaN(origLng) || isNaN(origLat)) return;
+        const snapped = (typeof findNearestRoutePointIndexForReminder === 'function')
+            ? findNearestRoutePointIndexForReminder(pts, origLng, origLat, -1)
+            : null;
+        let bestIdx = 0;
+        let distMeters = Infinity;
+        if (snapped) {
+            bestIdx = snapped.idx;
+            distMeters = snapped.distMeters;
+        } else {
+            let minD = Infinity;
+            for (let i = 0; i < pts.length; i++) {
+                const d = getDistanceKm(origLng, origLat, pts[i].lng, pts[i].lat);
+                if (d < minD) { minD = d; bestIdx = i; }
+            }
+            distMeters = minD * 1000;
+        }
+        if (dropTrimmedOutliers && distMeters > 55) return;
+        updatedAlerts.push({
+            ...ev,
+            lng: pts[bestIdx].lng,
+            lat: pts[bestIdx].lat,
+            ptIdx: bestIdx,
+            pointIndex: bestIdx,
+            bearing: pts[bestIdx].bearing || 0
+        });
+    });
+
+    // 4. 依各點既有 musicActive 狀態重建音樂開關事件索引
+    const rebuiltMusicEvents = [];
+    let currentMusic = Boolean(pts[0].musicActive !== undefined ? pts[0].musicActive : pts[0].music);
+    if (currentMusic) {
+        rebuiltMusicEvents.push({
+            type: 'on',
+            lng: pts[0].lng,
+            lat: pts[0].lat,
+            ptIdx: 0,
+            pointIndex: 0,
+            bearing: pts[0].bearing || 0
+        });
+    }
+    for (let i = 1; i < pts.length; i++) {
+        const m = Boolean(pts[i].musicActive !== undefined ? pts[i].musicActive : pts[i].music);
+        if (m !== currentMusic) {
+            currentMusic = m;
+            rebuiltMusicEvents.push({
+                type: currentMusic ? 'on' : 'off',
+                lng: pts[i].lng,
+                lat: pts[i].lat,
+                ptIdx: i,
+                pointIndex: i,
+                bearing: pts[i].bearing || 0
+            });
+        }
+    }
+
+    route.events = [...rebuiltMusicEvents, ...updatedAlerts];
+    updateEditorLiveStatsUI(route);
+}
+
+// 🔒 嚴格鎖定 [i-1, i, i+1] 局部 OSRM 貼路：索引 0..i-1 與 i+1..終點之既有座標完全凍結、一字不改
+async function applyStrictLocalAdjacentSnapAfterNodeDrag(route, ptIdx) {
+    if (!route || !Array.isArray(route.points) || ptIdx < 0 || ptIdx >= route.points.length) return;
+    const reqSeq = ++editorLocalSnapRequestSeq;
+    const pts = route.points;
+
+    const preservedStops = pts.filter(p => p.is_stop).map(p => ({
+        lng: p.lng,
+        lat: p.lat,
+        stop_name: p.stop_name,
+        scheduled_time: p.scheduled_time
+    }));
+
+    const centerOrig = pts[ptIdx];
+    const hasPrev = ptIdx > 0 && !centerOrig.isSegmentStart;
+    const hasNext = ptIdx < pts.length - 1 && !pts[ptIdx + 1].isSegmentStart;
+    const prevPt = hasPrev ? pts[ptIdx - 1] : null;
+    const nextPt = hasNext ? pts[ptIdx + 1] : null;
+
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl) {
+        promptEl.innerText = `🧲 正在僅對節點 #${ptIdx + 1} 前後相鄰段進行局部貼路（其餘路段凍結）...`;
+    }
+
+    const [leftRes, rightRes] = await Promise.all([
+        prevPt ? fetchPointToPointFootRoadGeometry(prevPt.lng, prevPt.lat, centerOrig.lng, centerOrig.lat) : Promise.resolve(null),
+        nextPt ? fetchPointToPointFootRoadGeometry(centerOrig.lng, centerOrig.lat, nextPt.lng, nextPt.lat) : Promise.resolve(null)
+    ]);
+
+    // 若期間使用者已進行新操作或退出編輯模式，捨棄過時回應
+    if (reqSeq !== editorLocalSnapRequestSeq || !isEditingMode || route !== getActiveWorkingRoute()) return;
+
+    const leftMusic = Boolean(prevPt && (prevPt.musicActive !== undefined ? prevPt.musicActive : prevPt.music));
+    const rightMusic = Boolean(centerOrig.musicActive !== undefined ? centerOrig.musicActive : centerOrig.music);
+    const baseTime = Number(centerOrig.time) || Date.now();
+
+    const buildMidPoints = (res, musicFlag) => {
+        if (!res || !res.usedOsrm || !Array.isArray(res.coords) || res.coords.length <= 2) return [];
+        const interior = res.coords.slice(1, -1);
+        return interior.map(([lng, lat], k) => ({
+            lng: Number(Number(lng).toFixed(6)),
+            lat: Number(Number(lat).toFixed(6)),
+            time: baseTime + k,
+            musicActive: musicFlag,
+            music: musicFlag,
+            bearing: 0
+        }));
+    };
+
+    const leftMidPts = buildMidPoints(leftRes, leftMusic);
+    const rightMidPts = buildMidPoints(rightRes, rightMusic);
+
+    // 嚴格保留凍結區間：pts.slice(0, ptIdx) 為 0..i-1、pts.slice(ptIdx + 1) 為 i+1..終點，絕不改動任何座標
+    const newCenterIdx = ptIdx + leftMidPts.length;
+    const frozenPrefix = pts.slice(0, ptIdx);
+    const frozenSuffix = pts.slice(ptIdx + 1);
+    route.points = [...frozenPrefix, ...leftMidPts, centerOrig, ...rightMidPts, ...frozenSuffix];
+    selectedEditNodeIdx = newCenterIdx;
+
+    const affectedEnd = newCenterIdx + rightMidPts.length + 1;
+    rebindRouteMarkersByOriginalCoords(route, preservedStops, false, Math.max(1, ptIdx), affectedEnd);
+    updateRouteLayers(route.points, 0);
+    renderEditableRouteMarkers(route);
+    renderPathEditNodes(route);
+    updateNodeTrimPanelUI(route);
+
+    if (promptEl) {
+        const usedAnyOsrm = Boolean((leftRes && leftRes.usedOsrm) || (rightRes && rightRes.usedOsrm));
+        promptEl.innerText = usedAnyOsrm
+            ? `🧲 已完成節點 #${newCenterIdx + 1} 局部相鄰段貼路（其餘路段完全凍結，總距離 ${route.distance} km）`
+            : `✅ 已更新節點 #${newCenterIdx + 1} 座標（相鄰段以直線連接，總距離 ${route.distance} km）`;
+    }
+}
+
 // 渲染「🖐️ 拖曳微調」模式的關鍵節點與兩節點間的「+ 虛擬中點」
 // 單一節點拖曳後的純局部更新：只重算受影響相鄰區段的方位角與總里程，絕不重算整條路線、不更動既有音樂樣式 (musicActive/music)、不重建 events 或站牌
 function updateLocalRouteAfterNodeDrag(route, affectedStartIdx, affectedEndIdx) {
@@ -2655,14 +2901,20 @@ function renderPathEditNodes(route) {
             activeDraggingEditNodeIdx = -1;
             lastEditNodeDragEndTime = Date.now();
             isNodeTrimDrawerExpanded = false;
-            // 僅更新被操作節點的局部距離與方位角，不呼叫 OSRM 或吸附邏輯改寫路線形狀
-            updateLocalRouteAfterNodeDrag(route, ptIdx, ptIdx);
+            if (editorAutoSnapRoad) {
+                // 開啟道路貼合：嚴格僅針對 [i-1, i, i+1] 執行局部 OSRM 貼路，其餘路段座標 100% 凍結
+                applyStrictLocalAdjacentSnapAfterNodeDrag(route, ptIdx);
+                return;
+            }
+            // 關閉道路貼合（純手動直線拉點）：絕不呼叫 OSRM，僅局部更新相鄰段並依原始座標保護標記索引
+            rebindRouteMarkersByOriginalCoords(route, null, false, Math.max(1, ptIdx), ptIdx + 1);
             updateRouteLayers(route.points, 0);
+            renderEditableRouteMarkers(route);
             renderPathEditNodes(route);
             updateNodeTrimPanelUI(route);
             const promptEl = document.getElementById('editPromptText');
             if (promptEl) {
-                promptEl.innerText = `✅ 已更新節點 #${ptIdx + 1} 座標（總距離 ${route.distance} km）`;
+                promptEl.innerText = `✅ 已手動更新節點 #${ptIdx + 1} 座標（直線連接，總距離 ${route.distance} km）`;
             }
         });
 
@@ -3031,11 +3283,12 @@ function applyExtendFromEndpoint(route, anchorIdx, rawCoords) {
 // ==========================================
 // ✂️ 刪除多餘路線（單點刪除 ／ 刪除此點之前 ／ 刪除此點之後 — 供跟隨節點懸浮修剪氣泡呼叫）
 // ==========================================
-function executeDeleteSingleSelectedNode() {
+async function executeDeleteSingleSelectedNode() {
     const route = getActiveWorkingRoute();
     if (!isEditingMode || !route || !Array.isArray(route.points)) return;
     const pts = route.points;
-    if (selectedEditNodeIdx < 0 || selectedEditNodeIdx >= pts.length) return;
+    const delIdx = selectedEditNodeIdx;
+    if (delIdx < 0 || delIdx >= pts.length) return;
     if (pts.length <= 2) {
         alert('⚠️ 路線至少需保留 2 個軌跡點，無法再刪除節點！');
         return;
@@ -3043,20 +3296,65 @@ function executeDeleteSingleSelectedNode() {
 
     pushEditUndoSnapshot(route);
 
-    const removedNodeNum = selectedEditNodeIdx + 1;
-    pts.splice(selectedEditNodeIdx, 1);
-    selectedEditNodeIdx = Math.min(selectedEditNodeIdx, pts.length - 1);
+    const preservedStops = pts.filter(p => p.is_stop).map(p => ({
+        lng: p.lng,
+        lat: p.lat,
+        stop_name: p.stop_name,
+        scheduled_time: p.scheduled_time
+    }));
 
-    syncRouteMarkersAndIndicesAfterSpline(route, null, true);
+    const removedNodeNum = delIdx + 1;
+    const canBridgeWithOsrm = Boolean(
+        editorAutoSnapRoad &&
+        delIdx > 0 &&
+        delIdx < pts.length - 1 &&
+        !pts[delIdx].isSegmentStart &&
+        !pts[delIdx + 1].isSegmentStart
+    );
+
+    if (canBridgeWithOsrm) {
+        const reqSeq = ++editorLocalSnapRequestSeq;
+        const prevPt = pts[delIdx - 1];
+        const nextPt = pts[delIdx + 1];
+        const bridgeMusic = Boolean(prevPt.musicActive !== undefined ? prevPt.musicActive : prevPt.music);
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = `🧲 正在刪除節點 #${removedNodeNum} 並僅局部貼齊相鄰段...`;
+        }
+        const bridgeRes = await fetchPointToPointFootRoadGeometry(prevPt.lng, prevPt.lat, nextPt.lng, nextPt.lat);
+        if (reqSeq !== editorLocalSnapRequestSeq || !isEditingMode || route !== getActiveWorkingRoute()) return;
+
+        const bridgeMidPts = (bridgeRes && bridgeRes.usedOsrm && Array.isArray(bridgeRes.coords) && bridgeRes.coords.length > 2)
+            ? bridgeRes.coords.slice(1, -1).map(([lng, lat], k) => ({
+                lng: Number(Number(lng).toFixed(6)),
+                lat: Number(Number(lat).toFixed(6)),
+                time: (Number(prevPt.time) || Date.now()) + k,
+                musicActive: bridgeMusic,
+                music: bridgeMusic,
+                bearing: 0
+            }))
+            : [];
+
+        // 嚴格凍結 0..i-1 與 i+1..終點，僅替換被刪除的單一節點區間
+        route.points = [...pts.slice(0, delIdx), ...bridgeMidPts, ...pts.slice(delIdx + 1)];
+        selectedEditNodeIdx = Math.min(delIdx, route.points.length - 1);
+        rebindRouteMarkersByOriginalCoords(route, preservedStops, true, Math.max(1, delIdx), delIdx + bridgeMidPts.length + 1);
+    } else {
+        // 純手動直線模式（或首尾／斷點處）：僅移除第 i 點，0..i-1 與 i+1..終點座標完全凍結
+        pts.splice(delIdx, 1);
+        selectedEditNodeIdx = Math.min(delIdx, pts.length - 1);
+        rebindRouteMarkersByOriginalCoords(route, preservedStops, true, Math.max(1, delIdx), delIdx + 1);
+    }
+
     vibrate(35);
-    updateRouteLayers(route.points);
+    updateRouteLayers(route.points, 0);
     renderEditableRouteMarkers(route);
     renderPathEditNodes(route);
     updateNodeTrimPanelUI(route);
 
     const promptEl = document.getElementById('editPromptText');
     if (promptEl) {
-        promptEl.innerText = `🗑️ 已刪除偏移節點 #${removedNodeNum}（目前總距離 ${route.distance} km）`;
+        promptEl.innerText = `🗑️ 已刪除節點 #${removedNodeNum}（其餘路段凍結，目前總距離 ${route.distance} km）`;
     }
 }
 
@@ -3170,6 +3468,11 @@ function setEditSubMode(mode) {
         ? "bg-teal-600 text-white font-black text-[10px] sm:text-[11px] px-0.5 py-1.5 rounded-lg shadow-sm transition-all active:scale-95 whitespace-nowrap flex items-center justify-center"
         : inactiveClass;
 
+    const pathSnapToolbarEl = document.getElementById('pathSnapToolbar');
+    if (pathSnapToolbarEl) {
+        pathSnapToolbarEl.classList.toggle('hidden', mode !== 'path');
+        if (mode === 'path') syncEditorAutoSnapRoadUI();
+    }
     if (brushAnnotationToolbar) {
         brushAnnotationToolbar.classList.toggle('hidden', mode !== 'brush');
     }

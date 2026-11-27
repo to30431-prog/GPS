@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.93';
+const APP_VERSION = 'v3.94';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.93
+// 確保畫面上所有版本號膠囊同步顯示為 v3.94
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -17,6 +17,83 @@ if (appVersionBadgeEl) {
 const settingsVersionTextEl = document.getElementById('settingsVersionText');
 if (settingsVersionTextEl) {
     settingsVersionTextEl.textContent = `版本 ${APP_VERSION}`;
+}
+
+// ==========================================
+// 📅 單一路線支線星期排程（daySegments）共用工具函數（向下相容未設定之舊路線）
+// ==========================================
+const ROUTE_WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // 週一～週日顯示順序
+const ROUTE_WEEKDAY_NAMES_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+window.activeRoutePreviewWeekday = null; // null = 自動讀取系統今日星期；0~6 = 預覽面板模擬星期
+
+function getEffectiveRouteWeekday() {
+    if (typeof window.activeRoutePreviewWeekday === 'number' && window.activeRoutePreviewWeekday >= 0 && window.activeRoutePreviewWeekday <= 6) {
+        return window.activeRoutePreviewWeekday;
+    }
+    return new Date().getDay();
+}
+
+function getWeekdayLabelZh(dayNum) {
+    const idx = Number(dayNum);
+    return (idx >= 0 && idx <= 6) ? ROUTE_WEEKDAY_NAMES_ZH[idx] : '';
+}
+
+function formatDaySegmentDaysZh(days) {
+    if (!Array.isArray(days) || days.length === 0) return '無執行日';
+    const unique = new Set(days.map(d => Number(d)).filter(d => d >= 0 && d <= 6));
+    if (unique.size >= 7) return '每日';
+    return ROUTE_WEEKDAY_ORDER.filter(d => unique.has(d)).map(d => ROUTE_WEEKDAY_NAMES_ZH[d]).join('');
+}
+
+function normalizeRouteDaySegments(rawList, pointsLen = Infinity) {
+    if (!Array.isArray(rawList) || rawList.length === 0) return [];
+    const maxIdx = Number.isFinite(pointsLen) && pointsLen > 0 ? pointsLen - 1 : Infinity;
+    const result = [];
+    rawList.forEach((seg, idx) => {
+        if (!seg || typeof seg !== 'object') return;
+        let s = Math.max(0, Math.floor(Number(seg.startIdx)));
+        let e = Math.max(0, Math.floor(Number(seg.endIdx)));
+        if (isNaN(s) || isNaN(e)) return;
+        if (s > e) { const tmp = s; s = e; e = tmp; }
+        if (Number.isFinite(maxIdx)) {
+            s = Math.min(maxIdx, s);
+            e = Math.min(maxIdx, e);
+        }
+        if (e <= s) return;
+        const rawDays = Array.isArray(seg.days) ? seg.days : [0, 1, 2, 3, 4, 5, 6];
+        const cleanDays = Array.from(new Set(rawDays.map(d => Number(d)).filter(d => Number.isInteger(d) && d >= 0 && d <= 6)));
+        result.push({
+            id: typeof seg.id === 'string' && seg.id.trim() ? seg.id.trim() : `dseg_${Date.now()}_${idx}`,
+            startIdx: s,
+            endIdx: e,
+            days: cleanDays,
+            label: typeof seg.label === 'string' ? seg.label.trim().slice(0, 24) : ''
+        });
+    });
+    return result;
+}
+
+function getInactiveDaySegmentsForRoute(route, weekday = getEffectiveRouteWeekday()) {
+    if (!route || !Array.isArray(route.daySegments) || route.daySegments.length === 0) return [];
+    const ptsLen = Array.isArray(route.points) ? route.points.length : Infinity;
+    const normalized = normalizeRouteDaySegments(route.daySegments, ptsLen);
+    return normalized.filter(seg => !seg.days.includes(weekday));
+}
+
+function buildInactiveDayEdgeMaskForRoute(route, weekday = getEffectiveRouteWeekday()) {
+    if (!route || !Array.isArray(route.points) || route.points.length < 2) return null;
+    const inactiveSegs = getInactiveDaySegmentsForRoute(route, weekday);
+    if (inactiveSegs.length === 0) return null;
+    const mask = new Uint8Array(route.points.length);
+    for (let s = 0; s < inactiveSegs.length; s++) {
+        const seg = inactiveSegs[s];
+        const from = Math.max(1, seg.startIdx + 1);
+        const to = Math.min(route.points.length - 1, seg.endIdx);
+        for (let i = from; i <= to; i++) {
+            mask[i] = 1;
+        }
+    }
+    return mask;
 }
 
 // ==========================================

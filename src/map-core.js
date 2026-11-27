@@ -144,6 +144,7 @@ const PURE_CHINESE_TEXT_FIELD = [
 let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedInactiveDayBranchGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedCalloutLinesGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedBrushStrokesGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedBrushDraftGeoJSON = { type: 'FeatureCollection', features: [] };
@@ -837,6 +838,28 @@ function ensureCustomRouteSourcesAndLayers() {
                     'line-width': 3.5,
                     'line-dasharray': [2, 1.2],
                     'line-opacity': 0.98
+                }
+            });
+        }
+
+        // 4.2 📅 今日免進支線淡化灰色細虛線圖層（與主線明顯區隔，不誘導轉入）
+        if (!map.getSource('route-inactive-day-branch')) {
+            map.addSource('route-inactive-day-branch', {
+                type: 'geojson',
+                data: cachedInactiveDayBranchGeoJSON || emptyGeoJSON()
+            });
+        }
+        if (!map.getLayer('route-inactive-day-branch-layer')) {
+            map.addLayer({
+                id: 'route-inactive-day-branch-layer',
+                type: 'line',
+                source: 'route-inactive-day-branch',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#94a3b8',
+                    'line-width': 3.5,
+                    'line-dasharray': [2.2, 2.2],
+                    'line-opacity': 0.55
                 }
             });
         }
@@ -2463,54 +2486,71 @@ function computeVisualRightOffsetCoords(points) {
     return result;
 }
 
+// 取得目前對應 points 的支線星期停用遮罩（編輯模式下不隱藏支線，保留完整可編輯視覺；未設定 daySegments 時回傳 null 零開銷）
+function resolveInactiveDayEdgeMaskForPoints(points) {
+    if (!Array.isArray(points) || points.length < 2) return null;
+    if (typeof isEditingMode !== 'undefined' && isEditingMode) return null;
+    if (typeof buildInactiveDayEdgeMaskForRoute !== 'function') return null;
+    let route = null;
+    if (typeof getActivePlaybackOrFollowRoute === 'function') {
+        const active = getActivePlaybackOrFollowRoute();
+        if (active && active.points === points) route = active;
+    }
+    if (!route && Array.isArray(savedRoutes) && typeof selectedRouteIdx === 'number' && selectedRouteIdx >= 0) {
+        const candidate = savedRoutes[selectedRouteIdx];
+        if (candidate && candidate.points === points) route = candidate;
+    }
+    if (!route) return null;
+    return buildInactiveDayEdgeMaskForRoute(route);
+}
+
 // 優化軌跡圖層更新：合併連續同狀態線段，並套用來回重複路段右側平行偏移視覺座標（若遇到 isSegmentStart 獨立手繪線段則斷開不自動接頭尾）
-function buildRouteLayerFeatures(points) {
-    const musicFeatures = [], silentFeatures = [];
+function buildRouteLayerFeatures(points, inactiveEdgeMask = null) {
+    const musicFeatures = [], silentFeatures = [], inactiveFeatures = [];
     if (Array.isArray(points) && points.length >= 2) {
         const visualPts = computeVisualRightOffsetCoords(points);
+        const getEdgeKind = (idx) => {
+            if (inactiveEdgeMask && inactiveEdgeMask[idx] === 1) return 'inactive';
+            return Boolean(points[idx].musicActive) ? 'music' : 'silent';
+        };
+        const pushSegment = (kind, coords) => {
+            if (coords.length < 2) return;
+            const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
+            if (kind === 'inactive') inactiveFeatures.push(feature);
+            else if (kind === 'music') musicFeatures.push(feature);
+            else silentFeatures.push(feature);
+        };
+
         let currentCoords = [[visualPts[0].lng, visualPts[0].lat]];
-        let currentIsMusic = Boolean(points[1].musicActive);
+        let currentKind = getEdgeKind(1);
 
         for (let i = 1; i < points.length; i++) {
             const pt = points[i];
             const vPt = visualPts[i];
-            const isMusic = Boolean(pt.musicActive);
+            const edgeKind = getEdgeKind(i);
 
             // 若為獨立手繪筆畫起點 (isSegmentStart === true)，先結束前一段，嚴禁將前段尾巴與新筆畫起點連成跨區直線
             if (pt.isSegmentStart) {
-                if (currentCoords.length >= 2) {
-                    const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: currentCoords } };
-                    if (currentIsMusic) musicFeatures.push(feature);
-                    else silentFeatures.push(feature);
-                }
+                pushSegment(currentKind, currentCoords);
                 currentCoords = [[vPt.lng, vPt.lat]];
-                const nextMusic = (i + 1 < points.length && !points[i + 1].isSegmentStart)
-                    ? Boolean(points[i + 1].musicActive)
-                    : isMusic;
-                currentIsMusic = nextMusic;
+                currentKind = (i + 1 < points.length && !points[i + 1].isSegmentStart)
+                    ? getEdgeKind(i + 1)
+                    : edgeKind;
                 continue;
             }
 
-            if (isMusic === currentIsMusic) {
+            if (edgeKind === currentKind) {
                 currentCoords.push([vPt.lng, vPt.lat]);
             } else {
-                if (currentCoords.length >= 2) {
-                    const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: currentCoords } };
-                    if (currentIsMusic) musicFeatures.push(feature);
-                    else silentFeatures.push(feature);
-                }
+                pushSegment(currentKind, currentCoords);
                 const prevVPt = visualPts[i - 1];
                 currentCoords = [[prevVPt.lng, prevVPt.lat], [vPt.lng, vPt.lat]];
-                currentIsMusic = isMusic;
+                currentKind = edgeKind;
             }
         }
-        if (currentCoords.length >= 2) {
-            const feature = { type: 'Feature', geometry: { type: 'LineString', coordinates: currentCoords } };
-            if (currentIsMusic) musicFeatures.push(feature);
-            else silentFeatures.push(feature);
-        }
+        pushSegment(currentKind, currentCoords);
     }
-    return { musicFeatures, silentFeatures };
+    return { musicFeatures, silentFeatures, inactiveFeatures };
 }
 
 function updateRouteLayers(points, throttleMs = 0) {
@@ -2522,14 +2562,17 @@ function updateRouteLayers(points, throttleMs = 0) {
         lastRouteLayerRenderTime = performance.now();
     }
 
-    const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(points);
+    const inactiveMask = resolveInactiveDayEdgeMaskForPoints(points);
+    const { musicFeatures, silentFeatures, inactiveFeatures } = buildRouteLayerFeatures(points, inactiveMask);
     cachedBgRouteGeoJSON = emptyGeoJSON();
     cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
     cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
+    cachedInactiveDayBranchGeoJSON = { type: 'FeatureCollection', features: inactiveFeatures };
     ensureCustomRouteSourcesAndLayers();
     map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
     map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
     map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
+    map.getSource('route-inactive-day-branch')?.setData(cachedInactiveDayBranchGeoJSON);
 }
 
 // ==========================================
@@ -2593,8 +2636,10 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
     }
     map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
 
-    // 2. 未行駛路段（currentTrackIndex 至終點）：夜間高對比螢光天藍色 (#00E5FF) 加粗 1px ／ 日間原色
+    // 2. 未行駛路段（currentTrackIndex 至終點）：夜間高對比螢光天藍色 (#00E5FF) 加粗 1px ／ 日間原色；今日免進支線改繪為淡化灰色細虛線
+    const fullInactiveMask = resolveInactiveDayEdgeMaskForPoints(points);
     let remainingPoints = [];
+    let remainingInactiveMask = null;
     if (exactPos && typeof exactPos.lng === 'number' && typeof exactPos.lat === 'number') {
         const nextIdx = Math.min(clampedIdx + 1, maxIdx);
         const startPt = {
@@ -2603,15 +2648,31 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
             musicActive: exactPos.musicActive !== undefined ? exactPos.musicActive : Boolean(points[nextIdx]?.musicActive)
         };
         remainingPoints = [startPt, ...points.slice(clampedIdx + 1)];
+        if (fullInactiveMask) {
+            remainingInactiveMask = new Uint8Array(remainingPoints.length);
+            for (let k = 1; k < remainingPoints.length; k++) {
+                remainingInactiveMask[k] = fullInactiveMask[clampedIdx + k] || 0;
+            }
+        }
     } else {
         remainingPoints = points.slice(clampedIdx);
+        if (fullInactiveMask) {
+            remainingInactiveMask = new Uint8Array(remainingPoints.length);
+            for (let k = 1; k < remainingPoints.length; k++) {
+                remainingInactiveMask[k] = fullInactiveMask[clampedIdx + k] || 0;
+            }
+        }
     }
 
-    const { musicFeatures, silentFeatures } = buildRouteLayerFeatures(remainingPoints);
+    const { musicFeatures, silentFeatures, inactiveFeatures } = buildRouteLayerFeatures(remainingPoints, remainingInactiveMask);
     cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
     cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
+    cachedInactiveDayBranchGeoJSON = fullInactiveMask
+        ? { type: 'FeatureCollection', features: buildRouteLayerFeatures(points, fullInactiveMask).inactiveFeatures }
+        : { type: 'FeatureCollection', features: inactiveFeatures };
     map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
     map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
+    map.getSource('route-inactive-day-branch')?.setData(cachedInactiveDayBranchGeoJSON);
 }
 
 // 計算路線各節點的累積里程（公尺），用於精準計算沿路線前瞻距離（Look-ahead Distance）

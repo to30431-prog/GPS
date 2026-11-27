@@ -505,7 +505,8 @@ async function uploadRouteToCloud(routeIdx, btnEl) {
             callouts: Array.isArray(r.callouts) ? r.callouts : [],
             brushStrokes: Array.isArray(r.brushStrokes) ? r.brushStrokes : [],
             customPins: Array.isArray(r.customPins) ? r.customPins : [],
-            textLabels: Array.isArray(r.textLabels) ? r.textLabels : []
+            textLabels: Array.isArray(r.textLabels) ? r.textLabels : [],
+            daySegments: Array.isArray(r.daySegments) ? r.daySegments : []
         };
 
         const syncPreviewDetailCardIfVisible = () => {
@@ -773,7 +774,8 @@ function previewPendingRoute(pendingIdx) {
         callouts: JSON.parse(JSON.stringify(pr.callouts || [])),
         brushStrokes: JSON.parse(JSON.stringify(pr.brushStrokes || [])),
         customPins: JSON.parse(JSON.stringify(pr.customPins || [])),
-        textLabels: JSON.parse(JSON.stringify(pr.textLabels || []))
+        textLabels: JSON.parse(JSON.stringify(pr.textLabels || [])),
+        daySegments: JSON.parse(JSON.stringify(pr.daySegments || []))
     };
 
     // 確保距離、方位角與標記索引同步
@@ -1239,7 +1241,8 @@ function cloneCloudRouteForLocal(cr, existingLocal = null) {
         callouts: JSON.parse(JSON.stringify(cr.callouts || [])),
         brushStrokes: JSON.parse(JSON.stringify(cr.brushStrokes || [])),
         customPins: JSON.parse(JSON.stringify(cr.customPins || [])),
-        textLabels: JSON.parse(JSON.stringify(cr.textLabels || []))
+        textLabels: JSON.parse(JSON.stringify(cr.textLabels || [])),
+        daySegments: JSON.parse(JSON.stringify(cr.daySegments || []))
     };
 }
 

@@ -1562,6 +1562,48 @@ document.getElementById('startFollowBtn').onclick = async () => {
     const followMatchSegments = isGeneralFollowNav ? buildFollowMatchTrack(pts) : [];
     const visitedSegFlags = isGeneralFollowNav ? new Uint8Array(followMatchSegments.length) : null;
     const precomputedTurns = precomputeFollowRouteTurns(pts, followCumMeters);
+
+    // 📅 單一路線支線星期排程自動過濾：非當日支線自動標記跳過、不播報轉入預報、不計入進度條里程、不觸發漏段防呆
+    const activeFollowWeekday = (typeof getEffectiveRouteWeekday === 'function') ? getEffectiveRouteWeekday() : new Date().getDay();
+    const inactiveDaySegments = (isGeneralFollowNav && typeof getInactiveDaySegmentsForRoute === 'function')
+        ? getInactiveDaySegmentsForRoute(route, activeFollowWeekday)
+        : [];
+    const inactiveDayEdgeMask = (isGeneralFollowNav && typeof buildInactiveDayEdgeMaskForRoute === 'function')
+        ? buildInactiveDayEdgeMaskForRoute(route, activeFollowWeekday)
+        : null;
+    const announcedInactiveDayBranchIds = new Set();
+
+    if (inactiveDaySegments.length > 0) {
+        if (visitedSegFlags && followMatchSegments.length > 0) {
+            for (let k = 0; k < followMatchSegments.length; k++) {
+                const segOrigIdx = followMatchSegments[k].origIdx;
+                if (inactiveDaySegments.some(ds => segOrigIdx >= ds.startIdx && segOrigIdx < ds.endIdx)) {
+                    visitedSegFlags[k] = 2; // 2 = 依星期排程刻意跳過，不觸發漏段警告
+                }
+            }
+        }
+        precomputedTurns.forEach(t => {
+            if (inactiveDaySegments.some(ds => t.turnIdx >= Math.max(0, ds.startIdx - 2) && t.turnIdx <= Math.min(pts.length - 1, ds.endIdx + 1))) {
+                t.announced = true;
+                triggeredTurnIndices.add(t.turnIdx);
+            }
+        });
+    }
+
+    const computeFollowActiveProgress = (rawTrackIdx) => {
+        if (!inactiveDayEdgeMask) {
+            return { idx: rawTrackIdx, total: pts.length };
+        }
+        let activeTotal = 1;
+        let activePassed = 0;
+        const clamped = Math.min(Math.max(0, Math.floor(rawTrackIdx || 0)), pts.length - 1);
+        for (let i = 1; i < pts.length; i++) {
+            if (inactiveDayEdgeMask[i] === 1) continue;
+            activeTotal += 1;
+            if (i <= clamped) activePassed += 1;
+        }
+        return { idx: activePassed, total: Math.max(2, activeTotal) };
+    };
     // 重新開始導航時，完整重置所有標記點（含語音開關與一般提醒點）的 played 與 prePlayed 狀態
     const mappedEvents = prepareVoiceMarkerEvents(route, !window.isFurnitureNavOrReplayActive);
     window.activeFollowMappedEvents = mappedEvents;
@@ -1689,7 +1731,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 updateProgressRouteLayers(pts, currentTrackIndex, null, 0);
                 updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, 0);
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 0);
-                updateRouteProgressHud(currentTrackIndex, pts.length);
+                const progHud = computeFollowActiveProgress(currentTrackIndex);
+                updateRouteProgressHud(progHud.idx, progHud.total);
             }
 
             // 3. 繪製貼合道路／既有路線節點的退回引導折線（嚴禁以起終點兩點直連飛鳥直線）
@@ -2141,7 +2184,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
             if (isGeneralFollowNav && followMatchSegments.length > 0) {
                 updateFollowSkippedSegmentsLayer(followMatchSegments, visitedSegFlags, currentMatchIdx, justTransitionedFromApproach ? 0 : 250);
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, justTransitionedFromApproach ? 0 : 350);
-                updateRouteProgressHud(currentTrackIndex, pts.length);
+                const progHud = computeFollowActiveProgress(currentTrackIndex);
+                updateRouteProgressHud(progHud.idx, progHud.total);
             }
         }
 
@@ -2208,6 +2252,39 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 if (Date.now() - window.lastOffRouteTime > 15000) {
                     speakText("已偏離路線，請注意。"); vibrate([200, 100, 200]); autoWakeScreen();
                     window.lastOffRouteTime = Date.now();
+                }
+            }
+        }
+
+        // 📅 防誤入主動語音提醒：接近「今日免進支線」入口前約 40～60 公尺時，播報免進請直行提示
+        if (!isOffRoute && inactiveDaySegments.length > 0) {
+            const curAlongMForDay = (Array.isArray(followCumMeters) && followCumMeters.length === pts.length)
+                ? (followCumMeters[currentTrackIndex] || 0)
+                : 0;
+            for (let sIdx = 0; sIdx < inactiveDaySegments.length; sIdx++) {
+                const seg = inactiveDaySegments[sIdx];
+                if (!seg || announcedInactiveDayBranchIds.has(seg.id)) continue;
+                const entryPt = pts[seg.startIdx];
+                if (!entryPt) continue;
+                const entryAlongM = (Array.isArray(followCumMeters) && followCumMeters.length === pts.length)
+                    ? (followCumMeters[seg.startIdx] || 0)
+                    : 0;
+                const alongToEntryM = entryAlongM - curAlongMForDay;
+                if (currentTrackIndex > seg.startIdx + 1 || alongToEntryM < -10) {
+                    announcedInactiveDayBranchIds.add(seg.id);
+                    continue;
+                }
+                const directToEntryM = getDistanceKm(lng, lat, entryPt.lng, entryPt.lat) * 1000;
+                if (alongToEntryM <= 65 && alongToEntryM >= 0 && directToEntryM <= 60 && directToEntryM >= 10) {
+                    announcedInactiveDayBranchIds.add(seg.id);
+                    const todayZh = (typeof getWeekdayLabelZh === 'function') ? getWeekdayLabelZh(activeFollowWeekday) : '';
+                    const daysZh = (typeof formatDaySegmentDaysZh === 'function') ? formatDaySegmentDaysZh(seg.days) : '';
+                    const branchLabel = seg.label ? seg.label : `週${daysZh}巷`;
+                    autoWakeScreen();
+                    showNavAlert('⬆️', `今日週${todayZh}：${branchLabel}免進，請直行`, 'bg-slate-700');
+                    speakText(`今日週${todayZh}，前方${branchLabel}免進，請直行`);
+                    autoSleepScreen();
+                    break;
                 }
             }
         }

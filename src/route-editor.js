@@ -1433,6 +1433,11 @@ function openRouteDetail(idx, skipFitBounds = false) {
     document.getElementById('detailTime').innerText = route.timeStr;
     document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
 
+    window.activeRoutePreviewWeekday = null;
+    if (typeof renderDetailDayScheduleBar === 'function') {
+        renderDetailDayScheduleBar(route);
+    }
+
     map.getSource('bg-route')?.setData(emptyGeoJSON());
     updateRouteLayers(route.points);
     renderRouteMarkers(route);
@@ -2080,6 +2085,7 @@ function pushEditUndoSnapshot(route) {
         brushStrokes: JSON.parse(JSON.stringify(route.brushStrokes || [])),
         customPins: JSON.parse(JSON.stringify(route.customPins || [])),
         textLabels: JSON.parse(JSON.stringify(route.textLabels || [])),
+        daySegments: JSON.parse(JSON.stringify(route.daySegments || [])),
         selectedEditNodeIdx,
         freehandSpliceStartIdx
     });
@@ -2484,6 +2490,294 @@ document.getElementById('btnEditorAutoSnapRoad')?.addEventListener('click', (e) 
     }
 });
 syncEditorAutoSnapRoadUI();
+
+// ==========================================
+// 📅 單一路線支線星期排程（daySegments）：預覽模擬星期列 ＋ 編輯器 2 點框選與規則管理
+// ==========================================
+let daySegmentPickState = { active: false, step: 0, startIdx: -1 };
+let editorDaySegmentsModalEl = null;
+
+function renderDetailDayScheduleBar(route) {
+    const barEl = document.getElementById('detailDayScheduleBar');
+    const summaryEl = document.getElementById('detailDayScheduleSummary');
+    const btnsEl = document.getElementById('detailDayScheduleBtns');
+    if (!barEl || !summaryEl || !btnsEl) return;
+
+    const segs = (route && typeof normalizeRouteDaySegments === 'function')
+        ? normalizeRouteDaySegments(route.daySegments, route.points?.length)
+        : [];
+    if (segs.length === 0) {
+        barEl.classList.add('hidden');
+        btnsEl.innerHTML = '';
+        return;
+    }
+
+    barEl.classList.remove('hidden');
+    const effectiveDay = typeof getEffectiveRouteWeekday === 'function' ? getEffectiveRouteWeekday() : new Date().getDay();
+    const isSimulated = typeof window.activeRoutePreviewWeekday === 'number';
+    const dayZh = typeof getWeekdayLabelZh === 'function' ? getWeekdayLabelZh(effectiveDay) : '';
+    const inactiveCount = segs.filter(s => !s.days.includes(effectiveDay)).length;
+    const prefix = isSimulated ? `模擬週${dayZh}` : `今日週${dayZh}`;
+    summaryEl.textContent = inactiveCount > 0
+        ? `📅 ${prefix} · 免進 ${inactiveCount} 條支線（灰色虛線）`
+        : `📅 ${prefix} · 全線 ${segs.length} 條支線皆執行`;
+
+    btnsEl.innerHTML = '';
+    const options = [
+        { val: null, label: '今日' },
+        { val: 1, label: '一' },
+        { val: 2, label: '二' },
+        { val: 3, label: '三' },
+        { val: 4, label: '四' },
+        { val: 5, label: '五' },
+        { val: 6, label: '六' },
+        { val: 0, label: '日' }
+    ];
+    options.forEach(opt => {
+        const isActive = (opt.val === null && window.activeRoutePreviewWeekday === null)
+            || (opt.val !== null && window.activeRoutePreviewWeekday === opt.val);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = isActive
+            ? 'py-1 rounded-lg text-[10px] font-black bg-indigo-600 text-white shadow-sm active:scale-95 transition-all'
+            : 'py-1 rounded-lg text-[10px] font-extrabold bg-white hover:bg-indigo-50 text-slate-600 border border-slate-200 active:scale-95 transition-all';
+        btn.textContent = opt.label;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.activeRoutePreviewWeekday = opt.val;
+            renderDetailDayScheduleBar(route);
+            updateRouteLayers(route.points, 0);
+        });
+        btnsEl.appendChild(btn);
+    });
+}
+
+function syncEditorDayScheduleBtnUI() {
+    const btn = document.getElementById('btnEditorDaySchedule');
+    if (!btn) return;
+    const route = typeof getActiveWorkingRoute === 'function' ? getActiveWorkingRoute() : null;
+    const count = (route && Array.isArray(route.daySegments)) ? route.daySegments.length : 0;
+    if (daySegmentPickState.active) {
+        btn.textContent = '✕ 取消框選';
+        btn.className = 'px-2 py-1 rounded-lg text-[10px] font-black shadow-sm active:scale-95 transition-all whitespace-nowrap border bg-rose-600 text-white border-rose-700';
+    } else {
+        btn.textContent = count > 0 ? `📅 支線星期 (${count})` : '📅 支線星期';
+        btn.className = count > 0
+            ? 'px-2 py-1 rounded-lg text-[10px] font-black shadow-sm active:scale-95 transition-all whitespace-nowrap border bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'
+            : 'px-2 py-1 rounded-lg text-[10px] font-black shadow-sm active:scale-95 transition-all whitespace-nowrap border bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-300';
+    }
+}
+
+function cancelEditorDaySegmentPick() {
+    if (!daySegmentPickState.active) return;
+    daySegmentPickState = { active: false, step: 0, startIdx: -1 };
+    syncEditorDayScheduleBtnUI();
+    const promptEl = document.getElementById('editPromptText');
+    if (promptEl && isEditingMode && editSubMode === 'path') {
+        promptEl.innerText = '🖐️ 按住節點可拖曳微調，點擊「+」插入轉折點，點擊節點可刪除或修剪頭尾';
+    }
+}
+
+function handleEditorDaySegmentNodeTap(route, ptIdx) {
+    if (!daySegmentPickState.active || !route || !Array.isArray(route.points)) return false;
+    const promptEl = document.getElementById('editPromptText');
+    if (daySegmentPickState.step === 1) {
+        daySegmentPickState.startIdx = ptIdx;
+        daySegmentPickState.step = 2;
+        selectedEditNodeIdx = ptIdx;
+        renderPathEditNodes(route);
+        try { vibrate(25); } catch (_) {}
+        if (promptEl) {
+            promptEl.innerText = `📅 步驟 2/2：已選進入點 #${ptIdx + 1}，請點擊該支線的「離開點」節點`;
+        }
+        return true;
+    }
+    if (daySegmentPickState.step === 2) {
+        let s = daySegmentPickState.startIdx;
+        let e = ptIdx;
+        if (s === e) {
+            if (promptEl) promptEl.innerText = '⚠️ 進入點與離開點不可為同一節點，請另選離開點';
+            return true;
+        }
+        if (s > e) { const tmp = s; s = e; e = tmp; }
+        daySegmentPickState = { active: false, step: 0, startIdx: -1 };
+        syncEditorDayScheduleBtnUI();
+        try { vibrate([25, 30, 25]); } catch (_) {}
+        openEditorDaySegmentsModal({ mode: 'edit', editingId: null, startIdx: s, endIdx: e, days: [1, 2, 3, 4, 5, 6, 0], label: '' });
+        return true;
+    }
+    return false;
+}
+
+function openEditorDaySegmentsModal(initialState = { mode: 'list' }) {
+    const route = typeof getActiveWorkingRoute === 'function' ? getActiveWorkingRoute() : null;
+    if (!isEditingMode || !route || !Array.isArray(route.points)) return;
+    if (!Array.isArray(route.daySegments)) route.daySegments = [];
+
+    if (!editorDaySegmentsModalEl) {
+        editorDaySegmentsModalEl = document.createElement('div');
+        editorDaySegmentsModalEl.id = 'editorDaySegmentsModal';
+        editorDaySegmentsModalEl.className = 'hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4 pointer-events-auto';
+        editorDaySegmentsModalEl.style.zIndex = '100009';
+        document.body.appendChild(editorDaySegmentsModalEl);
+        editorDaySegmentsModalEl.addEventListener('click', (e) => {
+            if (e.target === editorDaySegmentsModalEl) {
+                editorDaySegmentsModalEl.classList.add('hidden');
+            }
+        });
+    }
+
+    const closeModal = () => editorDaySegmentsModalEl.classList.add('hidden');
+
+    if (initialState.mode === 'edit') {
+        const { editingId, startIdx, endIdx, days, label } = initialState;
+        const checkedSet = new Set(Array.isArray(days) ? days : [1, 2, 3, 4, 5, 6, 0]);
+        const weekdayOrder = [
+            { d: 1, t: '一' }, { d: 2, t: '二' }, { d: 3, t: '三' },
+            { d: 4, t: '四' }, { d: 5, t: '五' }, { d: 6, t: '六' }, { d: 0, t: '日' }
+        ];
+        editorDaySegmentsModalEl.innerHTML = `
+            <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border-2 border-indigo-300 flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-base font-black text-indigo-900">📅 設定支線執行星期</h3>
+                        <p class="text-[11px] font-bold text-gray-500 mt-0.5">框選區段：節點 #${startIdx + 1} ～ #${endIdx + 1}</p>
+                    </div>
+                    <button type="button" id="btnCloseDaySegModal" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div>
+                    <label class="text-xs font-extrabold text-gray-700 block mb-1.5">勾選此支線「需進入清運」的星期（預設全選）</label>
+                    <div class="grid grid-cols-7 gap-1">
+                        ${weekdayOrder.map(w => `
+                            <label class="flex flex-col items-center gap-1 py-2 rounded-xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50">
+                                <span class="text-xs font-black text-gray-800">${w.t}</span>
+                                <input type="checkbox" data-day-num="${w.d}" ${checkedSet.has(w.d) ? 'checked' : ''} class="w-4 h-4 accent-indigo-600">
+                            </label>
+                        `).join('')}
+                    </div>
+                </div>
+                <div>
+                    <label for="daySegLabelInput" class="text-xs font-extrabold text-gray-700 block mb-1">支線名稱（選填，語音防誤入會唸出）</label>
+                    <input id="daySegLabelInput" type="text" maxlength="24" placeholder="例如：禮拜一五巷、文化路二四六巷"
+                        value="${String(label || '').replace(/"/g, '&quot;')}"
+                        class="w-full px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-indigo-500 text-xs font-black text-gray-900 outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button type="button" id="btnCancelDaySegEdit" class="py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs">返回</button>
+                    <button type="button" id="btnSaveDaySegEdit" class="py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-md">💾 儲存支線規則</button>
+                </div>
+            </div>
+        `;
+        editorDaySegmentsModalEl.querySelector('#btnCloseDaySegModal')?.addEventListener('click', closeModal);
+        editorDaySegmentsModalEl.querySelector('#btnCancelDaySegEdit')?.addEventListener('click', () => openEditorDaySegmentsModal({ mode: 'list' }));
+        editorDaySegmentsModalEl.querySelector('#btnSaveDaySegEdit')?.addEventListener('click', () => {
+            const selectedDays = [];
+            editorDaySegmentsModalEl.querySelectorAll('input[data-day-num]:checked').forEach(cb => {
+                selectedDays.push(Number(cb.dataset.dayNum));
+            });
+            const labelVal = String(editorDaySegmentsModalEl.querySelector('#daySegLabelInput')?.value || '').trim();
+            pushEditUndoSnapshot(route);
+            if (!Array.isArray(route.daySegments)) route.daySegments = [];
+            if (editingId) {
+                const idx = route.daySegments.findIndex(s => s.id === editingId);
+                if (idx >= 0) {
+                    route.daySegments[idx] = { ...route.daySegments[idx], startIdx, endIdx, days: selectedDays, label: labelVal };
+                }
+            } else {
+                route.daySegments.push({
+                    id: `dseg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    startIdx,
+                    endIdx,
+                    days: selectedDays,
+                    label: labelVal
+                });
+            }
+            syncEditorDayScheduleBtnUI();
+            const promptEl = document.getElementById('editPromptText');
+            if (promptEl) {
+                const daysText = typeof formatDaySegmentDaysZh === 'function' ? formatDaySegmentDaysZh(selectedDays) : '';
+                promptEl.innerText = `📅 已儲存支線規則「${labelVal || `週${daysText}支線`}」（節點 #${startIdx + 1}～#${endIdx + 1}，週${daysText}）`;
+            }
+            openEditorDaySegmentsModal({ mode: 'list' });
+        });
+        editorDaySegmentsModalEl.classList.remove('hidden');
+        return;
+    }
+
+    // 清單模式：檢視、修改、刪除已設定的支線星期區段，或啟動 2 點框選新支線
+    const segs = typeof normalizeRouteDaySegments === 'function'
+        ? normalizeRouteDaySegments(route.daySegments, route.points.length)
+        : [];
+    route.daySegments = segs;
+
+    editorDaySegmentsModalEl.innerHTML = `
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border-2 border-indigo-300 flex flex-col gap-3 max-h-[85vh] overflow-y-auto">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-base font-black text-indigo-900">📅 支線星期排程</h3>
+                    <p class="text-[11px] font-bold text-gray-500 mt-0.5">非當日支線於導航時自動淡化跳過並語音提醒直行</p>
+                </div>
+                <button type="button" id="btnCloseDaySegList" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <button type="button" id="btnStartPickDaySeg" class="w-full py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-md active:scale-95 transition-all">
+                ➕ 在地圖上框選新支線（點進入點 → 點離開點）
+            </button>
+            <div id="editorDaySegListWrap" class="flex flex-col gap-1.5">
+                ${segs.length === 0 ? '<div class="text-center text-xs font-bold text-gray-400 py-4">尚未設定任何支線星期規則（預設每日全線執行）</div>' : ''}
+            </div>
+        </div>
+    `;
+    editorDaySegmentsModalEl.querySelector('#btnCloseDaySegList')?.addEventListener('click', closeModal);
+    editorDaySegmentsModalEl.querySelector('#btnStartPickDaySeg')?.addEventListener('click', () => {
+        closeModal();
+        daySegmentPickState = { active: true, step: 1, startIdx: -1 };
+        syncEditorDayScheduleBtnUI();
+        const promptEl = document.getElementById('editPromptText');
+        if (promptEl) {
+            promptEl.innerText = '📅 步驟 1/2：請點擊地圖上該折返支線的「進入點」節點';
+        }
+    });
+
+    const listWrap = editorDaySegmentsModalEl.querySelector('#editorDaySegListWrap');
+    if (listWrap && segs.length > 0) {
+        segs.forEach(seg => {
+            const daysText = typeof formatDaySegmentDaysZh === 'function' ? formatDaySegmentDaysZh(seg.days) : '';
+            const row = document.createElement('div');
+            row.className = 'flex items-center justify-between gap-2 p-2.5 rounded-2xl bg-indigo-50/70 border border-indigo-200';
+            row.innerHTML = `
+                <div class="min-w-0 flex-1">
+                    <div class="text-xs font-black text-indigo-950 truncate">${seg.label || `週${daysText}支線`}</div>
+                    <div class="text-[10px] font-bold text-indigo-700 mt-0.5">節點 #${seg.startIdx + 1} ～ #${seg.endIdx + 1} · 週${daysText}</div>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    <button type="button" class="btn-edit-day-seg px-2 py-1 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-[10px] font-black active:scale-95">編輯</button>
+                    <button type="button" class="btn-del-day-seg px-2 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-black active:scale-95">刪除</button>
+                </div>
+            `;
+            row.querySelector('.btn-edit-day-seg')?.addEventListener('click', () => {
+                openEditorDaySegmentsModal({ mode: 'edit', editingId: seg.id, startIdx: seg.startIdx, endIdx: seg.endIdx, days: seg.days, label: seg.label });
+            });
+            row.querySelector('.btn-del-day-seg')?.addEventListener('click', () => {
+                pushEditUndoSnapshot(route);
+                route.daySegments = route.daySegments.filter(s => s.id !== seg.id);
+                syncEditorDayScheduleBtnUI();
+                openEditorDaySegmentsModal({ mode: 'list' });
+            });
+            listWrap.appendChild(row);
+        });
+    }
+
+    editorDaySegmentsModalEl.classList.remove('hidden');
+}
+
+document.getElementById('btnEditorDaySchedule')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (daySegmentPickState.active) {
+        cancelEditorDaySegmentPick();
+        return;
+    }
+    openEditorDaySegmentsModal({ mode: 'list' });
+});
 
 // 🛡️ 依既有標記（時刻站牌 / 黃色提醒點 / 音樂事件）原始經緯度重新匹配最近節點索引，避免點數增減造成標記飄移
 function rebindRouteMarkersByOriginalCoords(route, preservedStops = null, dropTrimmedOutliers = false, affectedStartIdx = 1, affectedEndIdx = -1) {
@@ -2921,6 +3215,9 @@ function renderPathEditNodes(route) {
         el.addEventListener('click', (ev) => {
             ev.stopPropagation();
             if (activeDraggingEditNodeIdx !== -1 || (Date.now() - lastEditNodeDragEndTime < 220)) return;
+            if (typeof handleEditorDaySegmentNodeTap === 'function' && handleEditorDaySegmentNodeTap(route, ptIdx)) {
+                return;
+            }
             selectedEditNodeIdx = ptIdx;
             isNodeTrimDrawerExpanded = false; // 點選節點時預設收合為 ✂️ #N ▸ 迷你小膠囊
             vibrate(20);
@@ -3471,7 +3768,12 @@ function setEditSubMode(mode) {
     const pathSnapToolbarEl = document.getElementById('pathSnapToolbar');
     if (pathSnapToolbarEl) {
         pathSnapToolbarEl.classList.toggle('hidden', mode !== 'path');
-        if (mode === 'path') syncEditorAutoSnapRoadUI();
+        if (mode === 'path') {
+            syncEditorAutoSnapRoadUI();
+            if (typeof syncEditorDayScheduleBtnUI === 'function') syncEditorDayScheduleBtnUI();
+        } else if (typeof cancelEditorDaySegmentPick === 'function') {
+            cancelEditorDaySegmentPick();
+        }
     }
     if (brushAnnotationToolbar) {
         brushAnnotationToolbar.classList.toggle('hidden', mode !== 'brush');

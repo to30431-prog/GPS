@@ -1857,6 +1857,36 @@ function renderMapLayerMenuOptions() {
             });
             targetFeatureContainer.appendChild(annotBtn);
         }
+
+        // 🎮 7. 路線遊戲進度條開關（預設關閉 OFF，開啟時於遵循導航／路線重播顯示左側垂直進度條）
+        {
+            const isHudOn = (window.RouteProgressHud && typeof window.RouteProgressHud.isEnabled === 'function')
+                ? Boolean(window.RouteProgressHud.isEnabled())
+                : (localStorage.getItem('yingge_route_progress_hud_enabled_v1') === 'true');
+            const hudBtn = document.createElement('button');
+            hudBtn.type = 'button';
+            hudBtn.id = 'mapLayerRouteProgressHudToggleBtn';
+            hudBtn.className = isHudOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-emerald-50 border-2 border-emerald-400 text-emerald-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
+            hudBtn.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">🎮</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black truncate ${isHudOn ? 'text-emerald-800' : 'text-gray-800'}">路線遊戲進度條</div>
+                        <div class="text-[10px] font-bold truncate ${isHudOn ? 'text-emerald-600' : 'text-gray-400'}">${isHudOn ? '已開啟 · 導航與重播顯示左側進度條' : '已關閉（省電預設） · 點擊開啟左側進度條'}</div>
+                    </div>
+                </div>
+                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isHudOn ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-600'}">${isHudOn ? '開' : '關'}</span>
+            `;
+            hudBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (window.RouteProgressHud && typeof window.RouteProgressHud.toggle === 'function') {
+                    window.RouteProgressHud.toggle();
+                }
+            });
+            targetFeatureContainer.appendChild(hudBtn);
+        }
     }
 
     // --------------------------------------------------

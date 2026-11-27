@@ -11,10 +11,77 @@ const speedOptions = [1, 2, 4, 6];
 let speedMultiplier = 1;
 
 // ==========================================
-// 🎮 左側遊戲化垂直路線進度條（Route Progress HUD，僅一般清運遵循導航／路線重播顯示）
+// 🎮 左側遊戲化垂直路線進度條（Route Progress HUD，預設關閉，僅一般清運遵循導航／路線重播顯示）
 // ==========================================
+const STORAGE_KEY_ROUTE_PROGRESS_HUD = 'yingge_route_progress_hud_enabled_v1';
+const ROUTE_PROGRESS_HUD_THROTTLE_MS = 1500;   // 最多每 1.5 秒更新一次 DOM
+const ROUTE_PROGRESS_HUD_MIN_DELTA_PCT = 0.5;  // 進度百分比變化超過 0.5% 才寫入 DOM
+
 let routeProgressHudEls = null;
 let routeProgressHudTickEls = [];
+let routeProgressHudActiveRoute = null;
+let routeProgressHudLastKnownIdx = 0;
+let routeProgressHudLastKnownTotal = 0;
+let routeProgressHudLastRenderAt = 0;
+let routeProgressHudLastRenderedPct = -1;
+let routeProgressHudLastRenderedIntPct = -1;
+let routeProgressHudTrackHeightPx = 180;
+
+function isRouteProgressHudEnabled() {
+    try {
+        return localStorage.getItem(STORAGE_KEY_ROUTE_PROGRESS_HUD) === 'true';
+    } catch (e) {
+        return false;
+    }
+}
+
+function setRouteProgressHudEnabled(enabled) {
+    const next = Boolean(enabled);
+    try {
+        localStorage.setItem(STORAGE_KEY_ROUTE_PROGRESS_HUD, next ? 'true' : 'false');
+    } catch (e) {}
+
+    if (!next) {
+        if (routeProgressHudEls && routeProgressHudEls.root) {
+            routeProgressHudEls.root.classList.add('hidden');
+            if (routeProgressHudEls.ticksEl) routeProgressHudEls.ticksEl.innerHTML = '';
+        }
+        routeProgressHudTickEls = [];
+        routeProgressHudLastRenderAt = 0;
+        routeProgressHudLastRenderedPct = -1;
+        routeProgressHudLastRenderedIntPct = -1;
+    } else if (routeProgressHudActiveRoute && !window.isFurnitureNavOrReplayActive) {
+        showRouteProgressHud(routeProgressHudActiveRoute);
+        updateRouteProgressHud(routeProgressHudLastKnownIdx, routeProgressHudLastKnownTotal, { force: true });
+    }
+
+    if (typeof renderMapLayerMenuOptions === 'function') {
+        renderMapLayerMenuOptions();
+    }
+}
+
+function toggleRouteProgressHudEnabled() {
+    setRouteProgressHudEnabled(!isRouteProgressHudEnabled());
+}
+
+window.RouteProgressHud = {
+    isEnabled: isRouteProgressHudEnabled,
+    setEnabled: setRouteProgressHudEnabled,
+    toggle: toggleRouteProgressHudEnabled
+};
+
+function measureRouteProgressHudTrackHeight() {
+    if (!routeProgressHudEls || !routeProgressHudEls.trackWrapEl) return routeProgressHudTrackHeightPx;
+    const h = routeProgressHudEls.trackWrapEl.clientHeight;
+    if (h > 20) routeProgressHudTrackHeightPx = h;
+    return routeProgressHudTrackHeightPx;
+}
+
+window.addEventListener('resize', () => {
+    if (!routeProgressHudEls || !routeProgressHudEls.root || routeProgressHudEls.root.classList.contains('hidden')) return;
+    measureRouteProgressHudTrackHeight();
+    updateRouteProgressHud(routeProgressHudLastKnownIdx, routeProgressHudLastKnownTotal, { force: true });
+});
 
 function getOrCreateRouteProgressHud() {
     if (routeProgressHudEls && routeProgressHudEls.root?.isConnected) {
@@ -42,6 +109,7 @@ function getOrCreateRouteProgressHud() {
     routeProgressHudEls = {
         root,
         pctEl: root.querySelector('.route-progress-hud-pct'),
+        trackWrapEl: root.querySelector('.route-progress-hud-track-wrap'),
         fillEl: root.querySelector('.route-progress-hud-fill'),
         ticksEl: root.querySelector('.route-progress-hud-ticks'),
         cursorEl: root.querySelector('.route-progress-hud-cursor')
@@ -51,6 +119,18 @@ function getOrCreateRouteProgressHud() {
 
 function showRouteProgressHud(route) {
     if (!route || !Array.isArray(route.points) || route.points.length < 2) return;
+    routeProgressHudActiveRoute = route;
+    routeProgressHudLastKnownIdx = 0;
+    routeProgressHudLastKnownTotal = route.points.length;
+
+    // 預設關閉狀態下不建立／不顯示 HUD 且不執行刻度計算，降低舊款手機負擔與耗電
+    if (!isRouteProgressHudEnabled()) {
+        if (routeProgressHudEls && routeProgressHudEls.root) {
+            routeProgressHudEls.root.classList.add('hidden');
+        }
+        return;
+    }
+
     const hud = getOrCreateRouteProgressHud();
     const totalPts = route.points.length;
     const denom = Math.max(1, totalPts - 1);
@@ -99,32 +179,71 @@ function showRouteProgressHud(route) {
         tick.style.bottom = `${(ms.ratio * 100).toFixed(2)}%`;
         tick.dataset.ratio = String(ms.ratio);
         hud.ticksEl.appendChild(tick);
-        routeProgressHudTickEls.push({ el: tick, ratio: ms.ratio });
+        routeProgressHudTickEls.push({ el: tick, ratio: ms.ratio, passed: false });
     }
 
+    routeProgressHudLastRenderAt = 0;
+    routeProgressHudLastRenderedPct = -1;
+    routeProgressHudLastRenderedIntPct = -1;
     hud.root.classList.remove('hidden');
-    updateRouteProgressHud(0, totalPts);
+    measureRouteProgressHudTrackHeight();
+    updateRouteProgressHud(0, totalPts, { force: true });
 }
 
-function updateRouteProgressHud(currentIdx, totalPoints) {
+function updateRouteProgressHud(currentIdx, totalPoints, options = {}) {
+    routeProgressHudLastKnownIdx = Number(currentIdx) || 0;
+    routeProgressHudLastKnownTotal = Number(totalPoints) || 0;
+    if (!isRouteProgressHudEnabled()) return;
     if (!routeProgressHudEls || !routeProgressHudEls.root || routeProgressHudEls.root.classList.contains('hidden')) return;
+
+    const force = Boolean(options && options.force);
     const denom = Math.max(1, (totalPoints || 2) - 1);
-    const ratio = Math.min(1, Math.max(0, (Number(currentIdx) || 0) / denom));
-    const pctStr = `${(ratio * 100).toFixed(2)}%`;
-    routeProgressHudEls.fillEl.style.height = pctStr;
-    routeProgressHudEls.cursorEl.style.bottom = pctStr;
-    routeProgressHudEls.pctEl.textContent = `${Math.round(ratio * 100)}%`;
+    const ratio = Math.min(1, Math.max(0, routeProgressHudLastKnownIdx / denom));
+    const pct = ratio * 100;
+    const now = Date.now();
+
+    // 節流降頻：最多每 1.5 秒更新一次，且進度百分比變化超過 0.5% 才寫入 DOM（避免細微跳動觸發重繪）
+    if (!force) {
+        if (routeProgressHudLastRenderAt > 0 && (now - routeProgressHudLastRenderAt) < ROUTE_PROGRESS_HUD_THROTTLE_MS) {
+            return;
+        }
+        if (routeProgressHudLastRenderedPct >= 0 && Math.abs(pct - routeProgressHudLastRenderedPct) <= ROUTE_PROGRESS_HUD_MIN_DELTA_PCT) {
+            return;
+        }
+    }
+
+    routeProgressHudLastRenderAt = now;
+    routeProgressHudLastRenderedPct = pct;
+
+    // 使用純 GPU 合成屬性（scaleY / translate3d）更新填充與小車游標，避免觸發瀏覽器重排（Reflow）
+    const trackH = routeProgressHudTrackHeightPx || measureRouteProgressHudTrackHeight();
+    const cursorOffsetY = -(ratio * trackH);
+    routeProgressHudEls.fillEl.style.transform = `scaleY(${ratio.toFixed(4)})`;
+    routeProgressHudEls.cursorEl.style.transform = `translate3d(-50%, ${cursorOffsetY.toFixed(1)}px, 0)`;
+
+    const roundedPct = Math.round(pct);
+    if (roundedPct !== routeProgressHudLastRenderedIntPct) {
+        routeProgressHudLastRenderedIntPct = roundedPct;
+        routeProgressHudEls.pctEl.textContent = `${roundedPct}%`;
+    }
 
     for (let i = 0; i < routeProgressHudTickEls.length; i++) {
         const item = routeProgressHudTickEls[i];
         const passed = ratio >= item.ratio;
-        if (item.el.classList.contains('is-passed') !== passed) {
+        if (item.passed !== passed) {
+            item.passed = passed;
             item.el.classList.toggle('is-passed', passed);
         }
     }
 }
 
 function hideRouteProgressHud() {
+    routeProgressHudActiveRoute = null;
+    routeProgressHudLastKnownIdx = 0;
+    routeProgressHudLastKnownTotal = 0;
+    routeProgressHudLastRenderAt = 0;
+    routeProgressHudLastRenderedPct = -1;
+    routeProgressHudLastRenderedIntPct = -1;
     if (!routeProgressHudEls || !routeProgressHudEls.root) return;
     routeProgressHudEls.root.classList.add('hidden');
     if (routeProgressHudEls.ticksEl) routeProgressHudEls.ticksEl.innerHTML = '';

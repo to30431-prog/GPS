@@ -662,7 +662,25 @@ function showNavAlert(iconHtml, text, bgColorClass, photoUrl = null) {
         bgColorClass = 'bg-amber-600';
     }
     if (navAlertHideTimer) clearTimeout(navAlertHideTimer);
-    if (text === '') {
+    if (text && typeof text === 'object' && text.isTurnBanner) {
+        // ↱/↰ 轉向預報專用橫幅：以方向箭頭取代「右轉／左轉」文字，旁側顯示目標路名（單行省略）與距離；無路名時僅顯示箭頭與距離
+        const arrowSymbol = text.arrowSymbol || '↱';
+        const roadName = typeof text.roadName === 'string' ? text.roadName.trim() : '';
+        const distText = typeof text.distText === 'string' ? text.distText.trim() : '';
+        banner.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[60] w-fit max-w-[min(calc(100vw-116px),320px)] rounded-2xl shadow-2xl text-white font-black nav-alert-pop border-2 border-white pointer-events-auto flex items-center justify-center px-3.5 py-2 gap-2 overflow-hidden ${bgColorClass || 'bg-blue-600'}`;
+        if (roadName) {
+            banner.innerHTML = `
+                <span class="text-2xl sm:text-3xl leading-none flex-shrink-0 drop-shadow">${arrowSymbol}</span>
+                <span class="text-base sm:text-lg font-black leading-tight truncate min-w-0" style="text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${roadName}</span>
+                ${distText ? `<span class="text-xs sm:text-sm font-black bg-black/25 px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">${distText}</span>` : ''}
+            `;
+        } else {
+            banner.innerHTML = `
+                <span class="text-3xl sm:text-4xl leading-none flex-shrink-0 drop-shadow">${arrowSymbol}</span>
+                ${distText ? `<span class="text-base sm:text-lg font-black whitespace-nowrap flex-shrink-0">${distText}</span>` : ''}
+            `;
+        }
+    } else if (text === '') {
         // 🚀 無文字模式 (轉彎專用)：水平置中圓角正方形大圖示
         banner.className = `fixed top-20 left-1/2 -translate-x-1/2 z-[60] rounded-3xl shadow-2xl text-white font-black nav-alert-pop border-4 border-white pointer-events-auto flex items-center justify-center w-28 h-28 ${bgColorClass}`;
         banner.innerHTML = `<span class="text-[72px] drop-shadow-lg leading-none">${iconHtml}</span>`;
@@ -2251,8 +2269,21 @@ document.getElementById('startFollowBtn').onclick = async () => {
                         ? `前方${turnItem.actionZh}進${cleanRoad}`
                         : `前方${turnItem.actionZh}`;
 
+                    // 轉向提示框 UI：以箭頭（↱ / ↰）取代「右轉／左轉」文字並帶出目標路名；若與目前道路重複或無效則僅顯示箭頭與距離
+                    const currentRoadNow = sanitizeDetectedRoadName(
+                        lookupRoadNameFromMapOrPoint(pts, Math.max(0, currentTrackIndex), heading)
+                    );
+                    const displayRoadName = (cleanRoad && cleanRoad !== currentRoadNow) ? cleanRoad : '';
+                    const displayDistM = Math.max(10, Math.round(effectiveDistToTurnM / 5) * 5);
+                    const arrowSymbol = turnItem.dir === 'right' ? '↱' : '↰';
+
                     autoWakeScreen();
-                    showNavAlert(turnItem.iconHtml, '', 'bg-blue-600');
+                    showNavAlert(turnItem.iconHtml, {
+                        isTurnBanner: true,
+                        arrowSymbol,
+                        roadName: displayRoadName,
+                        distText: `${displayDistM}m`
+                    }, 'bg-blue-600');
                     speakText(voiceMsg);
                     autoSleepScreen();
                     break;

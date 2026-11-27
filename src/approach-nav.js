@@ -873,7 +873,11 @@
         if (turnIconEl && iconClass) turnIconEl.className = `${iconClass} text-2xl`;
         if (turnDistEl && distText !== undefined) turnDistEl.textContent = distText;
         if (turnActionEl && actionText !== undefined) turnActionEl.textContent = actionText;
-        if (turnRoadEl && roadText !== undefined) turnRoadEl.textContent = roadText;
+        if (turnRoadEl && roadText !== undefined) {
+            const trimmedRoad = String(roadText || '').trim();
+            turnRoadEl.textContent = trimmedRoad;
+            turnRoadEl.classList.toggle('hidden', !trimmedRoad);
+        }
         if (turnStartRemEl && isFinite(startRemM)) {
             const labelPrefix = (activeNavMode === 'free') ? '距目的地' : '距路線起點';
             turnStartRemEl.textContent = `${labelPrefix} ${formatDistanceText(startRemM)}${getEngineTagSuffix(activeEngineCode)}`;
@@ -1555,20 +1559,40 @@
             step.maneuverLocation[0], step.maneuverLocation[1]
         );
         const fallbackLabel = (activeNavMode === 'free') ? '目的地' : (activeTargetRoute?.name || '路線起點');
-        const cleanRoadName = (step.roadName && step.roadName !== 'undefined' && step.roadName !== 'null')
+        const rawRoadCandidate = (step.roadName && step.roadName !== 'undefined' && step.roadName !== 'null')
             ? String(step.roadName).trim()
             : '';
-        const roadLabel = cleanRoadName || (step.type === 'arrive' ? fallbackLabel : '前方道路');
+        const cleanRoadName = (typeof sanitizeDetectedRoadName === 'function')
+            ? sanitizeDetectedRoadName(rawRoadCandidate)
+            : (/^(unnamed|road|street|path|track|service|無名路|未命名|前方道路)$/i.test(rawRoadCandidate) ? '' : rawRoadCandidate);
+        const prevStep = currentStepIndex > 0 ? approachSteps[currentStepIndex - 1] : null;
+        const prevRoadRaw = (prevStep && prevStep.roadName && prevStep.roadName !== 'undefined' && prevStep.roadName !== 'null')
+            ? String(prevStep.roadName).trim()
+            : '';
+        const prevCleanRoad = (typeof sanitizeDetectedRoadName === 'function')
+            ? sanitizeDetectedRoadName(prevRoadRaw)
+            : prevRoadRaw;
         const isTurnAction = step.actionText.includes('轉') || step.actionText.includes('迴轉');
         const actionWithRoadText = cleanRoadName
             ? (isTurnAction ? `${step.actionText}${cleanRoadName}` : `${step.actionText}，進入 ${cleanRoadName}`)
             : step.actionText;
 
+        // 螢幕轉向提示框 UI：左右轉移除「右轉／左轉」文字，改以 ↱ / ↰ 箭頭搭配有效目標路名（重複目前路名或無效時僅顯示箭頭與距離）
+        const isLeftRightTurn = (step.actionText.includes('左轉') || step.actionText.includes('右轉')) && !step.actionText.includes('迴轉');
+        let displayActionText = step.actionText;
+        let displayRoadSubText = cleanRoadName || (step.type === 'arrive' ? fallbackLabel : '');
+        if (isLeftRightTurn) {
+            const turnArrow = step.actionText.includes('右轉') ? '↱' : '↰';
+            const validDisplayRoad = (cleanRoadName && cleanRoadName !== prevCleanRoad) ? cleanRoadName : '';
+            displayActionText = validDisplayRoad ? `${turnArrow} ${validDisplayRoad}` : turnArrow;
+            displayRoadSubText = '';
+        }
+
         updateTurnCardUI({
             iconClass: step.iconClass,
             distText: formatDistanceText(distToManeuverM),
-            actionText: step.actionText,
-            roadText: roadLabel,
+            actionText: displayActionText,
+            roadText: displayRoadSubText,
             startRemM: distToDestM,
             isFallback: false
         });

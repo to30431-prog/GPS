@@ -14,6 +14,11 @@
     const PRIVATE_MODE_PRIVATE_ONLY = 2;
     const PRIVATE_BTN_BASE_SIZE = 40;
     const PRIVATE_BTN_GAP_PX = 8;
+    const PRESET_RADIO_ROOMS = [
+        { code: '', label: '🟢 清潔隊大廳（預設）', shortLabel: '大廳' },
+        { code: 'lunch', label: '🍱 午餐閒聊', shortLabel: '午餐' },
+        { code: 'chill', label: '🎣 休閒哈啦', shortLabel: '休閒' }
+    ];
     const MAX_RECORD_MS = 8000;            // 最長 8 秒自動截斷
     const MIN_RECORD_MS = 350;             // 短於 0.35 秒視為誤觸不發送
     const RECORDER_TIMESLICE_MS = 150;     // 縮短取樣間隔至 150ms，確保開頭語音即時寫入 chunk
@@ -63,7 +68,7 @@
             const modeNum = Number(parsed.mode);
             const cleanCode = sanitizePrivateChannelCode(parsed.code);
             privateChannelCode = cleanCode;
-            if ((modeNum === PRIVATE_MODE_DUAL_WATCH || modeNum === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 2) {
+            if ((modeNum === PRIVATE_MODE_DUAL_WATCH || modeNum === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 1) {
                 privateRadioMode = modeNum;
             } else {
                 privateRadioMode = PRIVATE_MODE_OFF;
@@ -76,11 +81,11 @@
 
     function savePrivateRadioConfig(mode, code) {
         const cleanCode = sanitizePrivateChannelCode(code);
-        const modeNum = (mode === PRIVATE_MODE_DUAL_WATCH || mode === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 2
+        const modeNum = (mode === PRIVATE_MODE_DUAL_WATCH || mode === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 1
             ? mode
             : PRIVATE_MODE_OFF;
         privateRadioMode = modeNum;
-        privateChannelCode = cleanCode;
+        privateChannelCode = modeNum === PRIVATE_MODE_OFF ? '' : cleanCode;
         try {
             localStorage.setItem(STORAGE_KEY_PRIVATE_CFG, JSON.stringify({
                 mode: privateRadioMode,
@@ -90,10 +95,23 @@
     }
 
     function getEffectivePrivateMode() {
-        if ((privateRadioMode === PRIVATE_MODE_DUAL_WATCH || privateRadioMode === PRIVATE_MODE_PRIVATE_ONLY) && privateChannelCode.length >= 2) {
+        if ((privateRadioMode === PRIVATE_MODE_DUAL_WATCH || privateRadioMode === PRIVATE_MODE_PRIVATE_ONLY) && privateChannelCode.length >= 1) {
             return privateRadioMode;
         }
         return PRIVATE_MODE_OFF;
+    }
+
+    function getRoomDisplayInfo(code = privateChannelCode) {
+        const cleanCode = sanitizePrivateChannelCode(code);
+        if (!cleanCode) {
+            return { code: '', displayLabel: '🟢 清潔隊大廳', shortLabel: '大廳', isPreset: true };
+        }
+        const preset = PRESET_RADIO_ROOMS.find(r => r.code && r.code.toLowerCase() === cleanCode.toLowerCase());
+        if (preset) {
+            return { code: preset.code, displayLabel: preset.label, shortLabel: preset.shortLabel, isPreset: true };
+        }
+        const shortLabel = cleanCode.length <= 5 ? cleanCode : `${cleanCode.slice(0, 4)}…`;
+        return { code: cleanCode, displayLabel: `🔒 房號 ${cleanCode}`, shortLabel, isPreset: false };
     }
 
     loadPrivateRadioConfig();
@@ -181,7 +199,7 @@
 
     function getPrivateRadioCloudBaseUrl(codeOverride = '') {
         const cleanCode = sanitizePrivateChannelCode(codeOverride || privateChannelCode);
-        if (cleanCode.length < 2) return '';
+        if (cleanCode.length < 1) return '';
         return `${getFirebaseBaseUrl()}/system_config/walkie_talkie_private/${encodeURIComponent(cleanCode)}`;
     }
 
@@ -604,13 +622,14 @@
             pttIconEl.textContent = state === 'dragging' ? '✋' : '⤢';
             pttLabelEl.textContent = secText || (state === 'dragging' ? '移動中' : `${pttScale.toFixed(1)}x`);
         } else {
+            const isSingleRoom = getEffectivePrivateMode() === PRIVATE_MODE_PRIVATE_ONLY;
             pttBtnEl.style.opacity = '0.58';
-            pttBtnEl.style.background = 'rgba(15, 23, 42, 0.78)';
-            pttBtnEl.style.borderColor = 'rgba(255, 255, 255, 0.85)';
+            pttBtnEl.style.background = isSingleRoom ? 'rgba(46, 16, 101, 0.80)' : 'rgba(15, 23, 42, 0.78)';
+            pttBtnEl.style.borderColor = isSingleRoom ? 'rgba(196, 181, 253, 0.9)' : 'rgba(255, 255, 255, 0.85)';
             pttBtnEl.style.boxShadow = '0 6px 16px rgba(15, 23, 42, 0.28)';
             pttBtnEl.style.transform = 'scale(1)';
-            pttIconEl.textContent = '🎙️';
-            pttLabelEl.textContent = '對講';
+            pttIconEl.textContent = isSingleRoom ? '🔒' : '🎙️';
+            pttLabelEl.textContent = isSingleRoom ? getRoomDisplayInfo().shortLabel : '對講';
         }
     }
 
@@ -904,7 +923,8 @@
             markMessageHandled(channel, msgId);
             playPttCueTone('end');
             if (channel === 'private') {
-                flashRadioToast(`🔒 已發送私人語音（${(durationMs / 1000).toFixed(1)} 秒）`, 'private', 1800);
+                const roomInfo = getRoomDisplayInfo();
+                flashRadioToast(`📡 已發送至 ${roomInfo.displayLabel}（${(durationMs / 1000).toFixed(1)} 秒）`, 'private', 1800);
             } else {
                 flashRadioToast(`📡 已發送語音廣播（${(durationMs / 1000).toFixed(1)} 秒）`, 'sent', 1800);
             }
@@ -1176,7 +1196,8 @@
         requestRadioWakeLock();
         syncAudioFocusWithBgm();
         if (item.channel === 'private') {
-            showRadioToast(`🔒 正在播放（私人）：${item.senderName}`, 'private');
+            const roomInfo = getRoomDisplayInfo();
+            showRadioToast(`🔊 正在播放（${roomInfo.displayLabel}）：${item.senderName}`, 'private');
         } else {
             showRadioToast(`🔊 正在播放：${item.senderName}`, 'playing');
         }
@@ -1944,7 +1965,7 @@
     }
 
     // 🔒 套用私人對講頻道與雙守候模式（僅存本機 localStorage 並即時生效，絕不寫入全隊同步節點）
-    function applyPrivateRadioConfig(mode, code) {
+    function applyPrivateRadioConfig(mode, code, { rerenderMenu = true } = {}) {
         const prevMode = getEffectivePrivateMode();
         const prevCode = privateChannelCode;
         resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
@@ -1964,6 +1985,9 @@
 
         if (isRadioEnabled) {
             startRadioPolling();
+        }
+        if (rerenderMenu && typeof renderMapLayerMenuOptions === 'function') {
+            renderMapLayerMenuOptions();
         }
     }
 
@@ -2074,6 +2098,73 @@
         }
     }
 
+    function getRoomState() {
+        const mode = getEffectivePrivateMode();
+        const code = mode === PRIVATE_MODE_OFF ? '' : privateChannelCode;
+        const info = getRoomDisplayInfo(code);
+        return {
+            mode,
+            code,
+            isLobby: mode === PRIVATE_MODE_OFF,
+            isDualWatch: mode === PRIVATE_MODE_DUAL_WATCH,
+            isSingleRoom: mode === PRIVATE_MODE_PRIVATE_ONLY,
+            displayLabel: info.displayLabel,
+            shortLabel: info.shortLabel,
+            presets: PRESET_RADIO_ROOMS.slice()
+        };
+    }
+
+    // 🚪 一般隊員單一包廂切換（空白即無條件回清潔隊公務大廳；非空房號則進入單一包廂並隔離大廳；若開發者已啟用雙守候則保留雙守候特權）
+    function setUserRoomCode(rawCode, { silent = false, rerenderMenu = true } = {}) {
+        const trimmed = String(rawCode || '').trim();
+        const prevMode = getEffectivePrivateMode();
+        const prevCode = privateChannelCode;
+
+        if (!trimmed) {
+            if (prevMode === PRIVATE_MODE_OFF && prevCode === '') {
+                return { ok: true, changed: false, ...getRoomState() };
+            }
+            applyPrivateRadioConfig(PRIVATE_MODE_OFF, '', { rerenderMenu });
+            syncAdminPrivateRadioFormUI();
+            if (!silent) {
+                flashRadioToast('🟢 已切換至清潔隊大廳', 'sent', 1800);
+            }
+            return { ok: true, changed: true, ...getRoomState() };
+        }
+
+        const cleanCode = sanitizePrivateChannelCode(trimmed);
+        if (!cleanCode) {
+            if (!silent) {
+                flashRadioToast('⚠️ 房號僅限英文字母、數字、- 或 _', 'error', 2000);
+            }
+            return { ok: false, changed: false, ...getRoomState() };
+        }
+
+        const isDevDualWatch = (
+            prevMode === PRIVATE_MODE_DUAL_WATCH &&
+            typeof localUserPermissionRole !== 'undefined' &&
+            localUserPermissionRole === 'developer'
+        );
+        const nextMode = isDevDualWatch ? PRIVATE_MODE_DUAL_WATCH : PRIVATE_MODE_PRIVATE_ONLY;
+
+        if (prevMode === nextMode && prevCode === cleanCode) {
+            return { ok: true, changed: false, ...getRoomState() };
+        }
+
+        applyPrivateRadioConfig(nextMode, cleanCode, { rerenderMenu });
+        syncAdminPrivateRadioFormUI();
+
+        const info = getRoomDisplayInfo(cleanCode);
+        if (!silent) {
+            if (nextMode === PRIVATE_MODE_DUAL_WATCH) {
+                flashRadioToast(`🔒 雙守候私人房號已更新：${info.displayLabel}`, 'private', 2000);
+            } else {
+                flashRadioToast(`🔒 已進入 ${info.displayLabel}（已隔離大廳）`, 'private', 2000);
+            }
+        }
+        return { ok: true, changed: true, ...getRoomState() };
+    }
+
     function toggleRadioEnabled() {
         setRadioEnabled(!isRadioEnabled);
     }
@@ -2093,7 +2184,9 @@
         isEnabled: () => isRadioEnabled,
         setEnabled: setRadioEnabled,
         toggle: toggleRadioEnabled,
-        syncVisibility: syncPttButtonVisibility
+        syncVisibility: syncPttButtonVisibility,
+        getRoomState,
+        setRoomCode: setUserRoomCode
     };
 
     if (typeof renderMapLayerMenuOptions === 'function') {

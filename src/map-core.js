@@ -1624,30 +1624,156 @@ function renderMapLayerMenuOptions() {
             targetFeatureContainer.appendChild(camBtn);
         }
 
-        // 🎙️ 3. 車隊無線電對講開關（預設開啟）
+        // 🎙️ 3. 車隊無線電對講開關（預設開啟；內嵌左：房號輸入框、右：選擇房間膠囊，空白即無條件預設清潔隊大廳）
         if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function') {
             const isRadioOn = Boolean(window.FleetRadioPTT.isEnabled());
-            const radioBtn = document.createElement('button');
-            radioBtn.type = 'button';
-            radioBtn.id = 'mapLayerFleetRadioToggleBtn';
-            radioBtn.className = isRadioOn
-                ? 'w-full text-left px-3 py-2 rounded-xl bg-sky-50 border-2 border-sky-400 text-sky-900 flex items-center justify-between gap-2 transition-all active:scale-[0.98]'
-                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex items-center justify-between gap-2 transition-all active:scale-[0.98]';
-            radioBtn.innerHTML = `
-                <div class="flex items-center gap-2 min-w-0 flex-1">
-                    <span class="text-base flex-shrink-0">🎙️</span>
-                    <div class="min-w-0">
-                        <div class="text-xs font-black truncate ${isRadioOn ? 'text-sky-800' : 'text-gray-800'}">車隊無線電對講</div>
-                        <div class="text-[10px] font-bold truncate ${isRadioOn ? 'text-sky-600' : 'text-gray-400'}">${isRadioOn ? '已開啟 · 顯示對講鈕並接收語音' : '已關閉 · 隱藏對講鈕並停止收音'}</div>
+            const roomState = typeof window.FleetRadioPTT.getRoomState === 'function'
+                ? window.FleetRadioPTT.getRoomState()
+                : { mode: 0, code: '', isLobby: true, isDualWatch: false, isSingleRoom: false, displayLabel: '🟢 清潔隊大廳', shortLabel: '大廳', presets: [] };
+            const presets = Array.isArray(roomState.presets) && roomState.presets.length > 0
+                ? roomState.presets
+                : [
+                    { code: '', label: '🟢 清潔隊大廳（預設）', shortLabel: '大廳' },
+                    { code: 'lunch', label: '🍱 午餐閒聊', shortLabel: '午餐' },
+                    { code: 'chill', label: '🎣 休閒哈啦', shortLabel: '休閒' }
+                ];
+
+            const subtitleText = !isRadioOn
+                ? '已關閉 · 隱藏對講鈕並停止收音'
+                : (roomState.isDualWatch
+                    ? `🟢 大廳＋${roomState.displayLabel}（雙守候）`
+                    : (roomState.isSingleRoom
+                        ? `${roomState.displayLabel} · 單一包廂（已隔離大廳）`
+                        : '🟢 清潔隊大廳 · 顯示對講鈕並接收語音'));
+
+            const radioCard = document.createElement('div');
+            radioCard.setAttribute('role', 'button');
+            radioCard.setAttribute('tabindex', '0');
+            radioCard.id = 'mapLayerFleetRadioToggleBtn';
+            radioCard.className = isRadioOn
+                ? 'w-full text-left px-3 py-2 rounded-xl bg-sky-50 border-2 border-sky-400 text-sky-900 flex flex-col gap-2 transition-all cursor-pointer select-none'
+                : 'w-full text-left px-3 py-2 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 flex flex-col gap-2 transition-all cursor-pointer select-none';
+
+            radioCard.innerHTML = `
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        <span class="text-base flex-shrink-0">🎙️</span>
+                        <div class="min-w-0">
+                            <div class="text-xs font-black truncate ${isRadioOn ? 'text-sky-800' : 'text-gray-800'}">車隊無線電對講</div>
+                            <div id="mapLayerFleetRadioSubText" class="text-[10px] font-bold truncate ${isRadioOn ? (roomState.isSingleRoom ? 'text-violet-700' : 'text-sky-600') : 'text-gray-400'}">${subtitleText}</div>
+                        </div>
                     </div>
+                    <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isRadioOn ? 'bg-sky-600 text-white' : 'bg-gray-200 text-gray-600'}">${isRadioOn ? '開' : '關'}</span>
                 </div>
-                <span class="text-[10px] font-black px-2 py-0.5 rounded-full flex-shrink-0 ${isRadioOn ? 'bg-sky-600 text-white' : 'bg-gray-200 text-gray-600'}">${isRadioOn ? '開' : '關'}</span>
+                <div id="mapLayerFleetRadioRoomBar" class="pt-1.5 border-t ${isRadioOn ? 'border-sky-200/80' : 'border-gray-200/80'} flex items-center gap-1.5">
+                    <input id="mapLayerFleetRadioRoomInput" type="text" maxlength="16" autocomplete="off" spellcheck="false"
+                        placeholder="大廳（輸入房號切換）"
+                        class="flex-1 min-w-0 px-2.5 py-1 rounded-lg bg-white border ${isRadioOn ? 'border-sky-300 focus:border-violet-500' : 'border-gray-300 focus:border-gray-500'} text-[11px] font-black text-gray-800 placeholder-gray-400 outline-none">
+                    <button type="button" id="mapLayerFleetRadioRoomPickerBtn"
+                        class="px-2 py-1 rounded-full text-[10px] font-black flex items-center gap-0.5 shadow-sm active:scale-95 transition-all whitespace-nowrap flex-shrink-0 border ${
+                            roomState.isLobby
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-400'
+                                : 'bg-violet-600 hover:bg-violet-700 text-white border-violet-400'
+                        }" title="選擇預設大廳或公開包廂">
+                        <span id="mapLayerFleetRadioRoomPickerLabel">${roomState.shortLabel} ▾</span>
+                    </button>
+                </div>
+                <div id="mapLayerFleetRadioRoomDropdown" class="hidden bg-white rounded-xl border border-sky-200 shadow-md p-1 flex flex-col gap-0.5"></div>
             `;
-            radioBtn.addEventListener('click', (e) => {
+
+            const roomBarEl = radioCard.querySelector('#mapLayerFleetRadioRoomBar');
+            const roomInputEl = radioCard.querySelector('#mapLayerFleetRadioRoomInput');
+            const roomPickerBtn = radioCard.querySelector('#mapLayerFleetRadioRoomPickerBtn');
+            const roomPickerLabelEl = radioCard.querySelector('#mapLayerFleetRadioRoomPickerLabel');
+            const roomDropdownEl = radioCard.querySelector('#mapLayerFleetRadioRoomDropdown');
+            const subTextEl = radioCard.querySelector('#mapLayerFleetRadioSubText');
+
+            if (roomInputEl) {
+                roomInputEl.value = roomState.code || '';
+            }
+
+            // 徹底隔離房號輸入框與選房按鈕的點擊／觸控冒泡，嚴禁誤觸整張卡片的對講機總開關
+            const stopCardToggle = (e) => {
+                e.stopPropagation();
+            };
+            [roomBarEl, roomInputEl, roomPickerBtn, roomDropdownEl].forEach((el) => {
+                if (!el) return;
+                el.addEventListener('click', stopCardToggle);
+                el.addEventListener('pointerdown', stopCardToggle);
+                el.addEventListener('mousedown', stopCardToggle);
+                el.addEventListener('touchstart', stopCardToggle, { passive: true });
+            });
+
+            if (roomInputEl) {
+                roomInputEl.addEventListener('keydown', (e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (typeof window.FleetRadioPTT.setRoomCode === 'function') {
+                            window.FleetRadioPTT.setRoomCode(roomInputEl.value, { rerenderMenu: true });
+                        }
+                        roomInputEl.blur();
+                    }
+                });
+                roomInputEl.addEventListener('input', (e) => {
+                    e.stopPropagation();
+                    // 只要清空輸入框，立刻無條件切回清潔隊公務大廳（不搶焦點）
+                    if (roomInputEl.value.trim() === '' && typeof window.FleetRadioPTT.setRoomCode === 'function') {
+                        const res = window.FleetRadioPTT.setRoomCode('', { rerenderMenu: false });
+                        if (roomPickerLabelEl) roomPickerLabelEl.textContent = '大廳 ▾';
+                        if (roomPickerBtn) {
+                            roomPickerBtn.className = 'px-2 py-1 rounded-full text-[10px] font-black flex items-center gap-0.5 shadow-sm active:scale-95 transition-all whitespace-nowrap flex-shrink-0 border bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-400';
+                        }
+                        if (subTextEl && isRadioOn && res && res.isLobby) {
+                            subTextEl.textContent = '🟢 清潔隊大廳 · 顯示對講鈕並接收語音';
+                            subTextEl.className = 'text-[10px] font-bold truncate text-sky-600';
+                        }
+                    }
+                });
+                roomInputEl.addEventListener('change', (e) => {
+                    e.stopPropagation();
+                    if (typeof window.FleetRadioPTT.setRoomCode === 'function') {
+                        window.FleetRadioPTT.setRoomCode(roomInputEl.value, { rerenderMenu: true });
+                    }
+                });
+            }
+
+            if (roomDropdownEl) {
+                presets.forEach((preset) => {
+                    const isCurrent = (preset.code === '' && roomState.isLobby) ||
+                        (preset.code !== '' && roomState.code.toLowerCase() === preset.code.toLowerCase());
+                    const itemBtn = document.createElement('button');
+                    itemBtn.type = 'button';
+                    itemBtn.className = isCurrent
+                        ? 'w-full text-left px-2.5 py-1.5 rounded-lg bg-sky-50 text-sky-900 text-[11px] font-black flex items-center justify-between gap-1'
+                        : 'w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-gray-50 text-gray-700 text-[11px] font-bold flex items-center justify-between gap-1';
+                    itemBtn.innerHTML = `
+                        <span class="truncate">${preset.label}</span>
+                        ${isCurrent ? '<span class="text-[10px] text-sky-600 font-black">✓</span>' : ''}
+                    `;
+                    itemBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        roomDropdownEl.classList.add('hidden');
+                        if (typeof window.FleetRadioPTT.setRoomCode === 'function') {
+                            window.FleetRadioPTT.setRoomCode(preset.code, { rerenderMenu: true });
+                        }
+                    });
+                    roomDropdownEl.appendChild(itemBtn);
+                });
+            }
+
+            if (roomPickerBtn && roomDropdownEl) {
+                roomPickerBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    roomDropdownEl.classList.toggle('hidden');
+                });
+            }
+
+            radioCard.addEventListener('click', (e) => {
                 e.stopPropagation();
                 window.FleetRadioPTT.toggle();
             });
-            targetFeatureContainer.appendChild(radioBtn);
+            targetFeatureContainer.appendChild(radioCard);
         }
 
         // 🧭 4. 自由導航開關（預設關閉；開啟時長按地圖可預覽路線並啟動導航）

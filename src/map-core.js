@@ -2108,12 +2108,19 @@ function cancelTemporaryCameraAutoResume() {
     clearTemporaryPanResumeTimer();
 }
 
-// 嚴格限定僅在「遵循導航進行中（followWatchId !== null）＋ 跟隨中（非自由看）＋ 非路線編輯／手繪模式」才允許 3 秒暫停後自動吸回
-function canAutoResumeCameraFollow() {
+// 單一權威開關條件：僅在「正在遵循導航中（followWatchId !== null）＋ 跟隨中（非自由看）＋ 非路線預覽／非路線編輯／非手繪模式」才允許自動吸回或自動置中
+function canAutoPullBack() {
     if (!isFollowingCamera) return false;
     if (typeof isEditingMode !== 'undefined' && isEditingMode) return false;
     if (typeof isManualDrawMode !== 'undefined' && isManualDrawMode) return false;
+    const routeDetailEl = document.getElementById('routeDetailUI');
+    if (routeDetailEl && !routeDetailEl.classList.contains('hidden')) return false;
     return (typeof followWatchId !== 'undefined' && followWatchId !== null);
+}
+window.canAutoPullBack = canAutoPullBack;
+
+function canAutoResumeCameraFollow() {
+    return canAutoPullBack();
 }
 
 function recenterCameraToVehicle(durationMs = 450) {

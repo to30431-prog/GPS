@@ -332,7 +332,8 @@ function applySystemConfigToRuntime(newCfg) {
 
     // 3. 若跟隨中且縮放設定變更，平滑更新當前視野縮放
     if (
-        isFollowingCamera &&
+        (typeof canAutoPullBack === 'function' && canAutoPullBack()) &&
+        !isTemporarilyPanning &&
         !isPowerSaveMapPaused() &&
         normalized.enableDynamicZoom &&
         (prevDynamicZoom !== normalized.enableDynamicZoom ||

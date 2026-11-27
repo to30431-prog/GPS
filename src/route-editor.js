@@ -1435,6 +1435,9 @@ function openRouteDetail(idx, skipFitBounds = false) {
     document.getElementById('detailTime').innerText = route.timeStr;
     document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
 
+    if (typeof cancelTemporaryCameraAutoResume === 'function') {
+        cancelTemporaryCameraAutoResume();
+    }
     if (typeof setRouteDetailCollapsed === 'function') {
         setRouteDetailCollapsed(false);
     }

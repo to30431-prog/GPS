@@ -1840,7 +1840,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     smoothMoveVehicleMarker(targetLngLat, targetHeading, 750);
                 }
 
-                if (isFollowingCamera && !isTemporarilyPanning) {
+                const allowPullBack = (typeof canAutoPullBack === 'function') ? canAutoPullBack() : isFollowingCamera;
+                if (allowPullBack && !isTemporarilyPanning) {
                     const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
                     const targetBearing = isHeadingUpMode ? targetHeading : map.getBearing();
                     map.easeTo({

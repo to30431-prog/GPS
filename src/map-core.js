@@ -2108,14 +2108,22 @@ function cancelTemporaryCameraAutoResume() {
     clearTemporaryPanResumeTimer();
 }
 
-// 單一權威開關條件：僅在「正在遵循導航中（followWatchId !== null）＋ 跟隨中（非自由看）＋ 非路線預覽／非路線編輯／非手繪模式」才允許自動吸回或自動置中
+function isRouteReplayActive() {
+    const playbackEl = document.getElementById('playbackUI');
+    const isPlaybackVisible = Boolean(playbackEl && !playbackEl.classList.contains('hidden'));
+    return isPlaybackVisible || (typeof isPlaying !== 'undefined' && isPlaying);
+}
+window.isRouteReplayActive = isRouteReplayActive;
+
+// 單一權威開關條件：僅在「遵循導航中（followWatchId !== null）或路線重播複習中 ＋ 跟隨中（非自由看）＋ 非路線預覽／非路線編輯／非手繪模式」才允許自動吸回或自動置中
 function canAutoPullBack() {
     if (!isFollowingCamera) return false;
     if (typeof isEditingMode !== 'undefined' && isEditingMode) return false;
     if (typeof isManualDrawMode !== 'undefined' && isManualDrawMode) return false;
     const routeDetailEl = document.getElementById('routeDetailUI');
     if (routeDetailEl && !routeDetailEl.classList.contains('hidden')) return false;
-    return (typeof followWatchId !== 'undefined' && followWatchId !== null);
+    const isFollowNavActive = (typeof followWatchId !== 'undefined' && followWatchId !== null);
+    return isFollowNavActive || isRouteReplayActive();
 }
 window.canAutoPullBack = canAutoPullBack;
 
@@ -2124,10 +2132,17 @@ function canAutoResumeCameraFollow() {
 }
 
 function recenterCameraToVehicle(durationMs = 450) {
-    if (!map || !lastKnownLngLat) return;
-    const resumeZoom = (followWatchId !== null || isRecording)
-        ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
-        : Math.max(map.getZoom(), 17);
+    if (!map) return;
+    const replayActive = isRouteReplayActive();
+    const targetCenter = (replayActive && Array.isArray(vehicleVisualLngLat) && vehicleVisualLngLat.length >= 2)
+        ? vehicleVisualLngLat
+        : lastKnownLngLat;
+    if (!targetCenter) return;
+    const resumeZoom = replayActive
+        ? map.getZoom()
+        : ((followWatchId !== null || isRecording)
+            ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
+            : Math.max(map.getZoom(), 17));
     const activeHeading = (typeof vehicleVisualHeading === 'number' && !isNaN(vehicleVisualHeading))
         ? vehicleVisualHeading
         : currentHeading;
@@ -2135,7 +2150,7 @@ function recenterCameraToVehicle(durationMs = 450) {
     vehicleVisualHeading = activeHeading;
     const targetBearing = isHeadingUpMode ? activeHeading : 0;
     map.easeTo({
-        center: lastKnownLngLat,
+        center: targetCenter,
         zoom: resumeZoom,
         bearing: targetBearing,
         offset: [0, 100],

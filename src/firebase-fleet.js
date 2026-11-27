@@ -2390,7 +2390,8 @@ function forceRestartGpsAndPushLatestLocation(triggerReason = 'wakeup') {
                     smoothMoveVehicleMarker([latestLng, latestLat], latestHeading, 450);
                 }
                 const allowPullBack = (typeof canAutoPullBack === 'function') ? canAutoPullBack() : false;
-                if (allowPullBack && !isTemporarilyPanning && map) {
+                const inReplay = (typeof isRouteReplayActive === 'function') && isRouteReplayActive();
+                if (allowPullBack && !inReplay && !isTemporarilyPanning && map) {
                     const targetZoom = getDynamicZoomBySpeed(filtered ? filtered.speedKmh : 0);
                     map.easeTo({
                         center: [latestLng, latestLat],

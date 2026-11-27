@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.98';
+const APP_VERSION = 'v3.99';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.98
+// 確保畫面上所有版本號膠囊同步顯示為 v3.99
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -796,7 +796,8 @@ function handleIdleGpsPosition(pos) {
             smoothMoveVehicleMarker([filtered.lng, filtered.lat], filtered.heading, 750);
         }
         const allowPullBack = (typeof canAutoPullBack === 'function') ? canAutoPullBack() : false;
-        if ((!filtered.isStationary || filtered.isWakeupFix) && allowPullBack && !isTemporarilyPanning) {
+        const inReplay = (typeof isRouteReplayActive === 'function') && isRouteReplayActive();
+        if ((!filtered.isStationary || filtered.isWakeupFix) && allowPullBack && !inReplay && !isTemporarilyPanning) {
             const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
             map.easeTo({
                 center: [filtered.lng, filtered.lat],

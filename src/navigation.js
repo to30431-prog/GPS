@@ -403,7 +403,8 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         });
     }
 
-    if (isFollowingCamera && !isTemporarilyPanning) {
+    const allowReplayFollow = (typeof canAutoPullBack === 'function') ? canAutoPullBack() : isFollowingCamera;
+    if (allowReplayFollow && !isTemporarilyPanning) {
         map.jumpTo({
             center: [curLng, curLat],
             bearing: isHeadingUpMode ? currentHeading : 0,

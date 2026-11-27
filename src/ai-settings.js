@@ -495,6 +495,7 @@ function populateAdminSettingsForm(cfg) {
     setVal('adminHighSpeedZoomInput', c.highSpeedZoom);
     setChecked('adminEnableDynamicZoomInput', c.enableDynamicZoom);
     setChecked('adminShowOnlineFleetListInput', c.showOnlineFleetList);
+    setChecked('adminOnlineFleetListDevOnlyInput', c.onlineFleetListDevOnly);
     setChecked('adminShowFleetSleepStatusInput', c.showFleetSleepStatus);
     setVal('adminFleetSleepMaxMinutesInput', c.fleetSleepMaxMinutes);
     highlightAdminSleepMaxMinBtn(c.fleetSleepMaxMinutes);
@@ -569,6 +570,7 @@ function readAdminSettingsForm() {
         highSpeedZoom: getVal('adminHighSpeedZoomInput'),
         enableDynamicZoom: getChecked('adminEnableDynamicZoomInput'),
         showOnlineFleetList: getChecked('adminShowOnlineFleetListInput'),
+        onlineFleetListDevOnly: getChecked('adminOnlineFleetListDevOnlyInput'),
         showFleetSleepStatus: getChecked('adminShowFleetSleepStatusInput'),
         fleetSleepMaxMinutes: getVal('adminFleetSleepMaxMinutesInput'),
         maxAccuracyMeters: getVal('adminMaxAccuracyInput'),

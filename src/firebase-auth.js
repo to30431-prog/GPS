@@ -401,6 +401,9 @@ function setLocalUserPermissionRole(newRole) {
     syncAdminCurrentRoleBadgeUI();
     syncRoutePermissionControlsUI();
     evaluateAndRenderAccessGateOverlay();
+    if (typeof renderOnlineFleetListUI === 'function') {
+        renderOnlineFleetListUI();
+    }
     if (window.SpeedCameraManager && typeof window.SpeedCameraManager.syncCalibrationUI === 'function') {
         window.SpeedCameraManager.syncCalibrationUI();
     }

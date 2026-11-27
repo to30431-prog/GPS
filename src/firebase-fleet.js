@@ -1995,8 +1995,11 @@ function renderOnlineFleetListUI() {
     // 渲染前先套用共用在線心跳逾時判定，確保離線或被封鎖成員不殘留於在線名單與地圖上
     pruneOfflineFleetMarkers(now);
 
-    // 若管理員關閉「顯示左上角車隊在線名單」或目前無其他同事在線，自動隱藏不佔空間
-    if (!systemNavConfig.showOnlineFleetList || !Array.isArray(onlineFleetMembersList) || onlineFleetMembersList.length === 0) {
+    const isDevMode = (typeof localUserPermissionRole !== 'undefined' && localUserPermissionRole === 'developer');
+    const isHiddenByDevOnly = Boolean(systemNavConfig.onlineFleetListDevOnly && !isDevMode);
+
+    // 若管理員關閉「顯示左上角車隊在線名單」、開啟「僅開發者可見在線名單」且非開發者、或目前無其他同事在線，自動隱藏不佔空間
+    if (!systemNavConfig.showOnlineFleetList || isHiddenByDevOnly || !Array.isArray(onlineFleetMembersList) || onlineFleetMembersList.length === 0) {
         container.innerHTML = '';
         container.classList.add('hidden');
         return;

@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.86';
+const APP_VERSION = 'v3.87';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.86
+// 確保畫面上所有版本號膠囊同步顯示為 v3.87
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -101,6 +101,7 @@ const DEFAULT_SYSTEM_CONFIG = {
     highSpeedZoom: 14.5,
     enableDynamicZoom: true,
     showOnlineFleetList: true,
+    onlineFleetListDevOnly: false,
     showFleetSleepStatus: true,
     fleetSleepMaxMinutes: 3,
     maxAccuracyMeters: 45,
@@ -176,6 +177,7 @@ function normalizeSystemConfig(raw) {
         highSpeedZoom: Number(clampNum(src.highSpeedZoom, 10, 20, DEFAULT_SYSTEM_CONFIG.highSpeedZoom).toFixed(2)),
         enableDynamicZoom: typeof src.enableDynamicZoom === 'boolean' ? src.enableDynamicZoom : DEFAULT_SYSTEM_CONFIG.enableDynamicZoom,
         showOnlineFleetList: typeof src.showOnlineFleetList === 'boolean' ? src.showOnlineFleetList : DEFAULT_SYSTEM_CONFIG.showOnlineFleetList,
+        onlineFleetListDevOnly: typeof src.onlineFleetListDevOnly === 'boolean' ? src.onlineFleetListDevOnly : DEFAULT_SYSTEM_CONFIG.onlineFleetListDevOnly,
         showFleetSleepStatus: typeof src.showFleetSleepStatus === 'boolean' ? src.showFleetSleepStatus : DEFAULT_SYSTEM_CONFIG.showFleetSleepStatus,
         fleetSleepMaxMinutes: Math.round(clampNum(src.fleetSleepMaxMinutes, 0, 120, DEFAULT_SYSTEM_CONFIG.fleetSleepMaxMinutes)),
         maxAccuracyMeters: clampNum(src.maxAccuracyMeters, 5, 300, DEFAULT_SYSTEM_CONFIG.maxAccuracyMeters),

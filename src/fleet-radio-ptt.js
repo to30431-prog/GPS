@@ -14,8 +14,6 @@
     const PRIVATE_MODE_PRIVATE_ONLY = 2;
     const PRIVATE_BTN_BASE_SIZE = 40;
     const PRIVATE_BTN_GAP_PX = 8;
-    const PRIVATE_UNLOCK_TAP_TARGET = 5;
-    const PRIVATE_UNLOCK_WINDOW_MS = 2500;
     const MAX_RECORD_MS = 8000;            // 最長 8 秒自動截斷
     const MIN_RECORD_MS = 350;             // 短於 0.35 秒視為誤觸不發送
     const RECORDER_TIMESLICE_MS = 150;     // 縮短取樣間隔至 150ms，確保開頭語音即時寫入 chunk
@@ -147,7 +145,6 @@
     let privatePttLabelEl = null;
     let privatePttPointerId = null;
     let isPrivatePttGestureActive = false;
-    let privateModalEl = null;
     let toastEl = null;
     let visibilityObserver = null;
     let visibilitySyncTimer = null;
@@ -270,7 +267,6 @@
             'adminPasswordModal',
             'mapLayerMenuPanel',
             'settingsModal',
-            'privateRadioSettingsModal',
             'aiDispatchModal',
             'fleetUserNameModal',
             'welcomeProfileModal',
@@ -1944,10 +1940,10 @@
         });
         visibilitySyncTimer = setInterval(syncPttButtonVisibility, 500);
         syncPttButtonVisibility();
-        setupHiddenPrivateRadioTrigger();
+        setupAdminPrivateRadioPanel();
     }
 
-    // 🔒 套用私人對講頻道與雙守候模式（即時生效並重置收發輪詢，確保頻道 100% 隔離）
+    // 🔒 套用私人對講頻道與雙守候模式（僅存本機 localStorage 並即時生效，絕不寫入全隊同步節點）
     function applyPrivateRadioConfig(mode, code) {
         const prevMode = getEffectivePrivateMode();
         const prevCode = privateChannelCode;
@@ -1971,162 +1967,91 @@
         }
     }
 
-    function closePrivateRadioSettingsModal() {
-        if (privateModalEl) {
-            privateModalEl.classList.add('hidden');
+    function updateAdminPrivateRadioStatusUI(selectedMode, rawCode) {
+        const statusEl = document.getElementById('adminPrivateRadioStatusText');
+        if (!statusEl) return;
+        const trimmed = String(rawCode || '').trim();
+        const cleanCode = sanitizePrivateChannelCode(trimmed);
+        if (selectedMode === PRIVATE_MODE_OFF) {
+            statusEl.className = 'text-[11px] font-bold text-gray-500';
+            statusEl.textContent = '目前本機狀態：模式 0 關閉（一般隊員模式，僅清潔隊頻道）';
+            return;
         }
-        syncPttButtonVisibility();
+        if (cleanCode.length < 2 || cleanCode !== trimmed) {
+            statusEl.className = 'text-[11px] font-bold text-rose-600';
+            statusEl.textContent = '⚠️ 請輸入 2～16 碼英數字私人頻道密碼（不可含空白或特殊符號）即自動生效';
+            return;
+        }
+        if (selectedMode === PRIVATE_MODE_DUAL_WATCH) {
+            statusEl.className = 'text-[11px] font-bold text-indigo-700';
+            statusEl.textContent = `✅ 已套用（僅本機）：模式 1 雙守候 · 私人頻道 ${cleanCode}`;
+        } else {
+            statusEl.className = 'text-[11px] font-bold text-emerald-700';
+            statusEl.textContent = `✅ 已套用（僅本機）：模式 2 僅私人頻道 · 頻道 ${cleanCode}`;
+        }
     }
 
-    // 🔒 隱藏式「私人對講頻道設定」面板（僅於設定選單版本號連點 5 下才動態建立與彈出，未解鎖前零 DOM 痕跡）
-    function openPrivateRadioSettingsModal() {
-        const settingsModal = document.getElementById('settingsModal');
-        if (settingsModal) {
-            settingsModal.classList.add('hidden');
-        }
-
-        if (!privateModalEl) {
-            privateModalEl = document.createElement('div');
-            privateModalEl.id = 'privateRadioSettingsModal';
-            privateModalEl.className = 'hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4 pointer-events-auto';
-            privateModalEl.style.zIndex = '100007';
-            privateModalEl.innerHTML = `
-                <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-gray-100 flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-2">
-                            <span class="w-8 h-8 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center text-sm font-black">🔒</span>
-                            <div>
-                                <h3 class="text-base font-black text-gray-900 leading-tight">私人對講頻道設定</h3>
-                                <p class="text-[11px] font-bold text-gray-400">設定存於本機，重開 App 自動生效</p>
-                            </div>
-                        </div>
-                        <button type="button" id="btnClosePrivateRadioModal" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center active:scale-95">
-                            <i class="fa-solid fa-xmark"></i>
-                        </button>
-                    </div>
-
-                    <div class="flex flex-col gap-1.5">
-                        <label for="privateRadioCodeInput" class="text-xs font-extrabold text-gray-700">私人頻道密碼（雙機需輸入相同密碼）</label>
-                        <input id="privateRadioCodeInput" type="text" maxlength="16" autocomplete="off" spellcheck="false"
-                            placeholder="例如：1234（建議 4 位數字或英數）"
-                            class="w-full px-3.5 py-2.5 rounded-2xl border-2 border-gray-200 focus:border-violet-500 bg-gray-50 text-gray-900 text-sm font-black tracking-wider outline-none transition-colors">
-                        <p id="privateRadioErrorText" class="hidden text-[11px] font-bold text-red-600"></p>
-                    </div>
-
-                    <div class="flex flex-col gap-2">
-                        <div class="text-xs font-extrabold text-gray-700">收發模式</div>
-                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-gray-700 has-[:checked]:bg-gray-50 transition-colors">
-                            <input type="radio" name="privateRadioMode" value="0" class="mt-0.5 w-4 h-4 accent-gray-800 flex-shrink-0">
-                            <div class="leading-snug">
-                                <div class="text-xs font-black text-gray-900">模式 0：關閉（預設一般隊員模式）</div>
-                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">完全隱藏私人功能，僅使用原本清潔隊頻道。</div>
-                            </div>
-                        </label>
-                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-violet-500 has-[:checked]:bg-violet-50/70 transition-colors">
-                            <input type="radio" name="privateRadioMode" value="1" class="mt-0.5 w-4 h-4 accent-violet-600 flex-shrink-0">
-                            <div class="leading-snug">
-                                <div class="text-xs font-black text-gray-900">模式 1：主頻道＋私人頻道雙守候（家長端）</div>
-                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">同時監聽兩頻道（清潔隊優先不蓋台）；主鈕發清潔隊，旁側小型鈕僅發私人頻道。</div>
-                            </div>
-                        </label>
-                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50/70 transition-colors">
-                            <input type="radio" name="privateRadioMode" value="2" class="mt-0.5 w-4 h-4 accent-emerald-600 flex-shrink-0">
-                            <div class="leading-snug">
-                                <div class="text-xs font-black text-gray-900">模式 2：僅私人頻道（幼兒端）</div>
-                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">僅監聽與發送至私人頻道，100% 隔離清潔隊頻道，主畫面維持單一對講按鈕。</div>
-                            </div>
-                        </label>
-                    </div>
-
-                    <div class="grid grid-cols-2 gap-2 pt-1">
-                        <button type="button" id="btnCancelPrivateRadioModal" class="py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs active:scale-95 transition-all">取消</button>
-                        <button type="button" id="btnSavePrivateRadioModal" class="py-2.5 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-black text-xs shadow-md active:scale-95 transition-all">儲存並套用</button>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(privateModalEl);
-
-            privateModalEl.addEventListener('click', (e) => {
-                if (e.target === privateModalEl) {
-                    closePrivateRadioSettingsModal();
-                }
-            });
-            privateModalEl.querySelector('#btnClosePrivateRadioModal')?.addEventListener('click', closePrivateRadioSettingsModal);
-            privateModalEl.querySelector('#btnCancelPrivateRadioModal')?.addEventListener('click', closePrivateRadioSettingsModal);
-            privateModalEl.querySelector('#btnSavePrivateRadioModal')?.addEventListener('click', () => {
-                const codeInput = privateModalEl.querySelector('#privateRadioCodeInput');
-                const errEl = privateModalEl.querySelector('#privateRadioErrorText');
-                const checkedRadio = privateModalEl.querySelector('input[name="privateRadioMode"]:checked');
-                const selectedMode = checkedRadio ? Number(checkedRadio.value) : PRIVATE_MODE_OFF;
-                const rawCode = codeInput ? String(codeInput.value || '').trim() : '';
-                const cleanCode = sanitizePrivateChannelCode(rawCode);
-
-                if (selectedMode !== PRIVATE_MODE_OFF) {
-                    if (cleanCode.length < 2 || cleanCode !== rawCode) {
-                        if (errEl) {
-                            errEl.textContent = '請輸入 2～16 碼英數字私人頻道密碼（不可含空白或特殊符號）';
-                            errEl.classList.remove('hidden');
-                        }
-                        if (codeInput) codeInput.focus();
-                        return;
-                    }
-                }
-
-                if (errEl) errEl.classList.add('hidden');
-                applyPrivateRadioConfig(selectedMode, cleanCode);
-                closePrivateRadioSettingsModal();
-
-                if (selectedMode === PRIVATE_MODE_DUAL_WATCH) {
-                    flashRadioToast('🔒 已啟用雙守候模式（清潔隊優先＋私人頻道）', 'private', 2400);
-                } else if (selectedMode === PRIVATE_MODE_PRIVATE_ONLY) {
-                    flashRadioToast('🔒 已啟用僅私人頻道模式（已隔離清潔隊頻道）', 'private', 2400);
-                } else {
-                    flashRadioToast('📻 已切換回一般隊員模式', 'sent', 2000);
-                }
-            });
-        }
-
-        const codeInput = privateModalEl.querySelector('#privateRadioCodeInput');
-        const errEl = privateModalEl.querySelector('#privateRadioErrorText');
+    function syncAdminPrivateRadioFormUI() {
+        const cardEl = document.getElementById('adminPrivateRadioCard');
+        if (!cardEl) return;
         const effectiveMode = getEffectivePrivateMode();
-        if (codeInput) codeInput.value = privateChannelCode || '';
-        if (errEl) errEl.classList.add('hidden');
-        const radios = privateModalEl.querySelectorAll('input[name="privateRadioMode"]');
+        const codeInput = document.getElementById('adminPrivateRadioCodeInput');
+        if (codeInput && document.activeElement !== codeInput) {
+            codeInput.value = privateChannelCode || '';
+        }
+        const radios = cardEl.querySelectorAll('input[name="adminPrivateRadioMode"]');
         radios.forEach((r) => {
             r.checked = Number(r.value) === effectiveMode;
         });
-
-        privateModalEl.classList.remove('hidden');
-        syncPttButtonVisibility();
+        updateAdminPrivateRadioStatusUI(effectiveMode, privateChannelCode);
     }
 
-    // 🕵️ 隱藏解鎖入口：僅在設定選單的版本號文字上連續點擊 5 下才開啟私人頻道設定
-    function setupHiddenPrivateRadioTrigger() {
-        const versionTextEl = document.getElementById('settingsVersionText');
-        if (!versionTextEl || versionTextEl.dataset.privateUnlockBound === '1') return;
-        versionTextEl.dataset.privateUnlockBound = '1';
+    // 🛠️ 開發者模式控制中心「系統與 AI 參數」分頁：本機專屬私人對講頻道設定（修改即存本機並套用，不隨全隊同步）
+    function setupAdminPrivateRadioPanel() {
+        const cardEl = document.getElementById('adminPrivateRadioCard');
+        if (!cardEl || cardEl.dataset.privateRadioBound === '1') return;
+        cardEl.dataset.privateRadioBound = '1';
 
-        let tapCount = 0;
-        let tapResetTimer = null;
+        const codeInput = document.getElementById('adminPrivateRadioCodeInput');
+        const radios = cardEl.querySelectorAll('input[name="adminPrivateRadioMode"]');
 
-        versionTextEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            tapCount += 1;
-            if (tapResetTimer) clearTimeout(tapResetTimer);
-            tapResetTimer = setTimeout(() => {
-                tapCount = 0;
-                tapResetTimer = null;
-            }, PRIVATE_UNLOCK_WINDOW_MS);
+        const handleControlChange = () => {
+            const checkedRadio = cardEl.querySelector('input[name="adminPrivateRadioMode"]:checked');
+            const selectedMode = checkedRadio ? Number(checkedRadio.value) : PRIVATE_MODE_OFF;
+            const rawCode = codeInput ? String(codeInput.value || '').trim() : '';
+            const cleanCode = sanitizePrivateChannelCode(rawCode);
 
-            if (tapCount >= PRIVATE_UNLOCK_TAP_TARGET) {
-                tapCount = 0;
-                if (tapResetTimer) {
-                    clearTimeout(tapResetTimer);
-                    tapResetTimer = null;
-                }
-                openPrivateRadioSettingsModal();
+            if (selectedMode === PRIVATE_MODE_OFF) {
+                applyPrivateRadioConfig(PRIVATE_MODE_OFF, cleanCode);
+                updateAdminPrivateRadioStatusUI(PRIVATE_MODE_OFF, cleanCode);
+                return;
             }
+
+            if (cleanCode.length >= 2 && cleanCode === rawCode) {
+                applyPrivateRadioConfig(selectedMode, cleanCode);
+            }
+            updateAdminPrivateRadioStatusUI(selectedMode, rawCode);
+        };
+
+        radios.forEach((radio) => {
+            radio.addEventListener('change', handleControlChange);
         });
+        if (codeInput) {
+            codeInput.addEventListener('input', handleControlChange);
+            codeInput.addEventListener('change', handleControlChange);
+        }
+
+        const adminModalEl = document.getElementById('adminSettingsModal');
+        if (adminModalEl) {
+            const adminModalObserver = new MutationObserver(() => {
+                if (!adminModalEl.classList.contains('hidden')) {
+                    syncAdminPrivateRadioFormUI();
+                }
+            });
+            adminModalObserver.observe(adminModalEl, { attributes: true, attributeFilter: ['class'] });
+        }
+
+        syncAdminPrivateRadioFormUI();
     }
 
     function setRadioEnabled(enabled) {

@@ -841,6 +841,200 @@ function startHistoryCardDrag({ listEl, filteredRoutes, card, handleEl = null, c
     startHistoryDragFrameLoop();
 }
 
+// 🗑️ 路線庫卡片長按刪除（550ms 長按觸發，移動 > 8px 或捲動即取消，嚴格隔離子按鈕與排序把柄）
+const HISTORY_CARD_LONG_PRESS_MS = 550;
+const HISTORY_CARD_LONG_PRESS_MOVE_PX = 8;
+let historyCardLastLongPressAt = 0;
+let historyRouteDeleteConfirmModalEl = null;
+let pendingDeleteHistoryRouteRef = null;
+let pendingDeleteHistoryRouteIdx = -1;
+
+function openHistoryRouteDeleteConfirmModal(routeIdx) {
+    const idx = Number(routeIdx);
+    const targetRoute = (!isNaN(idx) && idx >= 0 && idx < savedRoutes.length) ? savedRoutes[idx] : null;
+    if (!targetRoute) return;
+
+    pendingDeleteHistoryRouteRef = targetRoute;
+    pendingDeleteHistoryRouteIdx = idx;
+
+    if (!historyRouteDeleteConfirmModalEl) {
+        historyRouteDeleteConfirmModalEl = document.createElement('div');
+        historyRouteDeleteConfirmModalEl.id = 'historyRouteDeleteConfirmModal';
+        historyRouteDeleteConfirmModalEl.className = 'hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4 pointer-events-auto';
+        historyRouteDeleteConfirmModalEl.style.zIndex = '100009';
+        historyRouteDeleteConfirmModalEl.innerHTML = `
+            <div class="bg-white w-full max-w-xs rounded-3xl p-5 shadow-2xl border border-rose-100 flex flex-col gap-3.5 text-center">
+                <div class="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl mx-auto shadow-sm">🗑️</div>
+                <div>
+                    <h3 class="text-base font-black text-gray-900">確定刪除路線？</h3>
+                    <p id="historyRouteDeleteConfirmName" class="text-sm font-black text-rose-700 mt-1.5 break-words px-2"></p>
+                    <p class="text-[11px] font-bold text-gray-400 mt-1">將從本機「鶯歌清運路線庫」移除此路線</p>
+                </div>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button type="button" id="btnCancelHistoryRouteDelete" class="py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs active:scale-95 transition-all">取消</button>
+                    <button type="button" id="btnConfirmHistoryRouteDelete" class="py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-md active:scale-95 transition-all">確定刪除</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(historyRouteDeleteConfirmModalEl);
+
+        const closeModal = () => {
+            pendingDeleteHistoryRouteRef = null;
+            pendingDeleteHistoryRouteIdx = -1;
+            historyRouteDeleteConfirmModalEl.classList.add('hidden');
+        };
+        historyRouteDeleteConfirmModalEl.addEventListener('click', (e) => {
+            if (e.target === historyRouteDeleteConfirmModalEl) closeModal();
+        });
+        historyRouteDeleteConfirmModalEl.querySelector('#btnCancelHistoryRouteDelete')?.addEventListener('click', closeModal);
+        historyRouteDeleteConfirmModalEl.querySelector('#btnConfirmHistoryRouteDelete')?.addEventListener('click', () => {
+            let deleteIdx = pendingDeleteHistoryRouteRef
+                ? savedRoutes.indexOf(pendingDeleteHistoryRouteRef)
+                : -1;
+            if (deleteIdx < 0 && pendingDeleteHistoryRouteIdx >= 0 && pendingDeleteHistoryRouteIdx < savedRoutes.length) {
+                deleteIdx = pendingDeleteHistoryRouteIdx;
+            }
+            closeModal();
+            if (deleteIdx < 0 || deleteIdx >= savedRoutes.length) return;
+
+            savedRoutes.splice(deleteIdx, 1);
+            persistSavedRoutesToStorage();
+
+            if (typeof selectedRouteIdx === 'number') {
+                if (selectedRouteIdx === deleteIdx) {
+                    selectedRouteIdx = -1;
+                } else if (selectedRouteIdx > deleteIdx) {
+                    selectedRouteIdx -= 1;
+                }
+            }
+            renderHistoryList();
+        });
+    }
+
+    const nameEl = historyRouteDeleteConfirmModalEl.querySelector('#historyRouteDeleteConfirmName');
+    if (nameEl) {
+        nameEl.textContent = `「${targetRoute.name || '未命名路線'}」`;
+    }
+    historyRouteDeleteConfirmModalEl.classList.remove('hidden');
+}
+
+function attachHistoryCardLongPressDelete(cardEl, cardInfoEl, listEl) {
+    if (!cardEl || !cardInfoEl) return;
+
+    let pressTimer = null;
+    let isPressing = false;
+    let startX = 0;
+    let startY = 0;
+    let startScrollTop = 0;
+    let activeTouchId = null;
+
+    const clearPress = () => {
+        if (pressTimer !== null) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+        isPressing = false;
+        activeTouchId = null;
+        if (listEl) {
+            listEl.removeEventListener('scroll', clearPress, { passive: true });
+        }
+    };
+
+    const isIgnoredTarget = (target) => {
+        return Boolean(target && typeof target.closest === 'function' && target.closest('button, .drag-handle, .edit-name-btn, .upload-cloud-btn, .update-from-cloud-btn'));
+    };
+
+    const triggerLongPress = () => {
+        const curScrollDiff = listEl ? Math.abs(listEl.scrollTop - startScrollTop) : 0;
+        clearPress();
+        if (historyDragState.active || curScrollDiff > 4 || !cardEl.isConnected) return;
+        historyCardLastLongPressAt = Date.now();
+        cardInfoEl.dataset.longPressTriggered = '1';
+        try { navigator.vibrate?.(30); } catch (_) {}
+        const idx = Number(cardEl.dataset.routeIdx);
+        if (!isNaN(idx)) {
+            openHistoryRouteDeleteConfirmModal(idx);
+        }
+    };
+
+    cardInfoEl.addEventListener('contextmenu', (e) => {
+        if (isPressing || (Date.now() - historyCardLastLongPressAt) < 600) {
+            e.preventDefault();
+        }
+    });
+
+    // 觸控長按偵測（550ms，位移 > 8px 或清單捲動即取消）
+    cardInfoEl.addEventListener('touchstart', (e) => {
+        if (historyDragState.active || isIgnoredTarget(e.target)) return;
+        if (!e.changedTouches || e.changedTouches.length === 0) return;
+        if (e.touches && e.touches.length > 1) {
+            clearPress();
+            return;
+        }
+        clearPress();
+        const t = e.changedTouches[0];
+        isPressing = true;
+        activeTouchId = t.identifier;
+        startX = t.clientX;
+        startY = t.clientY;
+        startScrollTop = listEl ? listEl.scrollTop : 0;
+        delete cardInfoEl.dataset.longPressTriggered;
+        if (listEl) {
+            listEl.addEventListener('scroll', clearPress, { passive: true });
+        }
+        pressTimer = setTimeout(triggerLongPress, HISTORY_CARD_LONG_PRESS_MS);
+    }, { passive: true });
+
+    cardInfoEl.addEventListener('touchmove', (e) => {
+        if (!isPressing) return;
+        if (e.touches && e.touches.length > 1) {
+            clearPress();
+            return;
+        }
+        const t = (typeof findMatchingTouch === 'function')
+            ? findMatchingTouch(e.touches, activeTouchId)
+            : (e.touches && e.touches[0]);
+        if (!t) {
+            clearPress();
+            return;
+        }
+        const dist = Math.hypot(t.clientX - startX, t.clientY - startY);
+        const scrollDiff = listEl ? Math.abs(listEl.scrollTop - startScrollTop) : 0;
+        if (dist > HISTORY_CARD_LONG_PRESS_MOVE_PX || scrollDiff > 4) {
+            clearPress();
+        }
+    }, { passive: true });
+
+    cardInfoEl.addEventListener('touchend', clearPress, { passive: true });
+    cardInfoEl.addEventListener('touchcancel', clearPress, { passive: true });
+
+    // 滑鼠長按偵測（550ms，位移 > 8px 或離開卡片即取消）
+    cardInfoEl.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || historyDragState.active || isIgnoredTarget(e.target)) return;
+        clearPress();
+        isPressing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startScrollTop = listEl ? listEl.scrollTop : 0;
+        delete cardInfoEl.dataset.longPressTriggered;
+        if (listEl) {
+            listEl.addEventListener('scroll', clearPress, { passive: true });
+        }
+        pressTimer = setTimeout(triggerLongPress, HISTORY_CARD_LONG_PRESS_MS);
+    });
+
+    cardInfoEl.addEventListener('mousemove', (e) => {
+        if (!isPressing) return;
+        const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
+        if (dist > HISTORY_CARD_LONG_PRESS_MOVE_PX) {
+            clearPress();
+        }
+    });
+
+    cardInfoEl.addEventListener('mouseup', clearPress);
+    cardInfoEl.addEventListener('mouseleave', clearPress);
+}
+
 function renderHistoryList() {
     const list = document.getElementById('historyList');
     if (!list) return;
@@ -950,11 +1144,19 @@ function renderHistoryList() {
             </div>
         `;
 
-        card.querySelector('.route-card-info').onclick = () => {
+        const cardInfoEl = card.querySelector('.route-card-info');
+        cardInfoEl.onclick = (e) => {
+            if (cardInfoEl.dataset.longPressTriggered === '1' || (Date.now() - historyCardLastLongPressAt) < 450) {
+                delete cardInfoEl.dataset.longPressTriggered;
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             if (historyDragState.active || (Date.now() - historyDragState.lastFinishedAt) < 300) return;
             const idx = Number(card.dataset.routeIdx);
             if (!isNaN(idx)) window.openRouteDetail(idx);
         };
+        attachHistoryCardLongPressDelete(card, cardInfoEl, list);
         const editNameBtn = card.querySelector('.edit-name-btn');
         if (editNameBtn) {
             editNameBtn.onclick = (e) => {

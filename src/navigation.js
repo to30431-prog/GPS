@@ -1902,8 +1902,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     continue;
                 }
 
-                // 距離轉彎頂點進入 110 公尺內時，預先在背景查詢轉入路段路名並快取，確保抵達 30m 播報點時立即可用不延遲
-                if (!turnItem.roadName && !turnItem.prefetching && alongToTurnM <= 110 && alongToTurnM >= 0) {
+                // 距離轉彎頂點進入 130 公尺內時，預先在背景查詢轉入路段路名並快取，確保抵達速度補償播報點（48~75m）時立即可用不延遲
+                if (!turnItem.roadName && !turnItem.prefetching && alongToTurnM <= 130 && alongToTurnM >= 0) {
                     turnItem.roadName = lookupRoadNameFromMapOrPoint(pts, turnItem.afterIdx, turnItem.outBearing);
                     if (!turnItem.roadName) {
                         turnItem.prefetching = true;
@@ -1925,8 +1925,10 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 // 結合沿線剩餘距離與直線距離（避免節點較疏時沿線距離跳階）
                 const effectiveDistToTurnM = Math.min(alongToTurnM, directToCornerM);
 
-                // 當距離前方轉彎節點剩餘 <= 30 公尺（搭配沿線容差 <= 38m 吸收定位步進）時，提前觸發單次左右轉語音提示
-                if (alongToTurnM <= 38 && effectiveDistToTurnM <= 30 && effectiveDistToTurnM >= 0) {
+                // 結合車速前瞻補償（speed * 2.0 秒，低速約 48m、中高速 55~75m 上限）抵銷 GPS 與畫面平滑延遲，同一轉彎僅播報一次
+                const speedMpsForTurn = Math.max(0, (estSpeedKmh || 0) / 3.6);
+                const dynamicTurnTriggerM = Math.min(75, Math.max(48, 45 + speedMpsForTurn * 2.0));
+                if (alongToTurnM <= (dynamicTurnTriggerM + 10) && effectiveDistToTurnM <= dynamicTurnTriggerM && effectiveDistToTurnM >= 0) {
                     turnItem.announced = true;
                     for (let k = Math.max(0, turnItem.turnIdx - 4); k <= Math.min(pts.length - 1, turnItem.afterIdx + 2); k++) {
                         triggeredTurnIndices.add(k);
@@ -1937,8 +1939,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     }
                     const cleanRoad = sanitizeDetectedRoadName(turnItem.roadName);
                     const voiceMsg = cleanRoad
-                        ? `前方準備${turnItem.actionZh}進${cleanRoad}`
-                        : `前方準備${turnItem.actionZh}`;
+                        ? `前方${turnItem.actionZh}進${cleanRoad}`
+                        : `前方${turnItem.actionZh}`;
 
                     autoWakeScreen();
                     showNavAlert(turnItem.iconHtml, '', 'bg-blue-600');
@@ -1947,8 +1949,8 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     break;
                 }
 
-                // 只處理前方最近的一個未播報轉彎，若距離尚超過 115m 則跳出迴圈
-                if (alongToTurnM > 115) break;
+                // 只處理前方最近的一個未播報轉彎，若距離尚超過 135m 則跳出迴圈
+                if (alongToTurnM > 135) break;
             }
         }
 

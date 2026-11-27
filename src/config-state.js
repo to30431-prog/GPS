@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.94';
+const APP_VERSION = 'v3.95';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.94
+// 確保畫面上所有版本號膠囊同步顯示為 v3.95
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -132,6 +132,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, customAbort
 // 核心狀態變數
 let idleWatchId = null;
 let isFollowingCamera = true;
+let isTemporarilyPanning = false;
 let isHeadingUpMode = true; 
 let currentHeading = 0;
 let lastKnownLngLat = [121.346, 24.954];
@@ -794,7 +795,7 @@ function handleIdleGpsPosition(pos) {
         if (vehicleMarker) {
             smoothMoveVehicleMarker([filtered.lng, filtered.lat], filtered.heading, 750);
         }
-        if ((!filtered.isStationary || filtered.isWakeupFix) && isFollowingCamera) {
+        if ((!filtered.isStationary || filtered.isWakeupFix) && isFollowingCamera && !isTemporarilyPanning) {
             const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
             map.easeTo({
                 center: [filtered.lng, filtered.lat],

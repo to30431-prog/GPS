@@ -385,7 +385,7 @@ document.getElementById('recordBtn').onclick = async () => {
                     window.syncCarHeading?.(currentHeading, map ? map.getBearing() : 0);
                     updateRouteLayers(routePoints, 250);
 
-                    if (isFollowingCamera) {
+                    if (isFollowingCamera && !isTemporarilyPanning) {
                         const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
                         map.easeTo({
                             center: [lng, lat],

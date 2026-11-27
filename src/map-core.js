@@ -320,8 +320,19 @@ function bindCoreMapInstanceListeners(targetMap) {
             restoreCustomLayersAndAlignmentAfterStyleLoad();
         });
 
-        ['dragstart', 'touchstart', 'wheel', 'rotatestart', 'pitchstart'].forEach(evt => {
-            targetMap.on(evt, (e) => { if (e.originalEvent) setCameraFollow(false); });
+        // 🧭 跟隨中拖曳／縮放僅暫停自動置中 3 秒（離屏 3 秒後平滑吸回車輛），不再自動切換成「自由看」
+        ['dragstart', 'touchstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach(evt => {
+            targetMap.on(evt, (e) => {
+                if (e.originalEvent) pauseCameraFollowTemporarily(false);
+            });
+        });
+        targetMap.on('wheel', (e) => {
+            if (e.originalEvent) pauseCameraFollowTemporarily(true);
+        });
+        ['dragend', 'touchend', 'touchcancel', 'zoomend', 'rotateend', 'pitchend'].forEach(evt => {
+            targetMap.on(evt, (e) => {
+                if (e.originalEvent || isTemporarilyPanning) scheduleCameraFollowAutoResume();
+            });
         });
     } finally {
         isInternalMapBinding = false;
@@ -2082,21 +2093,18 @@ map.once('load', () => {
 function emptyGeoJSON() { return { type: 'FeatureCollection', features: [] }; }
 
 // --- 2. 視角操作 ---
-function setCameraFollow(follow) {
-    isFollowingCamera = follow;
-    const btn = document.getElementById('locateBtn');
-    const label = document.getElementById('followLabel');
-    if (follow) {
-        btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500";
-        label.innerText = "跟隨中";
-    } else {
-        btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200";
-        label.innerText = "自由看";
+const CAMERA_TEMP_PAN_RESUME_MS = 3000;
+let temporaryPanResumeTimer = null;
+
+function clearTemporaryPanResumeTimer() {
+    if (temporaryPanResumeTimer !== null) {
+        clearTimeout(temporaryPanResumeTimer);
+        temporaryPanResumeTimer = null;
     }
 }
 
-document.getElementById('locateBtn').onclick = () => {
-    setCameraFollow(true);
+function recenterCameraToVehicle(durationMs = 450) {
+    if (!map || !lastKnownLngLat) return;
     const resumeZoom = (followWatchId !== null || isRecording)
         ? getDynamicZoomBySpeed(lastRecordedSpeedKmh)
         : Math.max(map.getZoom(), 17);
@@ -2107,10 +2115,64 @@ document.getElementById('locateBtn').onclick = () => {
     vehicleVisualHeading = activeHeading;
     const targetBearing = isHeadingUpMode ? activeHeading : 0;
     map.easeTo({
-        center: lastKnownLngLat, zoom: resumeZoom,
-        bearing: targetBearing, offset: [0, 100], duration: 400
+        center: lastKnownLngLat,
+        zoom: resumeZoom,
+        bearing: targetBearing,
+        offset: [0, 100],
+        duration: durationMs
     });
     window.syncCarHeading?.(activeHeading, map.getBearing());
+}
+
+function pauseCameraFollowTemporarily(scheduleImmediately = false) {
+    if (!isFollowingCamera) return;
+    isTemporarilyPanning = true;
+    clearTemporaryPanResumeTimer();
+    if (scheduleImmediately) {
+        scheduleCameraFollowAutoResume();
+    }
+}
+
+function scheduleCameraFollowAutoResume() {
+    if (!isFollowingCamera || !isTemporarilyPanning) return;
+    clearTemporaryPanResumeTimer();
+    temporaryPanResumeTimer = setTimeout(() => {
+        temporaryPanResumeTimer = null;
+        if (!isFollowingCamera) {
+            isTemporarilyPanning = false;
+            return;
+        }
+        isTemporarilyPanning = false;
+        if (!isPowerSaveMapPaused()) {
+            recenterCameraToVehicle(500);
+        }
+    }, CAMERA_TEMP_PAN_RESUME_MS);
+}
+
+function setCameraFollow(follow) {
+    isFollowingCamera = Boolean(follow);
+    isTemporarilyPanning = false;
+    clearTemporaryPanResumeTimer();
+    const btn = document.getElementById('locateBtn');
+    const label = document.getElementById('followLabel');
+    if (!btn || !label) return;
+    if (isFollowingCamera) {
+        btn.className = "bg-white text-blue-600 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border-2 border-blue-500";
+        label.innerText = "跟隨中";
+    } else {
+        btn.className = "bg-white text-gray-400 w-11 h-11 rounded-2xl shadow-lg flex flex-col items-center justify-center active:scale-95 border border-gray-200";
+        label.innerText = "自由看";
+    }
+}
+
+// 右側視角切換按鈕：手動切換「跟隨中 ⇄ 自由看」（僅手動點擊才真正進入自由看並停止自動吸回）
+document.getElementById('locateBtn').onclick = () => {
+    if (isFollowingCamera) {
+        setCameraFollow(false);
+    } else {
+        setCameraFollow(true);
+        recenterCameraToVehicle(400);
+    }
 };
 
 document.getElementById('headingModeBtn').onclick = () => {

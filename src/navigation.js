@@ -403,7 +403,7 @@ function renderInterpolatedStep(floatIdx, forceLayerUpdate = false) {
         });
     }
 
-    if (isFollowingCamera) {
+    if (isFollowingCamera && !isTemporarilyPanning) {
         map.jumpTo({
             center: [curLng, curLat],
             bearing: isHeadingUpMode ? currentHeading : 0,
@@ -1840,7 +1840,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                     smoothMoveVehicleMarker(targetLngLat, targetHeading, 750);
                 }
 
-                if (isFollowingCamera) {
+                if (isFollowingCamera && !isTemporarilyPanning) {
                     const targetZoom = getDynamicZoomBySpeed(filtered.speedKmh);
                     const targetBearing = isHeadingUpMode ? targetHeading : map.getBearing();
                     map.easeTo({

@@ -56,7 +56,88 @@ function stopAndClearMyFleetRadarImmediately() {
     renderOnlineFleetListUI();
 }
 
-// --- 10.1.6 檢查本機在 fleet_users/{deviceId} 的核准／封鎖／路線管理／社區標註授權狀態 ---
+// --- 10.1.6 檢查本機在 fleet_users/{deviceId} 的核准／封鎖／路線管理／社區標註／功能白名單授權狀態 ---
+const USER_FEATURE_PERMISSION_ITEMS = [
+    { key: 'fleetRadio',       icon: '📻', label: '車隊無線電對講', desc: '顯示懸浮對講鈕、接收語音與大廳／包廂切換' },
+    { key: 'speedCamera',      icon: '📸', label: '測速照相',       desc: '顯示測速圖標與接近 300m 語音提醒' },
+    { key: 'freeNav',          icon: '🧭', label: '自由導航',       desc: '長按地圖設定目的地並啟動自由導航' },
+    { key: 'routeAnnotations', icon: '📌', label: '路線註記／插釘', desc: '顯示畫筆記號、自訂插釘與引線備忘' },
+    { key: 'routeProgressHud', icon: '🎮', label: '路線遊戲進度條', desc: '於功能開關顯示左側垂直路線進度條選項' },
+    { key: 'festivalTheme',    icon: '🎄', label: '節慶主題與音樂', desc: '開啟節慶飄雪視覺主題與水晶音樂播放' }
+];
+
+function normalizeUserAllowedFeatures(rawFeatures, fallbackFeatures = null) {
+    const src = (rawFeatures && typeof rawFeatures === 'object') ? rawFeatures : {};
+    const fb = (fallbackFeatures && typeof fallbackFeatures === 'object') ? fallbackFeatures : {};
+    const result = {};
+    USER_FEATURE_PERMISSION_ITEMS.forEach(item => {
+        if (src[item.key] !== undefined) {
+            result[item.key] = Boolean(src[item.key]);
+        } else if (fb[item.key] !== undefined) {
+            result[item.key] = Boolean(fb[item.key]);
+        } else {
+            result[item.key] = true; // 預設全開，向下相容既有成員
+        }
+    });
+    return result;
+}
+
+function isUserFeatureAllowed(featureKey) {
+    if (!featureKey) return true;
+    if (!myCloudUserProfile || typeof myCloudUserProfile !== 'object') return true;
+    const af = myCloudUserProfile.allowedFeatures;
+    if (!af || typeof af !== 'object') return true;
+    return af[featureKey] !== false;
+}
+window.isUserFeatureAllowed = isUserFeatureAllowed;
+
+// 🛡️ 即時套用本機的功能白名單權限：未勾選的功能一律隱藏 UI 並強制停止背景執行與渲染
+function enforceMyAllowedFeatures() {
+    try {
+        // 1. 📻 車隊無線電對講
+        if (window.FleetRadioPTT && typeof window.FleetRadioPTT.syncFeaturePermission === 'function') {
+            window.FleetRadioPTT.syncFeaturePermission();
+        }
+        // 2. 📸 測速照相
+        if (!isUserFeatureAllowed('speedCamera') && window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function' && window.SpeedCameraManager.isVisible()) {
+            window.SpeedCameraManager.setVisible(false);
+        }
+        // 3. 🧭 自由導航
+        if (!isUserFeatureAllowed('freeNav') && window.ApproachNav) {
+            if (typeof window.ApproachNav.isFreeNavEnabled === 'function' && window.ApproachNav.isFreeNavEnabled()) {
+                window.ApproachNav.toggleFreeNav();
+            }
+            if (typeof window.ApproachNav.stop === 'function') {
+                window.ApproachNav.stop(true);
+            }
+        }
+        // 4. 📌 路線註記／插釘
+        if (!isUserFeatureAllowed('routeAnnotations')) {
+            if (typeof updateRouteBrushStrokesLayer === 'function') updateRouteBrushStrokesLayer(null);
+            if (typeof updateCalloutLeaderLines === 'function') updateCalloutLeaderLines(null);
+            const activeRoute = (typeof getActiveWorkingRoute === 'function' ? getActiveWorkingRoute() : null)
+                || (Array.isArray(savedRoutes) && typeof selectedRouteIdx === 'number' && selectedRouteIdx >= 0 ? savedRoutes[selectedRouteIdx] : null);
+            if (activeRoute && typeof refreshCurrentRouteMarkers === 'function') {
+                refreshCurrentRouteMarkers(activeRoute);
+            }
+        }
+        // 5. 🎮 路線遊戲進度條
+        if (!isUserFeatureAllowed('routeProgressHud') && window.RouteProgressHud && typeof window.RouteProgressHud.isEnabled === 'function' && window.RouteProgressHud.isEnabled()) {
+            window.RouteProgressHud.setEnabled(false);
+        }
+        // 6. 🎄 節慶主題與音樂
+        if (typeof applyFestivalThemeToRuntime === 'function') {
+            applyFestivalThemeToRuntime();
+        }
+        if (!isUserFeatureAllowed('festivalTheme') && window.BgmPlayer && typeof window.BgmPlayer.isEnabled === 'function' && window.BgmPlayer.isEnabled()) {
+            window.BgmPlayer.setEnabled(false);
+        }
+        if (typeof renderMapLayerMenuOptions === 'function') {
+            renderMapLayerMenuOptions();
+        }
+    } catch (e) {}
+}
+
 let isCheckingMyUserAccess = false;
 async function checkMyFleetUserAccessStatus() {
     if (!fleetDeviceId || !navigator.onLine || isCheckingMyUserAccess) return;
@@ -77,6 +158,7 @@ async function checkMyFleetUserAccessStatus() {
         syncAdminCurrentRoleBadgeUI();
         syncRoutePermissionControlsUI();
         evaluateAndRenderAccessGateOverlay();
+        enforceMyAllowedFeatures();
     } catch (e) {
     } finally {
         isCheckingMyUserAccess = false;
@@ -668,6 +750,8 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
         ? Boolean(raw.hiddenFromRadar)
         : Boolean(base.hiddenFromRadar);
 
+    const allowedFeaturesVal = normalizeUserAllowedFeatures(raw.allowedFeatures, base.allowedFeatures);
+
     return {
         deviceId: devId,
         displayName: displayNameVal,
@@ -681,6 +765,7 @@ function normalizeFleetUserRecord(devId, u, existingUser = null) {
         canEditCommunity: canEditVal,
         canManageBuildings: canEditVal,
         hiddenFromRadar: hiddenFromRadarVal,
+        allowedFeatures: allowedFeaturesVal,
         lastSeen: lastSeenVal,
         lastActiveAt: lastSeenVal,
         createdAt: createdAtVal,
@@ -747,16 +832,17 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         return;
     }
 
-    // 頂部極簡表頭：左側「成員」，右側單行對齊「准許」、「路線」、「社區」、「隱藏」
+    // 頂部極簡表頭：左側「成員」，右側五欄緊湊單行對齊「准許」、「路線」、「社區」、「隱藏」、「功能」
     const headerRow = document.createElement('div');
-    headerRow.className = 'flex items-center justify-between gap-1.5 px-2 py-1 text-[10px] font-black text-slate-500 border-b border-slate-200 select-none';
+    headerRow.className = 'flex items-center justify-between gap-1 px-2 py-1 text-[10px] font-black text-slate-500 border-b border-slate-200 select-none';
     headerRow.innerHTML = `
         <div class="min-w-0 flex-1">成員</div>
-        <div class="flex items-center gap-1 flex-shrink-0">
-            <span class="w-[34px] text-center">准許</span>
-            <span class="w-[34px] text-center">路線</span>
-            <span class="w-[34px] text-center">社區</span>
-            <span class="w-[34px] text-center text-indigo-600">隱藏</span>
+        <div class="flex items-center gap-0.5 flex-shrink-0">
+            <span class="w-[28px] text-center">准許</span>
+            <span class="w-[28px] text-center">路線</span>
+            <span class="w-[28px] text-center">社區</span>
+            <span class="w-[28px] text-center text-indigo-600">隱藏</span>
+            <span class="w-[30px] text-center text-violet-600">功能</span>
         </div>
     `;
     listContainer.appendChild(headerRow);
@@ -867,20 +953,20 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         leftCol.appendChild(line1);
         leftCol.appendChild(line2);
 
-        // 右側：4 顆迷你切換開關單行並排（對應表頭「准許」、「路線」、「社區」、「隱藏」）
+        // 右側：4 顆迷你切換開關 ＋ 第 5 欄「功能」單行並排（五欄齊平，確保 360px 窄螢幕絕不換行溢出）
         const rightToggles = document.createElement('div');
-        rightToggles.className = 'flex items-center gap-1 flex-shrink-0';
+        rightToggles.className = 'flex items-center gap-0.5 flex-shrink-0';
 
         // 開關 1：「准許（准許使用／封鎖）」(控制 approved，同步 blocked: !approved)
         const accessCell = document.createElement('div');
-        accessCell.className = 'w-[34px] flex items-center justify-center';
+        accessCell.className = 'w-[28px] flex items-center justify-center';
         const accessSwitchBtn = document.createElement('button');
         accessSwitchBtn.type = 'button';
         accessSwitchBtn.title = '准許使用／封鎖';
         accessSwitchBtn.setAttribute('role', 'switch');
         accessSwitchBtn.setAttribute('aria-checked', isApproved ? 'true' : 'false');
         accessSwitchBtn.className = `admin-user-toggle-switch ${isApproved ? 'is-on' : 'is-off'}`;
-        accessSwitchBtn.style.transform = 'scale(0.68)';
+        accessSwitchBtn.style.transform = 'scale(0.58)';
         accessSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleApprovedAccess = async (e) => {
@@ -924,14 +1010,14 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
         // 開關 2：「路線（路線管理含社區）」(控制 canManageRoute)
         const routeCell = document.createElement('div');
-        routeCell.className = 'w-[34px] flex items-center justify-center';
+        routeCell.className = 'w-[28px] flex items-center justify-center';
         const routeSwitchBtn = document.createElement('button');
         routeSwitchBtn.type = 'button';
         routeSwitchBtn.title = '路線管理（含社區）';
         routeSwitchBtn.setAttribute('role', 'switch');
         routeSwitchBtn.setAttribute('aria-checked', canManageRoute ? 'true' : 'false');
         routeSwitchBtn.className = `admin-user-toggle-switch ${canManageRoute ? 'is-on' : 'is-off'}`;
-        routeSwitchBtn.style.transform = 'scale(0.68)';
+        routeSwitchBtn.style.transform = 'scale(0.58)';
         routeSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleRouteManagerAuth = async (e) => {
@@ -968,14 +1054,14 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
         // 開關 3：「社區（僅社區標註）」(控制 canEditCommunity)
         const bldgCell = document.createElement('div');
-        bldgCell.className = 'w-[34px] flex items-center justify-center';
+        bldgCell.className = 'w-[28px] flex items-center justify-center';
         const toggleSwitchBtn = document.createElement('button');
         toggleSwitchBtn.type = 'button';
         toggleSwitchBtn.title = '僅社區標註';
         toggleSwitchBtn.setAttribute('role', 'switch');
         toggleSwitchBtn.setAttribute('aria-checked', canEditCommunity ? 'true' : 'false');
         toggleSwitchBtn.className = `admin-user-toggle-switch ${canEditCommunity ? 'is-on' : 'is-off'}`;
-        toggleSwitchBtn.style.transform = 'scale(0.68)';
+        toggleSwitchBtn.style.transform = 'scale(0.58)';
         toggleSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleCommunityAuth = async (e) => {
@@ -1013,14 +1099,14 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
 
         // 開關 4：「隱藏（隱身雷達）」(控制 hiddenFromRadar，對他人完全隱藏車標與在線統計，自身操作與管理員列表不受影響)
         const hiddenCell = document.createElement('div');
-        hiddenCell.className = 'w-[34px] flex items-center justify-center';
+        hiddenCell.className = 'w-[28px] flex items-center justify-center';
         const hiddenSwitchBtn = document.createElement('button');
         hiddenSwitchBtn.type = 'button';
         hiddenSwitchBtn.title = '隱身雷達（對其他隊員隱藏車標與上線狀態）';
         hiddenSwitchBtn.setAttribute('role', 'switch');
         hiddenSwitchBtn.setAttribute('aria-checked', isHiddenFromRadar ? 'true' : 'false');
         hiddenSwitchBtn.className = `admin-user-toggle-switch ${isHiddenFromRadar ? 'is-on' : 'is-off'}`;
-        hiddenSwitchBtn.style.transform = 'scale(0.68)';
+        hiddenSwitchBtn.style.transform = 'scale(0.58)';
         hiddenSwitchBtn.innerHTML = `<span class="admin-user-toggle-knob"></span>`;
 
         const handleToggleHiddenFromRadar = async (e) => {
@@ -1046,10 +1132,30 @@ function renderAdminFleetUsersCardsFromMap(mergedMap) {
         hiddenSwitchBtn.addEventListener('click', handleToggleHiddenFromRadar);
         hiddenCell.appendChild(hiddenSwitchBtn);
 
+        // 第 5 欄：「功能（個別功能白名單勾選）」
+        const userAllowedFeatures = normalizeUserAllowedFeatures(user.allowedFeatures);
+        const enabledFeatureCount = USER_FEATURE_PERMISSION_ITEMS.reduce((acc, item) => acc + (userAllowedFeatures[item.key] ? 1 : 0), 0);
+        const allFeaturesEnabled = enabledFeatureCount === USER_FEATURE_PERMISSION_ITEMS.length;
+        const featureCell = document.createElement('div');
+        featureCell.className = 'w-[30px] flex items-center justify-center';
+        const featureBtn = document.createElement('button');
+        featureBtn.type = 'button';
+        featureBtn.title = `個別功能白名單設定（目前開放 ${enabledFeatureCount}/${USER_FEATURE_PERMISSION_ITEMS.length} 項）`;
+        featureBtn.className = allFeaturesEnabled
+            ? 'w-[28px] h-[22px] rounded-lg bg-violet-50 hover:bg-violet-100 border border-violet-300 text-violet-700 text-[10px] font-black flex items-center justify-center active:scale-90 transition-all leading-none'
+            : 'w-[28px] h-[22px] rounded-lg bg-amber-100 hover:bg-amber-200 border border-amber-400 text-amber-900 text-[9px] font-black flex items-center justify-center active:scale-90 transition-all leading-none';
+        featureBtn.textContent = allFeaturesEnabled ? '⚙️' : `${enabledFeatureCount}/${USER_FEATURE_PERMISSION_ITEMS.length}`;
+        featureBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openAdminUserFeaturesModal(user);
+        });
+        featureCell.appendChild(featureBtn);
+
         rightToggles.appendChild(accessCell);
         rightToggles.appendChild(routeCell);
         rightToggles.appendChild(bldgCell);
         rightToggles.appendChild(hiddenCell);
+        rightToggles.appendChild(featureCell);
 
         mainRow.appendChild(leftCol);
         mainRow.appendChild(rightToggles);
@@ -1297,6 +1403,9 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
     if (patchFields.hiddenFromRadar !== undefined) {
         syncedPatch.hiddenFromRadar = Boolean(patchFields.hiddenFromRadar);
     }
+    if (patchFields.allowedFeatures !== undefined) {
+        syncedPatch.allowedFeatures = normalizeUserAllowedFeatures(patchFields.allowedFeatures, existingRecord.allowedFeatures);
+    }
 
     // 1. 先更新前端 UI 狀態讓滑動開關流暢切換
     allCloudFleetUsersMap[targetDeviceId] = normalizeFleetUserRecord(targetDeviceId, syncedPatch, existingRecord);
@@ -1305,6 +1414,7 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         syncAdminCurrentRoleBadgeUI();
         syncRoutePermissionControlsUI();
         evaluateAndRenderAccessGateOverlay();
+        enforceMyAllowedFeatures();
     }
     renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
     if (typeof pruneOfflineFleetMarkers === 'function') {
@@ -1368,6 +1478,7 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
             syncAdminCurrentRoleBadgeUI();
             syncRoutePermissionControlsUI();
             evaluateAndRenderAccessGateOverlay();
+            enforceMyAllowedFeatures();
         }
         renderAdminFleetUsersCardsFromMap(allCloudFleetUsersMap);
         if (typeof pruneOfflineFleetMarkers === 'function') {
@@ -1382,5 +1493,122 @@ async function updateCloudFleetUserFields(targetDeviceId, patchFields) {
         alert(`⚠️ 儲存使用者權限至 Firebase 失敗（${errMsg}）！\n系統已自動將開關還原為原本狀態，請確認網路連線後重試。`);
         return false;
     }
+}
+
+// 🎛️ 個別使用者功能權限白名單勾選視窗（預設全勾選，取消勾選即於對方裝置隱藏 UI 並強制停用背景執行）
+let adminUserFeaturesModalEl = null;
+let adminUserFeaturesEditingTargetId = '';
+let adminUserFeaturesEditingName = '';
+
+function openAdminUserFeaturesModal(user) {
+    if (!user || !user.deviceId) return;
+    adminUserFeaturesEditingTargetId = user.deviceId;
+    adminUserFeaturesEditingName = String(user.realName || user.originalName || user.displayName || '車隊隊員').trim();
+    const currentFeatures = normalizeUserAllowedFeatures(user.allowedFeatures);
+
+    if (!adminUserFeaturesModalEl) {
+        adminUserFeaturesModalEl = document.createElement('div');
+        adminUserFeaturesModalEl.id = 'adminUserFeaturesModal';
+        adminUserFeaturesModalEl.className = 'hidden fixed inset-0 bg-black/75 flex items-center justify-center p-4 pointer-events-auto';
+        adminUserFeaturesModalEl.style.zIndex = '100008';
+        adminUserFeaturesModalEl.innerHTML = `
+            <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border-2 border-violet-300 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0">
+                        <h3 class="text-base font-black text-violet-900 flex items-center gap-1.5 truncate">
+                            <span>🎛️</span>
+                            <span id="adminUserFeaturesModalTitle" class="truncate">功能權限設定</span>
+                        </h3>
+                        <p class="text-[11px] font-bold text-gray-500 mt-0.5">取消勾選將即時隱藏並停用對方該項功能</p>
+                    </div>
+                    <button type="button" id="btnCloseAdminUserFeaturesModal" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center justify-center active:scale-95 flex-shrink-0">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-between gap-2 bg-violet-50/80 border border-violet-200 rounded-xl px-3 py-1.5">
+                    <span class="text-[11px] font-extrabold text-violet-800">快速套用</span>
+                    <div class="flex items-center gap-1.5">
+                        <button type="button" id="btnAdminFeaturesCheckAll" class="px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-black active:scale-95">全部開放</button>
+                        <button type="button" id="btnAdminFeaturesUncheckAll" class="px-2.5 py-1 rounded-lg bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 text-[11px] font-black active:scale-95">全部關閉</button>
+                    </div>
+                </div>
+
+                <div id="adminUserFeaturesCheckboxList" class="flex flex-col gap-1.5"></div>
+
+                <p class="text-[10px] font-bold text-gray-400 leading-snug px-1">※ 基本路線導航與「社區名稱」為基礎預設功能，永遠保留不受此白名單影響。</p>
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button type="button" id="btnCancelAdminUserFeaturesModal" class="py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs active:scale-95">取消</button>
+                    <button type="button" id="btnSaveAdminUserFeaturesModal" class="py-2.5 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-black text-xs shadow-md active:scale-95">💾 儲存權限</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(adminUserFeaturesModalEl);
+
+        const closeModal = () => adminUserFeaturesModalEl.classList.add('hidden');
+        adminUserFeaturesModalEl.addEventListener('click', (e) => {
+            if (e.target === adminUserFeaturesModalEl) closeModal();
+        });
+        adminUserFeaturesModalEl.querySelector('#btnCloseAdminUserFeaturesModal')?.addEventListener('click', closeModal);
+        adminUserFeaturesModalEl.querySelector('#btnCancelAdminUserFeaturesModal')?.addEventListener('click', closeModal);
+        adminUserFeaturesModalEl.querySelector('#btnAdminFeaturesCheckAll')?.addEventListener('click', () => {
+            adminUserFeaturesModalEl.querySelectorAll('input[data-feature-key]').forEach(cb => { cb.checked = true; });
+        });
+        adminUserFeaturesModalEl.querySelector('#btnAdminFeaturesUncheckAll')?.addEventListener('click', () => {
+            adminUserFeaturesModalEl.querySelectorAll('input[data-feature-key]').forEach(cb => { cb.checked = false; });
+        });
+        adminUserFeaturesModalEl.querySelector('#btnSaveAdminUserFeaturesModal')?.addEventListener('click', async () => {
+            const saveBtn = adminUserFeaturesModalEl.querySelector('#btnSaveAdminUserFeaturesModal');
+            if (!adminUserFeaturesEditingTargetId || (saveBtn && saveBtn.disabled)) return;
+            const nextFeatures = {};
+            adminUserFeaturesModalEl.querySelectorAll('input[data-feature-key]').forEach(cb => {
+                nextFeatures[cb.dataset.featureKey] = Boolean(cb.checked);
+            });
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.textContent = '同步中...';
+            }
+            const ok = await updateCloudFleetUserFields(adminUserFeaturesEditingTargetId, {
+                allowedFeatures: nextFeatures
+            });
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.textContent = '💾 儲存權限';
+            }
+            if (ok) {
+                const enabledCount = USER_FEATURE_PERMISSION_ITEMS.reduce((acc, item) => acc + (nextFeatures[item.key] ? 1 : 0), 0);
+                closeModal();
+                showAdminUserActionToast(`🎛️ 已更新「${adminUserFeaturesEditingName}」功能權限（${enabledCount}/${USER_FEATURE_PERMISSION_ITEMS.length} 項開放）`, 'success');
+            }
+        });
+    }
+
+    const titleEl = adminUserFeaturesModalEl.querySelector('#adminUserFeaturesModalTitle');
+    const listEl = adminUserFeaturesModalEl.querySelector('#adminUserFeaturesCheckboxList');
+    if (titleEl) {
+        titleEl.textContent = `功能權限 — ${adminUserFeaturesEditingName}`;
+    }
+    if (listEl) {
+        listEl.innerHTML = '';
+        USER_FEATURE_PERMISSION_ITEMS.forEach(item => {
+            const checked = Boolean(currentFeatures[item.key]);
+            const row = document.createElement('label');
+            row.className = 'flex items-center justify-between gap-2.5 p-2.5 rounded-2xl bg-gray-50 hover:bg-violet-50/60 border border-gray-200 cursor-pointer transition-colors';
+            row.innerHTML = `
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span class="text-base flex-shrink-0">${item.icon}</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black text-gray-900 truncate">${item.label}</div>
+                        <div class="text-[10px] font-bold text-gray-500 truncate">${item.desc}</div>
+                    </div>
+                </div>
+                <input type="checkbox" data-feature-key="${item.key}" ${checked ? 'checked' : ''} class="w-5 h-5 accent-violet-600 rounded cursor-pointer flex-shrink-0">
+            `;
+            listEl.appendChild(row);
+        });
+    }
+
+    adminUserFeaturesModalEl.classList.remove('hidden');
 }
 

@@ -6,10 +6,10 @@
 // ==========================================
 // 🛡️ 裝置角色自動授權與全域版本常數設定
 // ==========================================
-const APP_VERSION = 'v3.89';
+const APP_VERSION = 'v3.90';
 window.APP_VERSION = APP_VERSION;
 
-// 確保畫面上所有版本號膠囊同步顯示為 v3.89
+// 確保畫面上所有版本號膠囊同步顯示為 v3.90
 const appVersionBadgeEl = document.getElementById('appVersionBadge');
 if (appVersionBadgeEl) {
     appVersionBadgeEl.textContent = APP_VERSION;
@@ -238,9 +238,12 @@ function getEffectiveFestivalThemeState() {
         if (raw === 'on' || raw === 'off') userPref = raw;
     } catch (e) {}
 
-    const isActive = (userPref === 'off')
+    const isFeatureAllowed = (typeof isUserFeatureAllowed !== 'function') || isUserFeatureAllowed('festivalTheme');
+    const isActive = !isFeatureAllowed
         ? false
-        : (userPref === 'on' ? true : fleetEnabled);
+        : ((userPref === 'off')
+            ? false
+            : (userPref === 'on' ? true : fleetEnabled));
 
     return { isActive, themeKey, themeMeta, fleetEnabled, userPref };
 }

@@ -271,8 +271,12 @@
         }
     }
 
+    function isFleetRadioAllowedByAdmin() {
+        return typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('fleetRadio');
+    }
+
     function isRestrictedByGate() {
-        return typeof isDeviceRestrictedByGatekeeper === 'function' && isDeviceRestrictedByGatekeeper();
+        return (typeof isDeviceRestrictedByGatekeeper === 'function' && isDeviceRestrictedByGatekeeper()) || !isFleetRadioAllowedByAdmin();
     }
 
     // 判斷目前是否處於「地圖主畫面」（巡航、導航、預覽、手繪、家具模式皆允許；進入全螢幕列表或彈窗時自動隱藏）
@@ -282,6 +286,7 @@
             'historyModal',
             'cloudRoutesModal',
             'adminSettingsModal',
+            'adminUserFeaturesModal',
             'adminPasswordModal',
             'mapLayerMenuPanel',
             'settingsModal',
@@ -1429,7 +1434,7 @@
 
     function startRadioPolling() {
         stopRadioPolling();
-        if (!isRadioEnabled) return;
+        if (!isRadioEnabled || !isFleetRadioAllowedByAdmin()) return;
         pollActiveRadioChannels(true);
         pollTimer = setInterval(() => pollActiveRadioChannels(false), POLL_INTERVAL_MS);
     }
@@ -2180,11 +2185,26 @@
         if (isRadioEnabled) startRadioPolling();
     }
 
+    function syncFeaturePermission() {
+        if (!isFleetRadioAllowedByAdmin()) {
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
+            stopRadioPolling();
+            releaseRadioWakeLock();
+            syncPttButtonVisibility();
+            return;
+        }
+        if (isRadioEnabled && pollTimer === null) {
+            startRadioPolling();
+        }
+        syncPttButtonVisibility();
+    }
+
     window.FleetRadioPTT = {
         isEnabled: () => isRadioEnabled,
         setEnabled: setRadioEnabled,
         toggle: toggleRadioEnabled,
         syncVisibility: syncPttButtonVisibility,
+        syncFeaturePermission,
         getRoomState,
         setRoomCode: setUserRoomCode
     };

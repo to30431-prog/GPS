@@ -154,6 +154,9 @@ let cachedFurnitureManualDraftGeoJSON = { type: 'FeatureCollection', features: [
 let showRouteAnnotationsLayer = localStorage.getItem('yingge_show_route_annotations_v1') !== 'false';
 
 function isRouteAnnotationsVisible() {
+    if (typeof isUserFeatureAllowed === 'function' && !isUserFeatureAllowed('routeAnnotations')) {
+        return false;
+    }
     return Boolean(showRouteAnnotationsLayer);
 }
 
@@ -1544,7 +1547,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 🎄 1. 使用者節慶主題開關（耶誕節主題開啟時，右側內嵌專屬「水晶音樂開／關」切換膠囊）
-        if (typeof getEffectiveFestivalThemeState === 'function') {
+        if (typeof getEffectiveFestivalThemeState === 'function' && (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('festivalTheme'))) {
             const themeState = getEffectiveFestivalThemeState();
             const themeMeta = themeState.themeMeta;
             const isThemeOn = Boolean(themeState.isActive);
@@ -1599,7 +1602,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 📸 2. 固定式測速照相圖標開關（預設開啟）
-        if (window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function') {
+        if (window.SpeedCameraManager && typeof window.SpeedCameraManager.isVisible === 'function' && (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('speedCamera'))) {
             const isCamOn = Boolean(window.SpeedCameraManager.isVisible());
             const camBtn = document.createElement('button');
             camBtn.type = 'button';
@@ -1625,7 +1628,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 🎙️ 3. 車隊無線電對講開關（預設開啟；內嵌左：房號輸入框、右：選擇房間膠囊，空白即無條件預設清潔隊大廳）
-        if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function') {
+        if (window.FleetRadioPTT && typeof window.FleetRadioPTT.isEnabled === 'function' && (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('fleetRadio'))) {
             const isRadioOn = Boolean(window.FleetRadioPTT.isEnabled());
             const roomState = typeof window.FleetRadioPTT.getRoomState === 'function'
                 ? window.FleetRadioPTT.getRoomState()
@@ -1777,7 +1780,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 🧭 4. 自由導航開關（預設關閉；開啟時長按地圖可預覽路線並啟動導航）
-        if (window.ApproachNav && typeof window.ApproachNav.isFreeNavEnabled === 'function') {
+        if (window.ApproachNav && typeof window.ApproachNav.isFreeNavEnabled === 'function' && (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('freeNav'))) {
             const isFreeNavOn = Boolean(window.ApproachNav.isFreeNavEnabled());
             const freeNavBtn = document.createElement('button');
             freeNavBtn.type = 'button';
@@ -1833,7 +1836,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 📌 6. 路線註記／備忘開關（預設開啟；控制預覽與導航模式下的畫筆記號、自訂插釘與引線備忘框）
-        {
+        if (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('routeAnnotations')) {
             const isAnnotOn = isRouteAnnotationsVisible();
             const annotBtn = document.createElement('button');
             annotBtn.type = 'button';
@@ -1859,7 +1862,7 @@ function renderMapLayerMenuOptions() {
         }
 
         // 🎮 7. 路線遊戲進度條開關（預設關閉 OFF，開啟時於遵循導航／路線重播顯示左側垂直進度條）
-        {
+        if (typeof isUserFeatureAllowed !== 'function' || isUserFeatureAllowed('routeProgressHud')) {
             const isHudOn = (window.RouteProgressHud && typeof window.RouteProgressHud.isEnabled === 'function')
                 ? Boolean(window.RouteProgressHud.isEnabled())
                 : (localStorage.getItem('yingge_route_progress_hud_enabled_v1') === 'true');

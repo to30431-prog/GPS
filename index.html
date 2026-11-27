@@ -8,9 +8,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>鶯歌清運路線助手 Pro Max</title>
-    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.95)">
+    <meta name="description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.96)">
     <meta property="og:title" content="鶯歌清運路線助手 Pro Max">
-    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.95)">
+    <meta property="og:description" content="專為清潔隊量身打造的高精度清運軌跡紀錄、語音導航、車隊即時雷達與 AI 智慧家具派工系統 (v3.96)">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -119,7 +119,7 @@
                 <div id="topStatusPill" class="bg-white/95 backdrop-blur px-2.5 py-1.5 rounded-xl shadow-lg text-gray-800 font-extrabold text-[11px] sm:text-xs flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden whitespace-nowrap">
                     <span id="statusDot" class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
                     <span id="appStatusTitle" class="cursor-pointer select-none whitespace-nowrap truncate min-w-0">鶯歌清運路線助手 Pro Max</span>
-                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[9px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.95</span>
+                    <span id="appVersionBadge" class="bg-blue-100 hover:bg-blue-200 text-blue-700 text-[9px] font-black px-1.5 py-0.5 rounded-md leading-none cursor-pointer select-none active:scale-95 transition-transform flex-shrink-0" title="點擊開啟開發者模式">v3.96</span>
                 </div>
                 <!-- 🚛 家具模式專屬：左上角「家具模式」徽章旁一鍵「返回一般清運」按鈕 -->
                 <button id="btnExitFurnitureMode" type="button" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] px-2.5 py-1.5 rounded-xl shadow-lg border-2 border-white/90 active:scale-95 transition-all whitespace-nowrap flex items-center gap-1 flex-shrink-0 relative z-[70]" title="結束家具模式並返回一般清運模式">
@@ -523,60 +523,91 @@
         </div>
     </div>
 
-    <!-- 2. 路線詳情預覽面板 -->
-    <div id="routeDetailUI" class="hidden absolute bottom-4 left-4 right-4 ui-layer flex justify-center">
-        <div class="bg-white rounded-3xl p-5 shadow-2xl pointer-events-auto w-full max-w-md">
-            <div class="flex items-start justify-between mb-3">
-                <div class="flex items-center gap-3 min-w-0">
-                    <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg flex-shrink-0"><i class="fa-solid fa-route"></i></div>
-                    <div class="min-w-0">
-                        <h3 id="detailTitle" class="font-black text-gray-900 text-lg leading-tight truncate">路線名稱</h3>
-                        <p id="detailDate" class="text-xs text-gray-500 mt-0.5">保存於 日期</p>
+    <!-- 2. 路線詳情預覽面板（高密度緊湊版 ＋ 一鍵／滑動向下收合為超薄迷你列） -->
+    <div id="routeDetailUI" class="hidden absolute bottom-2.5 left-2.5 right-2.5 sm:left-4 sm:right-4 ui-layer flex justify-center">
+        <div id="routeDetailCard" class="bg-white/95 backdrop-blur-md rounded-2xl px-3 pt-1.5 pb-2.5 shadow-2xl pointer-events-auto w-full max-w-md border border-gray-200/80 transition-all">
+            <!-- 頂部中央一鍵收合／展開把手（支援點擊或上下滑動手勢） -->
+            <button id="routeDetailCollapseHandle" type="button" class="w-full flex items-center justify-center gap-1.5 py-0.5 mb-1 text-[10px] font-extrabold text-gray-400 hover:text-gray-600 active:scale-95 transition-all select-none cursor-pointer" title="點擊或向下滑動收合預覽面板，露出更多地圖">
+                <span class="w-8 h-1 rounded-full bg-gray-300 inline-block"></span>
+                <i id="routeDetailCollapseIcon" class="fa-solid fa-chevron-down text-[9px]"></i>
+                <span id="routeDetailCollapseText">收合</span>
+            </button>
+
+            <!-- 收合狀態：超薄單行迷你列（僅顯示路線名稱與精簡版遵循導航鈕，露出 90%+ 地圖視野） -->
+            <div id="routeDetailCollapsedBar" class="hidden flex items-center justify-between gap-2 pt-0.5">
+                <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                    <span class="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-xs flex-shrink-0"><i class="fa-solid fa-route"></i></span>
+                    <span id="detailMiniTitle" class="font-black text-gray-900 text-xs sm:text-sm truncate">路線名稱</span>
+                </div>
+                <button id="startFollowMiniBtn" type="button" class="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs px-3 py-1.5 rounded-xl flex items-center gap-1 shadow active:scale-95 whitespace-nowrap flex-shrink-0">
+                    <i class="fa-solid fa-location-arrow text-[11px]"></i>
+                    <span>遵循導航</span>
+                </button>
+            </div>
+
+            <!-- 展開狀態：高密度緊湊完整預覽內容 -->
+            <div id="routeDetailExpandedBody">
+                <div class="flex items-center justify-between gap-1.5 mb-1.5">
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        <div class="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-sm flex-shrink-0"><i class="fa-solid fa-route"></i></div>
+                        <div class="min-w-0 flex-1">
+                            <h3 id="detailTitle" class="font-black text-gray-900 text-sm sm:text-base leading-tight truncate">路線名稱</h3>
+                            <p id="detailDate" class="text-[10px] text-gray-400 leading-tight truncate mt-0.5">保存於 日期</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1 flex-shrink-0">
+                        <button id="editRouteBtn" class="text-amber-700 hover:text-amber-900 px-2 py-1 bg-amber-100 border border-amber-300 rounded-lg active:scale-95 relative z-[99999] font-extrabold text-[11px] flex items-center gap-1 shadow-sm" title="進入路線編輯器（微調/手繪/修剪）"><i class="fa-solid fa-pen-to-square"></i><span>編輯</span></button>
+                        <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-1.5 bg-blue-50 rounded-lg active:scale-95 relative z-[99999] text-xs"><i class="fa-solid fa-share-nodes"></i></button>
+                        <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-1.5 active:scale-95 relative z-[99999] text-xs"><i class="fa-regular fa-trash-can"></i></button>
                     </div>
                 </div>
-              <div class="flex gap-1.5 flex-shrink-0">
-                <button id="editRouteBtn" class="text-amber-700 hover:text-amber-900 px-2.5 py-2 bg-amber-100 border border-amber-300 rounded-xl active:scale-95 relative z-[99999] font-extrabold text-xs flex items-center gap-1 shadow-sm" title="進入路線編輯器（微調/手繪/修剪）"><i class="fa-solid fa-pen-to-square"></i><span>編輯</span></button>
-                <button id="exportRouteBtn" class="text-blue-600 hover:text-blue-800 p-2 bg-blue-50 rounded-xl active:scale-95 relative z-[99999]"><i class="fa-solid fa-share-nodes"></i></button>
-                <button id="deleteRouteBtn" class="text-gray-400 hover:text-red-600 p-2 active:scale-95 relative z-[99999]"><i class="fa-regular fa-trash-can"></i></button>
-              </div>
-        </div>
-            <div class="flex items-center justify-between gap-2 text-xs font-bold mb-3 px-1">
-                <div class="flex items-center gap-3 sm:gap-4 flex-wrap min-w-0">
-                    <span class="flex items-center gap-1.5 text-green-700 whitespace-nowrap"><span class="w-3 h-1.5 bg-green-600 rounded-full inline-block"></span> 綠線：音樂收運</span>
-                    <span class="flex items-center gap-1.5 text-blue-600 whitespace-nowrap"><span class="w-3 h-1.5 bg-blue-500 rounded-full inline-block"></span> 藍線：音樂關閉</span>
+
+                <!-- 單行迷你圖例色點 ＋ 右側上傳雲端小按鈕同列對齊 -->
+                <div class="flex items-center justify-between gap-1.5 text-[10.5px] font-extrabold mb-1.5 px-0.5">
+                    <div class="flex items-center gap-2.5 flex-nowrap min-w-0 overflow-hidden">
+                        <span class="flex items-center gap-1 text-green-700 whitespace-nowrap"><span class="w-2 h-2 bg-green-600 rounded-full inline-block flex-shrink-0"></span>音樂收運</span>
+                        <span class="flex items-center gap-1 text-blue-600 whitespace-nowrap"><span class="w-2 h-2 bg-blue-500 rounded-full inline-block flex-shrink-0"></span>音樂關閉</span>
+                    </div>
+                    <button id="detailUploadCloudBtn" type="button" class="upload-cloud-btn bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-lg text-[10.5px] font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap flex-shrink-0 shadow-sm relative z-[99999]" title="將目前預覽路線直接上傳或更新至車隊雲端路線庫">
+                        ⬆️ 上傳雲端
+                    </button>
                 </div>
-                <button id="detailUploadCloudBtn" type="button" class="upload-cloud-btn bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-xl text-[11px] font-extrabold flex items-center gap-1 active:scale-95 transition-all whitespace-nowrap flex-shrink-0 shadow-sm relative z-[99999]" title="將目前預覽路線直接上傳或更新至車隊雲端路線庫">
-                    ⬆️ 上傳至雲端
-                </button>
-            </div>
-            <!-- 📅 支線星期預覽模擬列（僅當路線設有 daySegments 時自動顯示，預設讀取系統今日星期） -->
-            <div id="detailDayScheduleBar" class="hidden mb-3 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 space-y-1.5">
-                <div class="flex items-center justify-between gap-2">
-                    <span id="detailDayScheduleSummary" class="text-[11px] font-black text-slate-800 truncate">📅 今日支線排程</span>
-                    <span class="text-[10px] font-bold text-slate-400 whitespace-nowrap">模擬星期預習</span>
+
+                <!-- 📅 支線星期預覽模擬列（僅當路線設有 daySegments 時自動顯示，緊湊內距） -->
+                <div id="detailDayScheduleBar" class="hidden mb-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 space-y-1">
+                    <div class="flex items-center justify-between gap-1.5">
+                        <span id="detailDayScheduleSummary" class="text-[10.5px] font-black text-slate-800 truncate">📅 今日支線排程</span>
+                        <span class="text-[9.5px] font-bold text-slate-400 whitespace-nowrap">模擬星期預習</span>
+                    </div>
+                    <div id="detailDayScheduleBtns" class="grid grid-cols-8 gap-1"></div>
                 </div>
-                <div id="detailDayScheduleBtns" class="grid grid-cols-8 gap-1"></div>
-            </div>
-            <div class="grid grid-cols-3 gap-2 mb-4">
-                <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
-                    <div class="text-[11px] text-gray-400">距離</div>
-                    <div id="detailDist" class="font-black text-sm text-gray-800 mt-0.5">0.00 km</div>
+
+                <!-- 單行緊湊三欄摘要條（距離 ｜ 期間 ｜ 音樂標記） -->
+                <div class="bg-gray-50 border border-gray-100 rounded-xl px-2.5 py-1.5 mb-2 flex items-center justify-around gap-1 text-xs">
+                    <div class="flex items-center gap-1 whitespace-nowrap">
+                        <span class="text-[10px] font-bold text-gray-400">距離</span>
+                        <span id="detailDist" class="font-black text-gray-800">0.00 km</span>
+                    </div>
+                    <span class="text-gray-300 text-[10px] select-none">｜</span>
+                    <div class="flex items-center gap-1 whitespace-nowrap">
+                        <span class="text-[10px] font-bold text-gray-400">期間</span>
+                        <span id="detailTime" class="font-black text-gray-800">00m 00s</span>
+                    </div>
+                    <span class="text-gray-300 text-[10px] select-none">｜</span>
+                    <div class="flex items-center gap-1 whitespace-nowrap">
+                        <span class="text-[10px] font-bold text-gray-400">標記</span>
+                        <span id="detailEvents" class="font-black text-blue-600">0 處</span>
+                    </div>
                 </div>
-                <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
-                    <div class="text-[11px] text-gray-400">期間</div>
-                    <div id="detailTime" class="font-black text-sm text-gray-800 mt-0.5">00m 00s</div>
+
+                <!-- 底部精幹雙按鈕（42px 高度） -->
+                <div class="flex gap-2">
+                    <button id="startReplayBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-extrabold h-[42px] rounded-xl flex items-center justify-center gap-1.5 shadow-md active:scale-95 text-sm"><i class="fa-solid fa-play text-xs"></i> 重播複習</button>
+                    <button id="startFollowBtn" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold h-[42px] rounded-xl flex items-center justify-center gap-1.5 shadow-md active:scale-95 relative overflow-hidden text-sm">
+                        <div class="absolute inset-0 bg-white/20 w-full transform -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
+                        <i class="fa-solid fa-location-arrow text-xs"></i> 遵循導航
+                    </button>
                 </div>
-                <div class="bg-gray-50 p-2.5 rounded-2xl text-center">
-                    <div class="text-[11px] text-gray-400">音樂標記</div>
-                    <div id="detailEvents" class="font-black text-sm text-blue-600 mt-0.5">0 處</div>
-                </div>
-            </div>
-            <div class="flex gap-3">
-                <button id="startReplayBtn" class="flex-1 bg-blue-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95"><i class="fa-solid fa-play"></i> 重播複習</button>
-                <button id="startFollowBtn" class="flex-1 bg-emerald-600 text-white font-extrabold py-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-md active:scale-95 relative overflow-hidden">
-                    <div class="absolute inset-0 bg-white/20 w-full transform -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
-                    <i class="fa-solid fa-location-arrow"></i> 遵循導航
-                </button>
             </div>
         </div>
     </div>
@@ -854,7 +885,7 @@
                 </button>
             </div>
             <div class="mt-3 pt-2.5 border-t border-gray-100 flex items-center justify-center">
-                <span id="settingsVersionText" class="text-[11px] font-bold text-gray-400 select-none">版本 v3.95</span>
+                <span id="settingsVersionText" class="text-[11px] font-bold text-gray-400 select-none">版本 v3.96</span>
             </div>
         </div>
     </div>
@@ -1586,7 +1617,7 @@
                     <h3 class="text-base sm:text-lg font-black text-amber-700 flex items-center gap-2">
                         <span>🛠️</span> 開發者模式控制中心
                     </h3>
-                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.95)</p>
+                    <p class="text-[11px] font-bold text-amber-600/80 mt-0.5">Firebase 全車隊雙向即時同步 (v3.96)</p>
                 </div>
                 <button type="button" id="btnCloseAdminSettings" class="w-8 h-8 rounded-full bg-white text-gray-500 hover:bg-gray-100 flex items-center justify-center active:scale-90 shadow-sm border border-amber-200 flex-shrink-0">
                     <i class="fa-solid fa-xmark"></i>
@@ -2024,11 +2055,11 @@
     </div>
 
     <!-- 模組化核心腳本（依相依順序載入，避免循環依賴） -->
-    <script src="src/config-state.js?v=3.95"></script>
+    <script src="src/config-state.js?v=3.96"></script>
     <script src="src/carModels.js?v=3.71"></script>
     <script src="src/map-core.js?v=3.95"></script>
     <script src="src/caution-editor.js?v=3.68"></script>
-    <script src="src/route-editor.js?v=3.95"></script>
+    <script src="src/route-editor.js?v=3.96"></script>
     <script src="src/navigation.js?v=3.95"></script>
     <script src="src/approach-nav.js?v=3.93"></script>
     <script src="src/firebase-fleet.js?v=3.94"></script>

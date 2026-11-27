@@ -1428,10 +1428,16 @@ function openRouteDetail(idx, skipFitBounds = false) {
 
     const curVer = getRouteVersion(route);
     document.getElementById('detailTitle').innerText = `${route.name} (v${curVer})`;
+    const miniTitleEl = document.getElementById('detailMiniTitle');
+    if (miniTitleEl) miniTitleEl.textContent = `${route.name} (v${curVer})`;
     document.getElementById('detailDate').innerText = `更新於 ${route.date} · 創作者：${route.author || '隊員'}`;
     document.getElementById('detailDist').innerText = `${route.distance} km`;
     document.getElementById('detailTime').innerText = route.timeStr;
     document.getElementById('detailEvents').innerText = `${(route.events || []).length} 處`;
+
+    if (typeof setRouteDetailCollapsed === 'function') {
+        setRouteDetailCollapsed(false);
+    }
 
     window.activeRoutePreviewWeekday = null;
     if (typeof renderDetailDayScheduleBar === 'function') {
@@ -1449,6 +1455,70 @@ function openRouteDetail(idx, skipFitBounds = false) {
     }
 }
 window.openRouteDetail = openRouteDetail;
+
+// 🔽 路線詳情預覽面板一鍵收合／展開（點擊把手或上下滑動手勢，收合為超薄迷你列露出 90%+ 地圖視野）
+let isRouteDetailCollapsed = false;
+function setRouteDetailCollapsed(collapsed) {
+    isRouteDetailCollapsed = Boolean(collapsed);
+    const expandedBody = document.getElementById('routeDetailExpandedBody');
+    const collapsedBar = document.getElementById('routeDetailCollapsedBar');
+    const iconEl = document.getElementById('routeDetailCollapseIcon');
+    const textEl = document.getElementById('routeDetailCollapseText');
+    const cardEl = document.getElementById('routeDetailCard');
+    if (expandedBody) expandedBody.classList.toggle('hidden', isRouteDetailCollapsed);
+    if (collapsedBar) collapsedBar.classList.toggle('hidden', !isRouteDetailCollapsed);
+    if (iconEl) {
+        iconEl.className = isRouteDetailCollapsed
+            ? 'fa-solid fa-chevron-up text-[9px]'
+            : 'fa-solid fa-chevron-down text-[9px]';
+    }
+    if (textEl) {
+        textEl.textContent = isRouteDetailCollapsed ? '展開' : '收合';
+    }
+    if (cardEl) {
+        cardEl.classList.toggle('pb-2', isRouteDetailCollapsed);
+        cardEl.classList.toggle('pb-2.5', !isRouteDetailCollapsed);
+    }
+}
+
+(function bindRouteDetailCollapseEvents() {
+    const handleBtn = document.getElementById('routeDetailCollapseHandle');
+    const cardEl = document.getElementById('routeDetailCard');
+    const miniFollowBtn = document.getElementById('startFollowMiniBtn');
+
+    if (handleBtn) {
+        handleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            setRouteDetailCollapsed(!isRouteDetailCollapsed);
+        });
+    }
+    if (miniFollowBtn) {
+        miniFollowBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.getElementById('startFollowBtn')?.click();
+        });
+    }
+    if (cardEl) {
+        let touchStartY = 0;
+        let trackingSwipe = false;
+        cardEl.addEventListener('touchstart', (e) => {
+            if (!e.touches || e.touches.length !== 1) return;
+            touchStartY = e.touches[0].clientY;
+            trackingSwipe = true;
+        }, { passive: true });
+        cardEl.addEventListener('touchend', (e) => {
+            if (!trackingSwipe || !e.changedTouches || e.changedTouches.length === 0) return;
+            trackingSwipe = false;
+            const dy = e.changedTouches[0].clientY - touchStartY;
+            if (dy > 24 && !isRouteDetailCollapsed) {
+                setRouteDetailCollapsed(true);
+            } else if (dy < -24 && isRouteDetailCollapsed) {
+                setRouteDetailCollapsed(false);
+            }
+        }, { passive: true });
+        cardEl.addEventListener('touchcancel', () => { trackingSwipe = false; }, { passive: true });
+    }
+})();
 
 const deleteRouteBtnEl = document.getElementById('deleteRouteBtn');
 if (deleteRouteBtnEl) {
@@ -2539,8 +2609,8 @@ function renderDetailDayScheduleBar(route) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = isActive
-            ? 'py-1 rounded-lg text-[10px] font-black bg-indigo-600 text-white shadow-sm active:scale-95 transition-all'
-            : 'py-1 rounded-lg text-[10px] font-extrabold bg-white hover:bg-indigo-50 text-slate-600 border border-slate-200 active:scale-95 transition-all';
+            ? 'py-0.5 rounded-lg text-[10px] font-black bg-indigo-600 text-white shadow-sm active:scale-95 transition-all'
+            : 'py-0.5 rounded-lg text-[10px] font-extrabold bg-white hover:bg-indigo-50 text-slate-600 border border-slate-200 active:scale-95 transition-all';
         btn.textContent = opt.label;
         btn.addEventListener('click', (e) => {
             e.stopPropagation();

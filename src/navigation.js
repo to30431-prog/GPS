@@ -831,6 +831,9 @@ const FOLLOW_DIR_ARROW_ICON_ID = 'follow-untraveled-arrow-icon';
 const FOLLOW_SKIPPED_SOURCE_ID = 'follow-skipped-segments-src';
 const FOLLOW_SKIPPED_CASING_LAYER_ID = 'follow-skipped-segments-casing';
 const FOLLOW_SKIPPED_LINE_LAYER_ID = 'follow-skipped-segments-line';
+const FOLLOW_UNDO_GUIDE_SOURCE_ID = 'follow-undo-guide-src';
+const FOLLOW_UNDO_GUIDE_CASING_LAYER_ID = 'follow-undo-guide-casing';
+const FOLLOW_UNDO_GUIDE_LINE_LAYER_ID = 'follow-undo-guide-line';
 let lastFollowArrowRenderTime = 0;
 let lastFollowSkippedRenderTime = 0;
 
@@ -1133,6 +1136,115 @@ function clearFollowSkippedSegmentsLayer() {
     } catch (e) {}
 }
 
+function ensureFollowUndoGuideLayer() {
+    if (!map || !map.isStyleLoaded?.()) return false;
+    try {
+        if (!map.getSource(FOLLOW_UNDO_GUIDE_SOURCE_ID)) {
+            map.addSource(FOLLOW_UNDO_GUIDE_SOURCE_ID, {
+                type: 'geojson',
+                data: emptyGeoJSON()
+            });
+        }
+        const beforeLayerId = map.getLayer(FOLLOW_DIR_ARROW_LAYER_ID) ? FOLLOW_DIR_ARROW_LAYER_ID : undefined;
+        if (!map.getLayer(FOLLOW_UNDO_GUIDE_CASING_LAYER_ID)) {
+            map.addLayer({
+                id: FOLLOW_UNDO_GUIDE_CASING_LAYER_ID,
+                type: 'line',
+                source: FOLLOW_UNDO_GUIDE_SOURCE_ID,
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#ffffff',
+                    'line-width': 10,
+                    'line-opacity': 0.92
+                }
+            }, beforeLayerId);
+        }
+        if (!map.getLayer(FOLLOW_UNDO_GUIDE_LINE_LAYER_ID)) {
+            map.addLayer({
+                id: FOLLOW_UNDO_GUIDE_LINE_LAYER_ID,
+                type: 'line',
+                source: FOLLOW_UNDO_GUIDE_SOURCE_ID,
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#06b6d4',
+                    'line-width': 6,
+                    'line-dasharray': [2.2, 1.4],
+                    'line-opacity': 0.95
+                }
+            }, beforeLayerId);
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function setFollowUndoGuideCoords(coords) {
+    if (!map || !Array.isArray(coords) || coords.length < 2) return;
+    if (!ensureFollowUndoGuideLayer()) return;
+    try {
+        map.getSource(FOLLOW_UNDO_GUIDE_SOURCE_ID)?.setData({
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                geometry: { type: 'LineString', coordinates: coords }
+            }]
+        });
+    } catch (e) {}
+}
+
+function clearFollowUndoGuideLayer() {
+    try {
+        map?.getSource(FOLLOW_UNDO_GUIDE_SOURCE_ID)?.setData(emptyGeoJSON());
+    } catch (e) {}
+}
+
+// 沿既有路線節點序列建構貼合道路的退回引導折線（嚴禁以兩點直線飛鳥方式連線）
+function buildRouteNodeFallbackGuideCoords(matchSegments, fromMatchIdx, toMatchIdx) {
+    if (!Array.isArray(matchSegments) || matchSegments.length === 0) return [];
+    const maxIdx = matchSegments.length - 1;
+    const startI = Math.min(Math.max(fromMatchIdx, 0), maxIdx);
+    const endI = Math.min(Math.max(toMatchIdx, 0), maxIdx);
+    if (startI <= endI) return [];
+    const coords = [];
+    for (let i = startI; i >= endI; i--) {
+        const seg = matchSegments[i];
+        if (coords.length === 0) {
+            coords.push([seg.bLng, seg.bLat]);
+        }
+        coords.push([seg.aLng, seg.aLat]);
+    }
+    return coords;
+}
+
+// 在 [floorMatchIdx .. currentMatchIdx) 區間內往回搜尋最近一段「未實走卻被跳過」的連續漏段起點
+function findNearestSkippedGapStart(matchSegments, visitedSegFlags, floorMatchIdx, currentMatchIdx) {
+    if (!Array.isArray(matchSegments) || !visitedSegFlags || currentMatchIdx <= floorMatchIdx) return null;
+    const curCumM = matchSegments[Math.min(currentMatchIdx, matchSegments.length - 1)]?.cumM || 0;
+    let i = Math.min(currentMatchIdx - 1, matchSegments.length - 1);
+    while (i >= floorMatchIdx) {
+        if (visitedSegFlags[i] === 0) {
+            const gapEnd = i;
+            let gapStart = i;
+            let gapLenM = 0;
+            while (gapStart >= floorMatchIdx && visitedSegFlags[gapStart] === 0) {
+                gapLenM += matchSegments[gapStart].lenM;
+                gapStart--;
+            }
+            gapStart++;
+            const gapStartCumM = matchSegments[gapStart]?.cumM || 0;
+            // 若目前已在該漏段起點附近（<= 15m），繼續往更早一段漏段尋找
+            if (gapLenM >= 10 && (curCumM - gapStartCumM) > 15) {
+                return { gapStart, gapEnd, gapLenM };
+            }
+            i = gapStart - 1;
+        } else {
+            i--;
+        }
+    }
+    return null;
+}
+
 function getOrCreateTacticalUndoProgressBtn() {
     let btn = document.getElementById('tacticalUndoProgressBtn');
     if (btn) return btn;
@@ -1331,6 +1443,9 @@ document.getElementById('startFollowBtn').onclick = async () => {
     let currentTrackIndex = 0;
     let currentMatchIdx = 0;
     let initialStartMatchIdx = 0;
+    let firstVisitedMatchIdx = -1;
+    let activeUndoGuideTarget = null;
+    let undoGuideRequestSeq = 0;
     let hasInitializedTrackIndex = false;
     let isSnappedToRoute = false;
     let offRouteStreakCount = 0;
@@ -1339,6 +1454,14 @@ document.getElementById('startFollowBtn').onclick = async () => {
     let lastSkipWarnTimeMs = 0;
     const warnedSkipGapKeys = new Set();
     const progressCheckpoints = [];
+
+    const markSegmentActuallyVisited = (segIdx) => {
+        if (!visitedSegFlags || segIdx < 0 || segIdx >= visitedSegFlags.length) return;
+        visitedSegFlags[segIdx] = 1;
+        if (firstVisitedMatchIdx === -1 || segIdx < firstVisitedMatchIdx) {
+            firstVisitedMatchIdx = segIdx;
+        }
+    };
 
     const recordProgressCheckpoint = (mIdx, tIdx, force = false) => {
         if (!isGeneralFollowNav || !followMatchSegments.length) return;
@@ -1355,39 +1478,52 @@ document.getElementById('startFollowBtn').onclick = async () => {
         undoProgressBtn.classList.remove('hidden');
         undoProgressBtn.onclick = () => {
             if (!followMatchSegments.length || !visitedSegFlags) return;
+            const prevMatchIdx = currentMatchIdx;
             const curCumM = followMatchSegments[Math.min(currentMatchIdx, followMatchSegments.length - 1)]?.cumM || 0;
-            let targetMatchIdx = initialStartMatchIdx;
-            let targetTrackIdx = followMatchSegments[initialStartMatchIdx]?.origIdx || 0;
+            const safeFloorMatchIdx = (firstVisitedMatchIdx >= 0)
+                ? Math.max(initialStartMatchIdx, firstVisitedMatchIdx)
+                : initialStartMatchIdx;
 
-            // 優先回退至前一個距離目前超過 25m 的紀錄點（含跳段前存檔點）
-            while (progressCheckpoints.length > 1) {
-                const top = progressCheckpoints[progressCheckpoints.length - 1];
-                if (top.matchIdx >= currentMatchIdx || (curCumM - top.cumM) < 25) {
-                    progressCheckpoints.pop();
-                } else {
-                    break;
-                }
-            }
-            if (progressCheckpoints.length > 0 && progressCheckpoints[progressCheckpoints.length - 1].matchIdx < currentMatchIdx) {
-                const cp = progressCheckpoints.pop();
-                targetMatchIdx = Math.max(initialStartMatchIdx, cp.matchIdx);
-                targetTrackIdx = cp.trackIdx;
-            } else {
-                // 若無更早紀錄點，往回退約 60 公尺（不超過啟動初始點）
-                let backIdx = currentMatchIdx;
-                while (backIdx > initialStartMatchIdx && (curCumM - followMatchSegments[backIdx].cumM) < 60) {
-                    backIdx--;
-                }
-                targetMatchIdx = Math.max(initialStartMatchIdx, backIdx);
+            let targetMatchIdx = safeFloorMatchIdx;
+            let targetTrackIdx = followMatchSegments[safeFloorMatchIdx]?.origIdx || 0;
+            let rolledBackToSkippedGap = false;
+
+            // 1. 優先在「首個實走節點之後」往回搜尋最近一段未實走卻被跳過／忽略的漏段起點
+            const skippedGap = findNearestSkippedGapStart(followMatchSegments, visitedSegFlags, safeFloorMatchIdx, currentMatchIdx);
+            if (skippedGap) {
+                targetMatchIdx = skippedGap.gapStart;
                 targetTrackIdx = followMatchSegments[targetMatchIdx]?.origIdx || 0;
+                rolledBackToSkippedGap = true;
+            } else {
+                // 2. 若目前無漏段，維持往回退一小段合理緩衝距離作為保底（不低於首個實走節點邊界）
+                while (progressCheckpoints.length > 1) {
+                    const top = progressCheckpoints[progressCheckpoints.length - 1];
+                    if (top.matchIdx >= currentMatchIdx || (curCumM - top.cumM) < 25) {
+                        progressCheckpoints.pop();
+                    } else {
+                        break;
+                    }
+                }
+                if (progressCheckpoints.length > 0 && progressCheckpoints[progressCheckpoints.length - 1].matchIdx < currentMatchIdx) {
+                    const cp = progressCheckpoints.pop();
+                    targetMatchIdx = Math.max(safeFloorMatchIdx, cp.matchIdx);
+                    targetTrackIdx = followMatchSegments[targetMatchIdx]?.origIdx ?? cp.trackIdx;
+                } else {
+                    let backIdx = currentMatchIdx;
+                    while (backIdx > safeFloorMatchIdx && (curCumM - followMatchSegments[backIdx].cumM) < 60) {
+                        backIdx--;
+                    }
+                    targetMatchIdx = Math.max(safeFloorMatchIdx, backIdx);
+                    targetTrackIdx = followMatchSegments[targetMatchIdx]?.origIdx || 0;
+                }
             }
 
             currentMatchIdx = targetMatchIdx;
             currentTrackIndex = targetTrackIdx;
             window.activeFollowCurrentTrackIndex = currentTrackIndex;
 
-            // 還原回退位置之後的已通過標記與跳段警告紀錄
-            for (let k = currentMatchIdx + 1; k < visitedSegFlags.length; k++) {
+            // 還原回退起點至原本進度間的未走狀態（解除誤變灰）與跳段警告紀錄
+            for (let k = currentMatchIdx; k < visitedSegFlags.length; k++) {
                 if (visitedSegFlags[k] === 1) visitedSegFlags[k] = 0;
             }
             warnedSkipGapKeys.clear();
@@ -1418,8 +1554,46 @@ document.getElementById('startFollowBtn').onclick = async () => {
                 updateFollowDirectionArrows(followMatchSegments, currentMatchIdx, 0);
                 updateRouteProgressHud(currentTrackIndex, pts.length);
             }
+
+            // 3. 繪製貼合道路／既有路線節點的退回引導折線（嚴禁以起終點兩點直連飛鳥直線）
+            const targetSeg = followMatchSegments[targetMatchIdx];
+            if (targetSeg && Array.isArray(lastKnownLngLat) && lastKnownLngLat.length >= 2) {
+                const distToTargetM = getDistanceKm(lastKnownLngLat[0], lastKnownLngLat[1], targetSeg.aLng, targetSeg.aLat) * 1000;
+                if (distToTargetM > 20) {
+                    activeUndoGuideTarget = {
+                        matchIdx: targetMatchIdx,
+                        lng: targetSeg.aLng,
+                        lat: targetSeg.aLat
+                    };
+                    const fallbackCoords = buildRouteNodeFallbackGuideCoords(followMatchSegments, prevMatchIdx, targetMatchIdx);
+                    if (fallbackCoords.length >= 2 && !isPowerSaveMapPaused()) {
+                        setFollowUndoGuideCoords(fallbackCoords);
+                    }
+                    const reqSeq = ++undoGuideRequestSeq;
+                    if (typeof window.ApproachNav?.requestDualEngineRoute === 'function') {
+                        window.ApproachNav.requestDualEngineRoute(
+                            lastKnownLngLat[0],
+                            lastKnownLngLat[1],
+                            targetSeg.aLng,
+                            targetSeg.aLat,
+                            currentHeading
+                        ).then(res => {
+                            if (reqSeq !== undoGuideRequestSeq || !activeUndoGuideTarget) return;
+                            if (res && res.ok && Array.isArray(res.coords) && res.coords.length >= 3 && !res.isFallback) {
+                                if (!isPowerSaveMapPaused()) {
+                                    setFollowUndoGuideCoords(res.coords);
+                                }
+                            }
+                        }).catch(() => {});
+                    }
+                } else {
+                    activeUndoGuideTarget = null;
+                    clearFollowUndoGuideLayer();
+                }
+            }
+
             vibrate([80, 40, 80]);
-            showNavAlert('↩️', '已回退至上一路段進度', 'bg-amber-600');
+            showNavAlert('↩️', rolledBackToSkippedGap ? '已回退至未收漏段起點' : '已回退至上一路段進度', 'bg-amber-600');
         };
     } else {
         undoProgressBtn.classList.add('hidden');
@@ -1429,6 +1603,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
     window.activeFollowCurrentTrackIndex = 0;
     updateProgressRouteLayers(route.points, 0, null, 0);
     clearFollowSkippedSegmentsLayer();
+    clearFollowUndoGuideLayer();
     if (isGeneralFollowNav) {
         updateFollowDirectionArrows(followMatchSegments, 0, 0);
     } else {
@@ -1605,7 +1780,7 @@ document.getElementById('startFollowBtn').onclick = async () => {
                             visitedSegFlags[k] = 2; // 導航啟動前已過段（不視為漏段）
                         }
                         if (matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
-                            visitedSegFlags[currentMatchIdx] = 1;
+                            markSegmentActuallyVisited(currentMatchIdx);
                         }
                     }
                     recordProgressCheckpoint(currentMatchIdx, currentTrackIndex, true);
@@ -1679,17 +1854,32 @@ document.getElementById('startFollowBtn').onclick = async () => {
 
                     // 逐段實際經過驗證：只有車輛實際靠近（<= 35m）且順向通過的線段才標記為已通過 (1)
                     if (visitedSegFlags && matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
-                        visitedSegFlags[currentMatchIdx] = 1;
+                        markSegmentActuallyVisited(currentMatchIdx);
                         if (!didDetourReattach && advanceM <= 45) {
                             for (let k = prevMatchIdx; k <= currentMatchIdx; k++) {
-                                if (visitedSegFlags[k] === 0) visitedSegFlags[k] = 1;
+                                if (visitedSegFlags[k] === 0) markSegmentActuallyVisited(k);
                             }
                         }
                     }
                     recordProgressCheckpoint(currentMatchIdx, currentTrackIndex, didDetourReattach);
                 } else if (visitedSegFlags && matchResult.distMeters <= FOLLOW_VISIT_RADIUS_METERS) {
                     // 若駕駛繞回補收先前被跳過的橘紅警示路段，實際壓過後即標記已通過
-                    visitedSegFlags[nextMatchIdx] = 1;
+                    markSegmentActuallyVisited(nextMatchIdx);
+                }
+            }
+
+            // 若目前有顯示「退回漏段起點引導線」，當車輛已回到漏段起點（<= 30m）或重新接上該節點時自動清除
+            if (activeUndoGuideTarget) {
+                const distToUndoTargetM = getDistanceKm(lng, lat, activeUndoGuideTarget.lng, activeUndoGuideTarget.lat) * 1000;
+                const rejoinedUndoNode = Boolean(
+                    matchResult &&
+                    matchResult.distMeters <= 30 &&
+                    Math.abs(matchResult.matchIdx - activeUndoGuideTarget.matchIdx) <= 3
+                );
+                if (distToUndoTargetM <= 30 || rejoinedUndoNode) {
+                    activeUndoGuideTarget = null;
+                    undoGuideRequestSeq++;
+                    clearFollowUndoGuideLayer();
                 }
             }
 
@@ -1994,6 +2184,7 @@ const endFollowAction = () => {
     hideRouteProgressHud();
     clearFollowDirectionArrows();
     clearFollowSkippedSegmentsLayer();
+    clearFollowUndoGuideLayer();
     const undoBtnEl = document.getElementById('tacticalUndoProgressBtn');
     if (undoBtnEl) {
         undoBtnEl.classList.add('hidden');

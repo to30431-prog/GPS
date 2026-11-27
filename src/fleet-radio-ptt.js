@@ -8,6 +8,14 @@
     const STORAGE_KEY_ENABLED = 'yingge_fleet_radio_ptt_enabled_v1';
     const STORAGE_KEY_LAYOUT = 'yingge_fleet_radio_ptt_layout_v1';
     const STORAGE_KEY_CLIENT_ID = 'yingge_fleet_radio_client_id_v1';
+    const STORAGE_KEY_PRIVATE_CFG = 'yingge_fleet_radio_private_cfg_v1';
+    const PRIVATE_MODE_OFF = 0;
+    const PRIVATE_MODE_DUAL_WATCH = 1;
+    const PRIVATE_MODE_PRIVATE_ONLY = 2;
+    const PRIVATE_BTN_BASE_SIZE = 40;
+    const PRIVATE_BTN_GAP_PX = 8;
+    const PRIVATE_UNLOCK_TAP_TARGET = 5;
+    const PRIVATE_UNLOCK_WINDOW_MS = 2500;
     const MAX_RECORD_MS = 8000;            // 最長 8 秒自動截斷
     const MIN_RECORD_MS = 350;             // 短於 0.35 秒視為誤觸不發送
     const RECORDER_TIMESLICE_MS = 150;     // 縮短取樣間隔至 150ms，確保開頭語音即時寫入 chunk
@@ -38,11 +46,68 @@
         }
     } catch (e) {}
 
+    // 隱藏式私人頻道與雙守候狀態（預設完全關閉，僅透過設定選單版本號連點 5 下解鎖）
+    let privateRadioMode = PRIVATE_MODE_OFF;
+    let privateChannelCode = '';
+
+    function sanitizePrivateChannelCode(raw) {
+        return String(raw || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
+    }
+
+    function loadPrivateRadioConfig() {
+        privateRadioMode = PRIVATE_MODE_OFF;
+        privateChannelCode = '';
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY_PRIVATE_CFG);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return;
+            const modeNum = Number(parsed.mode);
+            const cleanCode = sanitizePrivateChannelCode(parsed.code);
+            privateChannelCode = cleanCode;
+            if ((modeNum === PRIVATE_MODE_DUAL_WATCH || modeNum === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 2) {
+                privateRadioMode = modeNum;
+            } else {
+                privateRadioMode = PRIVATE_MODE_OFF;
+            }
+        } catch (e) {
+            privateRadioMode = PRIVATE_MODE_OFF;
+            privateChannelCode = '';
+        }
+    }
+
+    function savePrivateRadioConfig(mode, code) {
+        const cleanCode = sanitizePrivateChannelCode(code);
+        const modeNum = (mode === PRIVATE_MODE_DUAL_WATCH || mode === PRIVATE_MODE_PRIVATE_ONLY) && cleanCode.length >= 2
+            ? mode
+            : PRIVATE_MODE_OFF;
+        privateRadioMode = modeNum;
+        privateChannelCode = cleanCode;
+        try {
+            localStorage.setItem(STORAGE_KEY_PRIVATE_CFG, JSON.stringify({
+                mode: privateRadioMode,
+                code: privateChannelCode
+            }));
+        } catch (e) {}
+    }
+
+    function getEffectivePrivateMode() {
+        if ((privateRadioMode === PRIVATE_MODE_DUAL_WATCH || privateRadioMode === PRIVATE_MODE_PRIVATE_ONLY) && privateChannelCode.length >= 2) {
+            return privateRadioMode;
+        }
+        return PRIVATE_MODE_OFF;
+    }
+
+    loadPrivateRadioConfig();
+
     let isRecordingPtt = false;
     let isAcquiringMic = false;
     let isRecorderCapturing = false;
     let isUploadingPtt = false;
     let uploadingStartedAt = 0;
+    let activeTransmitChannel = 'public';  // 'public' | 'private'
+    let activeTransmitButton = 'main';     // 'main' | 'private'
+    let activeUploadingButton = 'main';    // 'main' | 'private'
     let recordingSessionId = 0;
     let activeMediaRecorder = null;
     let activeMicStream = null;
@@ -55,10 +120,11 @@
     let audioCtxIdleSuspendTimer = null;
 
     let pollTimer = null;
-    let isPollingMeta = false;
-    let pollingStartedAt = 0;
-    let lastCloudCleanupAt = 0;
-    const handledMessageIds = new Map(); // msgId -> handledAtMs（防重複觸發且避免單筆覆寫漏收）
+    const channelPollState = {
+        public: { isPolling: false, pollingStartedAt: 0, lastCloudCleanupAt: 0 },
+        private: { isPolling: false, pollingStartedAt: 0, lastCloudCleanupAt: 0 }
+    };
+    const handledMessageIds = new Map(); // `${channel}:${msgId}` -> handledAtMs（防重複觸發且雙頻道完全隔離）
     let playbackQueue = [];
     let pendingAutoplayRetryItem = null;
     let isPlayingAudio = false;
@@ -76,6 +142,12 @@
     let pttIconEl = null;
     let pttLabelEl = null;
     let pttResizeHandleEl = null;
+    let privatePttBtnEl = null;
+    let privatePttIconEl = null;
+    let privatePttLabelEl = null;
+    let privatePttPointerId = null;
+    let isPrivatePttGestureActive = false;
+    let privateModalEl = null;
     let toastEl = null;
     let visibilityObserver = null;
     let visibilitySyncTimer = null;
@@ -100,11 +172,38 @@
     let handleStartY = 0;
     let handleStartScale = 1.0;
 
-    function getRadioCloudBaseUrl() {
-        const base = (typeof FIREBASE_BASE_URL === 'string' && FIREBASE_BASE_URL)
+    function getFirebaseBaseUrl() {
+        return (typeof FIREBASE_BASE_URL === 'string' && FIREBASE_BASE_URL)
             ? FIREBASE_BASE_URL
             : 'https://route-warehouse-default-rtdb.asia-southeast1.firebasedatabase.app';
-        return `${base}/system_config/fleet_radio`;
+    }
+
+    function getRadioCloudBaseUrl() {
+        return `${getFirebaseBaseUrl()}/system_config/fleet_radio`;
+    }
+
+    function getPrivateRadioCloudBaseUrl(codeOverride = '') {
+        const cleanCode = sanitizePrivateChannelCode(codeOverride || privateChannelCode);
+        if (cleanCode.length < 2) return '';
+        return `${getFirebaseBaseUrl()}/system_config/walkie_talkie_private/${encodeURIComponent(cleanCode)}`;
+    }
+
+    function getRadioCloudBaseUrlForChannel(channel = 'public') {
+        if (channel === 'private') {
+            return getPrivateRadioCloudBaseUrl();
+        }
+        return getRadioCloudBaseUrl();
+    }
+
+    function getActiveListenChannels() {
+        const mode = getEffectivePrivateMode();
+        if (mode === PRIVATE_MODE_PRIVATE_ONLY) return ['private'];
+        if (mode === PRIVATE_MODE_DUAL_WATCH) return ['public', 'private'];
+        return ['public'];
+    }
+
+    function getMainPttTargetChannel() {
+        return getEffectivePrivateMode() === PRIVATE_MODE_PRIVATE_ONLY ? 'private' : 'public';
     }
 
     function getCurrentDeviceId() {
@@ -139,14 +238,19 @@
         return '車隊隊員';
     }
 
-    function hasHandledMessage(msgId) {
-        return Boolean(msgId && handledMessageIds.has(msgId));
+    function getHandledMessageKey(channel, msgId) {
+        return `${channel || 'public'}:${msgId}`;
     }
 
-    function markMessageHandled(msgId) {
+    function hasHandledMessage(channel, msgId) {
+        return Boolean(msgId && handledMessageIds.has(getHandledMessageKey(channel, msgId)));
+    }
+
+    function markMessageHandled(channel, msgId) {
         if (!msgId) return;
-        handledMessageIds.set(msgId, Date.now());
-        if (handledMessageIds.size > MAX_DEDUP_CACHE_SIZE) {
+        const key = getHandledMessageKey(channel, msgId);
+        handledMessageIds.set(key, Date.now());
+        if (handledMessageIds.size > MAX_DEDUP_CACHE_SIZE * 2) {
             const oldestKey = handledMessageIds.keys().next().value;
             if (oldestKey) handledMessageIds.delete(oldestKey);
         }
@@ -166,6 +270,7 @@
             'adminPasswordModal',
             'mapLayerMenuPanel',
             'settingsModal',
+            'privateRadioSettingsModal',
             'aiDispatchModal',
             'fleetUserNameModal',
             'welcomeProfileModal',
@@ -197,12 +302,33 @@
         }
     }
 
+    function enqueuePlaybackItem(item) {
+        if (!item || !item.dataUrl) return;
+        const channel = item.channel === 'private' ? 'private' : 'public';
+        const normalized = { ...item, channel };
+        if (channel === 'public') {
+            // 雙守候優先權：清潔隊主頻道語音優先排在私人頻道之前（不蓋台、不中斷正在播放的語音）
+            const firstPrivateIdx = playbackQueue.findIndex(q => q.channel === 'private');
+            if (firstPrivateIdx >= 0) {
+                playbackQueue.splice(firstPrivateIdx, 0, normalized);
+            } else {
+                playbackQueue.push(normalized);
+            }
+        } else {
+            playbackQueue.push(normalized);
+        }
+    }
+
     function flushPendingAutoplayItem() {
         if (!pendingAutoplayRetryItem || isPlayingAudio || isRecordingPtt || !isRadioEnabled) return;
         const item = pendingAutoplayRetryItem;
         pendingAutoplayRetryItem = null;
         if ((Date.now() - (item.receivedAt || 0)) <= MAX_PLAYBACK_AGE_MS) {
-            playbackQueue.unshift(item);
+            if (item.channel === 'private') {
+                enqueuePlaybackItem(item);
+            } else {
+                playbackQueue.unshift(item);
+            }
             processPlaybackQueue();
         }
     }
@@ -309,14 +435,18 @@
 
     function recoverStuckNetworkFlags() {
         const now = Date.now();
-        if (isPollingMeta && pollingStartedAt > 0 && (now - pollingStartedAt) > POLL_STUCK_TIMEOUT_MS) {
-            isPollingMeta = false;
-            pollingStartedAt = 0;
-        }
+        ['public', 'private'].forEach((ch) => {
+            const st = channelPollState[ch];
+            if (st && st.isPolling && st.pollingStartedAt > 0 && (now - st.pollingStartedAt) > POLL_STUCK_TIMEOUT_MS) {
+                st.isPolling = false;
+                st.pollingStartedAt = 0;
+            }
+        });
         if (isUploadingPtt && uploadingStartedAt > 0 && (now - uploadingStartedAt) > UPLOAD_STUCK_TIMEOUT_MS) {
+            const prevUploadBtn = activeUploadingButton;
             isUploadingPtt = false;
             uploadingStartedAt = 0;
-            updatePttButtonVisual('idle');
+            updateTargetButtonVisual(prevUploadBtn, 'idle');
             if (!isPlayingAudio && !isRecordingPtt) releaseRadioWakeLock();
         }
     }
@@ -327,7 +457,7 @@
         if (pollTimer === null) {
             startRadioPolling();
         } else {
-            pollLatestRadioMeta(false);
+            pollActiveRadioChannels(false);
         }
     }
 
@@ -406,6 +536,9 @@
         } else if (tone === 'sent') {
             toastEl.style.background = 'rgba(5, 150, 105, 0.94)';
             toastEl.style.borderColor = 'rgba(167, 243, 208, 0.9)';
+        } else if (tone === 'private') {
+            toastEl.style.background = 'rgba(46, 16, 101, 0.94)';
+            toastEl.style.borderColor = 'rgba(196, 181, 253, 0.9)';
         } else {
             toastEl.style.background = 'rgba(15, 23, 42, 0.94)';
             toastEl.style.borderColor = 'rgba(56, 189, 248, 0.9)';
@@ -485,12 +618,63 @@
         }
     }
 
+    function updatePrivatePttButtonVisual(state = 'idle', secText = '') {
+        if (!privatePttBtnEl || !privatePttIconEl || !privatePttLabelEl) return;
+        if (state === 'preparing') {
+            privatePttBtnEl.style.opacity = '0.95';
+            privatePttBtnEl.style.background = '#b45309';
+            privatePttBtnEl.style.borderColor = '#fde68a';
+            privatePttBtnEl.style.boxShadow = '0 0 0 3px rgba(245, 158, 11, 0.35), 0 6px 14px rgba(180, 83, 9, 0.4)';
+            privatePttBtnEl.style.transform = 'scale(1.04)';
+            privatePttIconEl.textContent = '⏳';
+            privatePttLabelEl.textContent = secText || '準備';
+        } else if (state === 'recording') {
+            privatePttBtnEl.style.opacity = '1';
+            privatePttBtnEl.style.background = '#7c3aed';
+            privatePttBtnEl.style.borderColor = '#f5f3ff';
+            privatePttBtnEl.style.boxShadow = '0 0 0 5px rgba(139, 92, 246, 0.42), 0 8px 20px rgba(109, 40, 217, 0.5)';
+            privatePttBtnEl.style.transform = 'scale(1.1)';
+            privatePttIconEl.textContent = '🟣';
+            privatePttLabelEl.textContent = secText || '說話';
+        } else if (state === 'uploading') {
+            privatePttBtnEl.style.opacity = '0.95';
+            privatePttBtnEl.style.background = '#6d28d9';
+            privatePttBtnEl.style.borderColor = '#ddd6fe';
+            privatePttBtnEl.style.boxShadow = '0 6px 14px rgba(109, 40, 217, 0.4)';
+            privatePttBtnEl.style.transform = 'scale(1)';
+            privatePttIconEl.textContent = '📡';
+            privatePttLabelEl.textContent = '傳送';
+        } else {
+            privatePttBtnEl.style.opacity = '0.52';
+            privatePttBtnEl.style.background = 'rgba(30, 27, 75, 0.76)';
+            privatePttBtnEl.style.borderColor = 'rgba(196, 181, 253, 0.78)';
+            privatePttBtnEl.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.25)';
+            privatePttBtnEl.style.transform = 'scale(1)';
+            privatePttIconEl.textContent = '🔒';
+            privatePttLabelEl.textContent = '私';
+        }
+    }
+
+    function updateTargetButtonVisual(buttonKind = 'main', state = 'idle', secText = '') {
+        if (buttonKind === 'private') {
+            updatePrivatePttButtonVisual(state, secText);
+        } else {
+            updatePttButtonVisual(state, secText);
+        }
+    }
+
     function syncPttButtonVisibility() {
         if (!pttBtnEl) return;
-        const shouldShow = isRadioEnabled && isOnMapMainScreen();
-        pttBtnEl.classList.toggle('hidden', !shouldShow);
-        if (!shouldShow && (isRecordingPtt || isAcquiringMic || activeMicStream || gestureMode !== 'idle' || activePointers.size > 0)) {
+        const shouldShowMain = isRadioEnabled && isOnMapMainScreen();
+        const shouldShowPrivate = shouldShowMain && getEffectivePrivateMode() === PRIVATE_MODE_DUAL_WATCH;
+        pttBtnEl.classList.toggle('hidden', !shouldShowMain);
+        if (privatePttBtnEl) {
+            privatePttBtnEl.classList.toggle('hidden', !shouldShowPrivate);
+        }
+        if (!shouldShowMain && (isRecordingPtt || isAcquiringMic || activeMicStream || gestureMode !== 'idle' || activePointers.size > 0 || isPrivatePttGestureActive)) {
             resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: true, releaseMic: true });
+        } else if (!shouldShowPrivate && isPrivatePttGestureActive) {
+            resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
         }
     }
 
@@ -598,6 +782,8 @@
         activePointerId = null;
         dragPointerId = null;
         handlePointerId = null;
+        privatePttPointerId = null;
+        isPrivatePttGestureActive = false;
 
         if (isRecordingPtt) {
             stopPttRecording(cancelRecording);
@@ -609,7 +795,8 @@
             stopAndReleaseMicStream();
         }
 
-        updatePttButtonVisual(isUploadingPtt ? 'uploading' : 'idle');
+        updatePttButtonVisual(isUploadingPtt && activeUploadingButton === 'main' ? 'uploading' : 'idle');
+        updatePrivatePttButtonVisual(isUploadingPtt && activeUploadingButton === 'private' ? 'uploading' : 'idle');
         syncAudioFocusWithBgm();
     }
 
@@ -643,16 +830,25 @@
         }
     }
 
-    // ☁️ 上傳語音廣播至 Firebase（先寫 audio.json 再寫 meta.json，嚴格確認兩筆皆寫入成功後才顯示「已發送」）
-    async function uploadVoiceBroadcast(blob, durationMs, mimeType) {
+    // ☁️ 上傳語音廣播至 Firebase（依發話目標頻道嚴格寫入對應路徑，先寫 audio.json 再寫 meta.json，確認兩筆皆成功才顯示「已發送」）
+    async function uploadVoiceBroadcast(blob, durationMs, mimeType, targetChannel = 'public', sourceBtn = 'main') {
+        const channel = targetChannel === 'private' ? 'private' : 'public';
+        const btnKind = sourceBtn === 'private' ? 'private' : 'main';
+        const baseUrl = getRadioCloudBaseUrlForChannel(channel);
+        if (!baseUrl) {
+            updateTargetButtonVisual(btnKind, 'idle');
+            flashRadioToast('⚠️ 尚未設定有效的私人頻道密碼', 'error', 2400);
+            return;
+        }
         if (!navigator.onLine) {
-            updatePttButtonVisual('idle');
+            updateTargetButtonVisual(btnKind, 'idle');
             flashRadioToast('⚠️ 目前離線，無法發送對講語音', 'error', 2400);
             return;
         }
         isUploadingPtt = true;
+        activeUploadingButton = btnKind;
         uploadingStartedAt = Date.now();
-        updatePttButtonVisual('uploading');
+        updateTargetButtonVisual(btnKind, 'uploading');
 
         try {
             const dataUrl = await blobToDataUrl(blob);
@@ -664,8 +860,8 @@
             const senderId = getCurrentDeviceId();
             const senderName = getCurrentSenderName();
 
-            const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
-            const metaUrl = `${getRadioCloudBaseUrl()}/meta.json`;
+            const audioUrl = `${baseUrl}/audio.json`;
+            const metaUrl = `${baseUrl}/meta.json`;
 
             const putAudioOpts = {
                 method: 'PUT',
@@ -709,15 +905,19 @@
             }
 
             // 確認雲端兩筆皆成功寫入後，才標記已處理（避免本機重播）並顯示「已發送」
-            markMessageHandled(msgId);
+            markMessageHandled(channel, msgId);
             playPttCueTone('end');
-            flashRadioToast(`📡 已發送語音廣播（${(durationMs / 1000).toFixed(1)} 秒）`, 'sent', 1800);
+            if (channel === 'private') {
+                flashRadioToast(`🔒 已發送私人語音（${(durationMs / 1000).toFixed(1)} 秒）`, 'private', 1800);
+            } else {
+                flashRadioToast(`📡 已發送語音廣播（${(durationMs / 1000).toFixed(1)} 秒）`, 'sent', 1800);
+            }
         } catch (err) {
             flashRadioToast(`⚠️ 語音廣播傳送失敗：${err?.message || '網路異常'}`, 'error', 2800);
         } finally {
             isUploadingPtt = false;
             uploadingStartedAt = 0;
-            updatePttButtonVisual('idle');
+            updateTargetButtonVisual(btnKind, 'idle');
             syncAudioFocusWithBgm();
             if (!isPlayingAudio && !isRecordingPtt) releaseRadioWakeLock();
         }
@@ -761,13 +961,26 @@
     }
 
     // 🎙️ 開始按住錄音（按住才請求麥克風，啟動期間顯示防呆提示，確認 MediaRecorder 真正收音後才亮紅「請說話」，放開立刻 track.stop()）
-    async function startPttRecording() {
+    async function startPttRecording(targetChannel = null, sourceBtn = 'main') {
         recoverStuckNetworkFlags();
         if (!isRadioEnabled || isRecordingPtt || isAcquiringMic || isUploadingPtt || isRestrictedByGate()) return;
+        const sessionChannel = targetChannel || (sourceBtn === 'private' ? 'private' : getMainPttTargetChannel());
+        const sessionBtn = sourceBtn === 'private' ? 'private' : 'main';
+
+        if (sessionChannel === 'private' && !getPrivateRadioCloudBaseUrl()) {
+            flashRadioToast('⚠️ 尚未設定有效的私人頻道密碼', 'error', 2000);
+            gestureMode = 'idle';
+            activePointers.clear();
+            isPrivatePttGestureActive = false;
+            privatePttPointerId = null;
+            return;
+        }
         if (!navigator.onLine) {
             flashRadioToast('⚠️ 目前離線，無法發送對講語音', 'error', 2000);
             gestureMode = 'idle';
             activePointers.clear();
+            isPrivatePttGestureActive = false;
+            privatePttPointerId = null;
             return;
         }
 
@@ -781,17 +994,21 @@
             flashRadioToast('⚠️ 此裝置瀏覽器不支援麥克風錄音', 'error', 2500);
             gestureMode = 'idle';
             activePointers.clear();
+            isPrivatePttGestureActive = false;
+            privatePttPointerId = null;
             return;
         }
 
         const mySessionId = ++recordingSessionId;
+        activeTransmitChannel = sessionChannel;
+        activeTransmitButton = sessionBtn;
         isRecordingPtt = true;
         isAcquiringMic = true;
         isRecorderCapturing = false;
         cancelUploadFlag = false;
         recordedChunks.length = 0;
         recordStartAt = Date.now();
-        updatePttButtonVisual('preparing', '啟動中');
+        updateTargetButtonVisual(sessionBtn, 'preparing', sessionBtn === 'private' ? '啟動' : '啟動中');
         syncAudioFocusWithBgm();
         requestRadioWakeLock();
 
@@ -804,7 +1021,7 @@
             if (!isRecordingPtt || mySessionId !== recordingSessionId || document.visibilityState === 'hidden') {
                 cleanupRecorderState(acquiredStream);
                 isRecordingPtt = false;
-                updatePttButtonVisual('idle');
+                updateTargetButtonVisual(sessionBtn, 'idle');
                 syncAudioFocusWithBgm();
                 if (!isPlayingAudio) releaseRadioWakeLock();
                 return;
@@ -822,7 +1039,7 @@
                 if (!isRecordingPtt || mySessionId !== recordingSessionId) return;
                 isRecorderCapturing = true;
                 recordStartAt = Date.now();
-                updatePttButtonVisual('recording', '請說話');
+                updateTargetButtonVisual(sessionBtn, 'recording', sessionBtn === 'private' ? '說話' : '請說話');
                 playPttCueTone('start');
                 try { navigator.vibrate?.(30); } catch (e) {}
 
@@ -830,7 +1047,11 @@
                     if (!isRecordingPtt || mySessionId !== recordingSessionId) return;
                     const elapsed = (Date.now() - recordStartAt) / 1000;
                     const sec = Math.min(MAX_RECORD_MS / 1000, elapsed);
-                    updatePttButtonVisual('recording', elapsed < 0.35 ? '請說話' : `${sec.toFixed(1)}s`);
+                    updateTargetButtonVisual(
+                        sessionBtn,
+                        'recording',
+                        elapsed < 0.35 ? (sessionBtn === 'private' ? '說話' : '請說話') : `${sec.toFixed(1)}s`
+                    );
                 }, 100);
 
                 // 達最長 8 秒上限自動停止並上傳
@@ -853,7 +1074,9 @@
                 isRecordingPtt = false;
                 gestureMode = 'idle';
                 activePointers.clear();
-                updatePttButtonVisual('idle');
+                isPrivatePttGestureActive = false;
+                privatePttPointerId = null;
+                updateTargetButtonVisual(sessionBtn, 'idle');
                 syncAudioFocusWithBgm();
                 if (!isPlayingAudio) releaseRadioWakeLock();
                 flashRadioToast('⚠️ 錄音裝置異常，已釋放麥克風請重試', 'error', 2400);
@@ -872,14 +1095,14 @@
                 syncAudioFocusWithBgm();
 
                 if (shouldSkip) {
-                    updatePttButtonVisual('idle');
+                    updateTargetButtonVisual(sessionBtn, 'idle');
                     if (!isPlayingAudio) releaseRadioWakeLock();
                     if (!isPlayingAudio && playbackQueue.length > 0) processPlaybackQueue();
                     return;
                 }
 
                 if (!wasCapturing || durationMs < MIN_RECORD_MS || finalChunks.length === 0) {
-                    updatePttButtonVisual('idle');
+                    updateTargetButtonVisual(sessionBtn, 'idle');
                     flashRadioToast('⏱️ 尚未收音完成，請按住待「請說話」亮起後說話', 'error', 1800);
                     if (!isPlayingAudio) releaseRadioWakeLock();
                     if (!isPlayingAudio && playbackQueue.length > 0) processPlaybackQueue();
@@ -888,7 +1111,7 @@
 
                 const audioBlob = new Blob(finalChunks, { type: finalMime });
                 finalChunks.length = 0;
-                uploadVoiceBroadcast(audioBlob, Math.min(durationMs, MAX_RECORD_MS), finalMime);
+                uploadVoiceBroadcast(audioBlob, Math.min(durationMs, MAX_RECORD_MS), finalMime, sessionChannel, sessionBtn);
             };
 
             // 使用 150ms 短取樣間隔，確保開頭語音即時寫入 chunk 不漏字
@@ -898,7 +1121,9 @@
             isRecordingPtt = false;
             gestureMode = 'idle';
             activePointers.clear();
-            updatePttButtonVisual('idle');
+            isPrivatePttGestureActive = false;
+            privatePttPointerId = null;
+            updateTargetButtonVisual(sessionBtn, 'idle');
             syncAudioFocusWithBgm();
             if (!isPlayingAudio) releaseRadioWakeLock();
             flashRadioToast(describeMicError(err), 'error', 2600);
@@ -908,6 +1133,7 @@
     function stopPttRecording(cancelWithoutSending = false) {
         if (!isRecordingPtt && !isAcquiringMic && !activeMicStream) return;
         const wasAcquiringOnly = isAcquiringMic && !isRecorderCapturing;
+        const btnKind = activeTransmitButton;
         cancelUploadFlag = Boolean(cancelWithoutSending || wasAcquiringOnly);
         isRecordingPtt = false;
         isAcquiringMic = false;
@@ -921,12 +1147,12 @@
                 activeMediaRecorder.stop();
             } catch (e) {
                 cleanupRecorderState();
-                updatePttButtonVisual('idle');
+                updateTargetButtonVisual(btnKind, 'idle');
                 syncAudioFocusWithBgm();
             }
         } else {
             cleanupRecorderState();
-            updatePttButtonVisual('idle');
+            updateTargetButtonVisual(btnKind, 'idle');
             syncAudioFocusWithBgm();
             if (wasAcquiringOnly && !cancelWithoutSending) {
                 flashRadioToast('⏱️ 麥克風尚未就緒，請按住稍候再說話', 'error', 1600);
@@ -953,7 +1179,11 @@
         isPlayingAudio = true;
         requestRadioWakeLock();
         syncAudioFocusWithBgm();
-        showRadioToast(`🔊 正在播放：${item.senderName}`, 'playing');
+        if (item.channel === 'private') {
+            showRadioToast(`🔒 正在播放（私人）：${item.senderName}`, 'private');
+        } else {
+            showRadioToast(`🔊 正在播放：${item.senderName}`, 'playing');
+        }
 
         if (!sharedAudioEl) {
             sharedAudioEl = new Audio();
@@ -1053,18 +1283,20 @@
         readyFallbackTimer = setTimeout(startPlayingWhenReady, PLAYBACK_READY_TIMEOUT_MS);
     }
 
-    // 🧹 自動清理過期雲端語音節點（超過 60 秒即清除大型 audio.json，維持長期通話同步高速輕量）
-    async function cleanupExpiredCloudAudioIfNeeded(meta) {
-        if (!meta || meta.audioCleared === true || !navigator.onLine) return;
+    // 🧹 自動清理過期雲端語音節點（依頻道獨立清理，超過 60 秒即清除大型 audio.json，維持長期通話同步高速輕量）
+    async function cleanupExpiredCloudAudioIfNeeded(channelKey, baseUrl, meta) {
+        if (!meta || meta.audioCleared === true || !navigator.onLine || !baseUrl) return;
+        const st = channelPollState[channelKey];
+        if (!st) return;
         const now = Date.now();
-        if ((now - lastCloudCleanupAt) < CLOUD_CLEANUP_COOLDOWN_MS) return;
+        if ((now - st.lastCloudCleanupAt) < CLOUD_CLEANUP_COOLDOWN_MS) return;
         const createdAt = Number(meta.createdAt || 0);
         if (!createdAt || (now - createdAt) < EXPIRED_CLOUD_CLEANUP_MS) return;
 
-        lastCloudCleanupAt = now;
+        st.lastCloudCleanupAt = now;
         try {
-            const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
-            const metaUrl = `${getRadioCloudBaseUrl()}/meta.json`;
+            const audioUrl = `${baseUrl}/audio.json`;
+            const metaUrl = `${baseUrl}/meta.json`;
             const delOpts = { method: 'DELETE' };
             if (typeof fetchWithTimeout === 'function') {
                 await fetchWithTimeout(audioUrl, delOpts, 4000);
@@ -1086,14 +1318,18 @@
         }
     }
 
-    // 📡 輪詢 Firebase meta.json（容錯欄位解析、時鐘誤差容忍、音訊拉取成功後才標記已讀避免漏收）
-    async function pollLatestRadioMeta(isInitialSeed = false) {
+    // 📡 輪詢指定頻道的 Firebase meta.json（雙守候模式下兩頻道完全獨立輪詢、獨立去重、互不干擾）
+    async function pollChannelMeta(channelKey = 'public', isInitialSeed = false) {
         recoverStuckNetworkFlags();
-        if (!isRadioEnabled || !navigator.onLine || isPollingMeta || isRestrictedByGate()) return;
-        isPollingMeta = true;
-        pollingStartedAt = Date.now();
+        const st = channelPollState[channelKey];
+        if (!st || !isRadioEnabled || !navigator.onLine || st.isPolling || isRestrictedByGate()) return;
+        const baseUrl = getRadioCloudBaseUrlForChannel(channelKey);
+        if (!baseUrl) return;
+
+        st.isPolling = true;
+        st.pollingStartedAt = Date.now();
         try {
-            const metaUrl = `${getRadioCloudBaseUrl()}/meta.json`;
+            const metaUrl = `${baseUrl}/meta.json`;
             const res = (typeof fetchWithTimeout === 'function')
                 ? await fetchWithTimeout(metaUrl, { cache: 'no-store' }, 4000)
                 : await fetch(metaUrl, { cache: 'no-store' });
@@ -1113,27 +1349,27 @@
 
             // 若雲端節點已過期超過 60 秒，順手清理大型 audio.json 避免累積拖慢同步
             if (createdAt && (now - createdAt) > EXPIRED_CLOUD_CLEANUP_MS && meta.audioCleared !== true) {
-                cleanupExpiredCloudAudioIfNeeded(meta);
+                cleanupExpiredCloudAudioIfNeeded(channelKey, baseUrl, meta);
             }
 
             // 剛開啟 App 或開啟無線電時，若訊息已過期或為本機舊訊則直接標記已讀不播放
             if (isInitialSeed) {
                 if (isExpired || isFromSelf || meta.audioCleared === true) {
-                    markMessageHandled(msgId);
+                    markMessageHandled(channelKey, msgId);
                     return;
                 }
             }
 
-            if (hasHandledMessage(msgId)) return;
+            if (hasHandledMessage(channelKey, msgId)) return;
 
             // 排除發送者本機重複播放、已清理節點或過期舊訊
             if (isFromSelf || isExpired || meta.audioCleared === true) {
-                markMessageHandled(msgId);
+                markMessageHandled(channelKey, msgId);
                 return;
             }
 
             // 拉取對應音訊檔（成功取得並入列後才 markMessageHandled，避免瞬斷永久漏收）
-            const audioUrl = `${getRadioCloudBaseUrl()}/audio.json`;
+            const audioUrl = `${baseUrl}/audio.json`;
             const audioRes = (typeof fetchWithTimeout === 'function')
                 ? await fetchWithTimeout(audioUrl, { cache: 'no-store' }, 6000)
                 : await fetch(audioUrl, { cache: 'no-store' });
@@ -1142,14 +1378,18 @@
             if (!audioPayload || typeof audioPayload !== 'object' || !audioPayload.dataUrl) return;
             if (audioPayload.id && meta.id && audioPayload.id !== meta.id) return;
 
-            markMessageHandled(msgId);
+            // 若等待音訊期間使用者已切換模式且不再監聽此頻道，直接略過避免跨頻道串音
+            if (!getActiveListenChannels().includes(channelKey)) return;
+
+            markMessageHandled(channelKey, msgId);
 
             // 再次確認下載完後仍未超過過期緩衝
             if ((Date.now() - createdAt) > (MAX_PLAYBACK_AGE_MS + 10000)) return;
 
-            playbackQueue.push({
+            enqueuePlaybackItem({
                 id: msgId,
-                senderName: String(meta.senderName || '車隊隊員').trim() || '車隊隊員',
+                channel: channelKey,
+                senderName: String(meta.senderName || (channelKey === 'private' ? '私人對象' : '車隊隊員')).trim() || (channelKey === 'private' ? '私人對象' : '車隊隊員'),
                 durationMs: Number(meta.durationMs || MAX_RECORD_MS),
                 mimeType: String(audioPayload.mimeType || meta.mimeType || 'audio/webm'),
                 dataUrl: audioPayload.dataUrl
@@ -1158,16 +1398,23 @@
         } catch (e) {
             // 弱訊號或逾時靜默略過，下次輪詢自動重試
         } finally {
-            isPollingMeta = false;
-            pollingStartedAt = 0;
+            st.isPolling = false;
+            st.pollingStartedAt = 0;
         }
+    }
+
+    function pollActiveRadioChannels(isInitialSeed = false) {
+        const channels = getActiveListenChannels();
+        channels.forEach((ch) => {
+            pollChannelMeta(ch, isInitialSeed);
+        });
     }
 
     function startRadioPolling() {
         stopRadioPolling();
         if (!isRadioEnabled) return;
-        pollLatestRadioMeta(true);
-        pollTimer = setInterval(() => pollLatestRadioMeta(false), POLL_INTERVAL_MS);
+        pollActiveRadioChannels(true);
+        pollTimer = setInterval(() => pollActiveRadioChannels(false), POLL_INTERVAL_MS);
     }
 
     function stopRadioPolling() {
@@ -1180,8 +1427,10 @@
         pendingAutoplayRetryItem = null;
         resetSharedAudioElement();
         isPlayingAudio = false;
-        isPollingMeta = false;
-        pollingStartedAt = 0;
+        ['public', 'private'].forEach((ch) => {
+            channelPollState[ch].isPolling = false;
+            channelPollState[ch].pollingStartedAt = 0;
+        });
         hideRadioToast();
         syncAudioFocusWithBgm();
     }
@@ -1282,6 +1531,32 @@
             pttResizeHandleEl.style.fontSize = `${Math.round(Math.min(18, Math.max(10, 8 + 2.4 * effectiveScale)))}px`;
             pttResizeHandleEl.style.borderBottomRightRadius = `${Math.max(6, Math.round(14 * effectiveScale))}px`;
         }
+
+        if (privatePttBtnEl) {
+            const { vw, vh } = getViewportDimensions();
+            const privSize = Math.round(Math.min(48, Math.max(36, PRIVATE_BTN_BASE_SIZE * (0.85 + 0.15 * effectiveScale))));
+            let privLeft = pttPosLeft + size + PRIVATE_BTN_GAP_PX;
+            if ((privLeft + privSize + VIEWPORT_MARGIN_PX) > vw) {
+                privLeft = pttPosLeft - privSize - PRIVATE_BTN_GAP_PX;
+            }
+            privLeft = Math.min(Math.max(VIEWPORT_MARGIN_PX, vw - privSize - VIEWPORT_MARGIN_PX), Math.max(VIEWPORT_MARGIN_PX, Math.round(privLeft)));
+            const privTop = Math.min(
+                Math.max(VIEWPORT_MARGIN_PX, vh - privSize - VIEWPORT_MARGIN_PX),
+                Math.max(VIEWPORT_MARGIN_PX, Math.round(pttPosTop + size - privSize))
+            );
+            privatePttBtnEl.style.width = `${privSize}px`;
+            privatePttBtnEl.style.height = `${privSize}px`;
+            privatePttBtnEl.style.borderRadius = `${Math.round(privSize * 0.3)}px`;
+            privatePttBtnEl.style.left = `${privLeft}px`;
+            privatePttBtnEl.style.top = `${privTop}px`;
+            if (privatePttIconEl) {
+                privatePttIconEl.style.fontSize = `${Math.round(privSize * 0.36)}px`;
+            }
+            if (privatePttLabelEl) {
+                privatePttLabelEl.style.fontSize = `${Math.max(9, Math.round(privSize * 0.22))}px`;
+                privatePttLabelEl.style.marginTop = '2px';
+            }
+        }
     }
 
     function handleViewportResize() {
@@ -1327,11 +1602,33 @@
         pttLabelEl = pttBtnEl.querySelector('#fleetRadioPttLabel');
         pttResizeHandleEl = pttBtnEl.querySelector('#fleetRadioPttResizeHandle');
 
+        // 🔒 雙守候模式專用低調小型私人發話鈕（預設完全隱藏，僅於解鎖並啟用模式 1「主頻道＋私人頻道雙守候」時顯示）
+        privatePttBtnEl = document.createElement('button');
+        privatePttBtnEl.id = 'fleetRadioPrivatePttBtn';
+        privatePttBtnEl.type = 'button';
+        privatePttBtnEl.title = '按住發送私人頻道語音（最長 8 秒）';
+        privatePttBtnEl.className = 'hidden fixed flex flex-col items-center justify-center border-2 text-white select-none cursor-pointer pointer-events-auto overflow-hidden';
+        privatePttBtnEl.style.zIndex = '45';
+        privatePttBtnEl.style.touchAction = 'none';
+        privatePttBtnEl.style.webkitUserSelect = 'none';
+        privatePttBtnEl.style.webkitTouchCallout = 'none';
+        privatePttBtnEl.style.transition = 'opacity 0.14s ease, background-color 0.14s ease, transform 0.12s ease, box-shadow 0.14s ease';
+        privatePttBtnEl.innerHTML = `
+            <span id="fleetRadioPrivatePttIcon" class="leading-none pointer-events-none">🔒</span>
+            <span id="fleetRadioPrivatePttLabel" class="font-black leading-none pointer-events-none">私</span>
+        `;
+        document.body.appendChild(privatePttBtnEl);
+
+        privatePttIconEl = privatePttBtnEl.querySelector('#fleetRadioPrivatePttIcon');
+        privatePttLabelEl = privatePttBtnEl.querySelector('#fleetRadioPrivatePttLabel');
+
         loadSavedPttLayout();
         applyPttLayout();
         updatePttButtonVisual('idle');
+        updatePrivatePttButtonVisual('idle');
 
         pttBtnEl.addEventListener('contextmenu', (e) => e.preventDefault());
+        privatePttBtnEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
         // 隔離底層地圖手勢事件（避免雙指縮放或拖曳 PTT 按鈕時誤觸 MapLibre 縮放／平移）
         const isolateTouchEvent = (e) => {
@@ -1343,6 +1640,68 @@
         pttBtnEl.addEventListener('touchend', (e) => e.stopPropagation(), { passive: false });
         pttBtnEl.addEventListener('touchcancel', (e) => e.stopPropagation(), { passive: false });
         pttBtnEl.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+
+        privatePttBtnEl.addEventListener('touchstart', isolateTouchEvent, { passive: false });
+        privatePttBtnEl.addEventListener('touchmove', isolateTouchEvent, { passive: false });
+        privatePttBtnEl.addEventListener('touchend', (e) => e.stopPropagation(), { passive: false });
+        privatePttBtnEl.addEventListener('touchcancel', (e) => e.stopPropagation(), { passive: false });
+        privatePttBtnEl.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+
+        // 🔒 低調小型私人發話鈕：按住僅發送至 walkie_talkie_private/{頻道密碼}，絕不寫入清潔隊主頻道
+        const releasePrivatePtt = (e, cancelWithoutSending = false) => {
+            if (!isPrivatePttGestureActive) return;
+            if (e && e.pointerId !== undefined && privatePttPointerId !== null && e.pointerId !== privatePttPointerId) {
+                return;
+            }
+            if (e && typeof e.stopPropagation === 'function' && e.currentTarget === privatePttBtnEl) {
+                e.stopPropagation();
+            }
+            isPrivatePttGestureActive = false;
+            privatePttPointerId = null;
+            if (isRecordingPtt && activeTransmitButton === 'private') {
+                stopPttRecording(cancelWithoutSending);
+            } else {
+                updatePrivatePttButtonVisual(isUploadingPtt && activeUploadingButton === 'private' ? 'uploading' : 'idle');
+                syncAudioFocusWithBgm();
+            }
+        };
+
+        privatePttBtnEl.addEventListener('pointerdown', (e) => {
+            if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+            if (getEffectivePrivateMode() !== PRIVATE_MODE_DUAL_WATCH) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (isRecordingPtt || isAcquiringMic || isUploadingPtt || isPrivatePttGestureActive) return;
+
+            isPrivatePttGestureActive = true;
+            privatePttPointerId = e.pointerId;
+            try { privatePttBtnEl.setPointerCapture(e.pointerId); } catch (_) {}
+            startPttRecording('private', 'private');
+        });
+        privatePttBtnEl.addEventListener('pointerup', (e) => releasePrivatePtt(e, false));
+        privatePttBtnEl.addEventListener('pointercancel', (e) => releasePrivatePtt(e, false));
+        privatePttBtnEl.addEventListener('lostpointercapture', (e) => {
+            if (isPrivatePttGestureActive && isRecorderCapturing && activeTransmitButton === 'private') {
+                return;
+            }
+            releasePrivatePtt(e, false);
+        });
+        privatePttBtnEl.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            if (isPrivatePttGestureActive && (!e.touches || e.touches.length === 0)) {
+                releasePrivatePtt(null, false);
+            }
+        }, { passive: false });
+        window.addEventListener('pointerup', (e) => {
+            if (isPrivatePttGestureActive && (privatePttPointerId === null || e.pointerId === privatePttPointerId)) {
+                releasePrivatePtt(e, false);
+            }
+        });
+        window.addEventListener('touchend', (e) => {
+            if (isPrivatePttGestureActive && (!e.touches || e.touches.length === 0)) {
+                releasePrivatePtt(null, false);
+            }
+        }, { passive: true });
 
         // ↘️ 右下角縮放手把：專責連續縮放（1.0x～4.0x），絕不誤觸發 PTT 廣播
         if (pttResizeHandleEl) {
@@ -1422,7 +1781,7 @@
                 return;
             }
 
-            // 單指按下：保留完整 PTT 即時手感，並記錄起始座標
+            // 單指按下：保留完整 PTT 即時手感，並記錄起始座標（模式 0/1 僅發送至清潔隊頻道，模式 2 僅發送至私人頻道）
             gestureMode = 'ptt';
             activePointerId = e.pointerId;
             dragPointerId = e.pointerId;
@@ -1430,7 +1789,7 @@
             dragStartPointerY = e.clientY;
             dragStartLeft = pttPosLeft;
             dragStartTop = pttPosTop;
-            startPttRecording();
+            startPttRecording(getMainPttTargetChannel(), 'main');
         });
 
         pttBtnEl.addEventListener('pointermove', (e) => {
@@ -1585,6 +1944,189 @@
         });
         visibilitySyncTimer = setInterval(syncPttButtonVisibility, 500);
         syncPttButtonVisibility();
+        setupHiddenPrivateRadioTrigger();
+    }
+
+    // 🔒 套用私人對講頻道與雙守候模式（即時生效並重置收發輪詢，確保頻道 100% 隔離）
+    function applyPrivateRadioConfig(mode, code) {
+        const prevMode = getEffectivePrivateMode();
+        const prevCode = privateChannelCode;
+        resetAllPttGestureAndRecordingState({ cancelRecording: true, persistLayout: false, releaseMic: true });
+        stopRadioPolling();
+        savePrivateRadioConfig(mode, code);
+
+        if (prevMode !== getEffectivePrivateMode() || prevCode !== privateChannelCode) {
+            handledMessageIds.clear();
+            channelPollState.public.lastCloudCleanupAt = 0;
+            channelPollState.private.lastCloudCleanupAt = 0;
+        }
+
+        applyPttLayout();
+        updatePttButtonVisual('idle');
+        updatePrivatePttButtonVisual('idle');
+        syncPttButtonVisibility();
+
+        if (isRadioEnabled) {
+            startRadioPolling();
+        }
+    }
+
+    function closePrivateRadioSettingsModal() {
+        if (privateModalEl) {
+            privateModalEl.classList.add('hidden');
+        }
+        syncPttButtonVisibility();
+    }
+
+    // 🔒 隱藏式「私人對講頻道設定」面板（僅於設定選單版本號連點 5 下才動態建立與彈出，未解鎖前零 DOM 痕跡）
+    function openPrivateRadioSettingsModal() {
+        const settingsModal = document.getElementById('settingsModal');
+        if (settingsModal) {
+            settingsModal.classList.add('hidden');
+        }
+
+        if (!privateModalEl) {
+            privateModalEl = document.createElement('div');
+            privateModalEl.id = 'privateRadioSettingsModal';
+            privateModalEl.className = 'hidden fixed inset-0 bg-black/70 flex items-center justify-center p-4 pointer-events-auto';
+            privateModalEl.style.zIndex = '100007';
+            privateModalEl.innerHTML = `
+                <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-gray-100 flex flex-col gap-3.5 max-h-[90vh] overflow-y-auto">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-8 h-8 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center text-sm font-black">🔒</span>
+                            <div>
+                                <h3 class="text-base font-black text-gray-900 leading-tight">私人對講頻道設定</h3>
+                                <p class="text-[11px] font-bold text-gray-400">設定存於本機，重開 App 自動生效</p>
+                            </div>
+                        </div>
+                        <button type="button" id="btnClosePrivateRadioModal" class="w-8 h-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center active:scale-95">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex flex-col gap-1.5">
+                        <label for="privateRadioCodeInput" class="text-xs font-extrabold text-gray-700">私人頻道密碼（雙機需輸入相同密碼）</label>
+                        <input id="privateRadioCodeInput" type="text" maxlength="16" autocomplete="off" spellcheck="false"
+                            placeholder="例如：1234（建議 4 位數字或英數）"
+                            class="w-full px-3.5 py-2.5 rounded-2xl border-2 border-gray-200 focus:border-violet-500 bg-gray-50 text-gray-900 text-sm font-black tracking-wider outline-none transition-colors">
+                        <p id="privateRadioErrorText" class="hidden text-[11px] font-bold text-red-600"></p>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
+                        <div class="text-xs font-extrabold text-gray-700">收發模式</div>
+                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-gray-700 has-[:checked]:bg-gray-50 transition-colors">
+                            <input type="radio" name="privateRadioMode" value="0" class="mt-0.5 w-4 h-4 accent-gray-800 flex-shrink-0">
+                            <div class="leading-snug">
+                                <div class="text-xs font-black text-gray-900">模式 0：關閉（預設一般隊員模式）</div>
+                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">完全隱藏私人功能，僅使用原本清潔隊頻道。</div>
+                            </div>
+                        </label>
+                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-violet-500 has-[:checked]:bg-violet-50/70 transition-colors">
+                            <input type="radio" name="privateRadioMode" value="1" class="mt-0.5 w-4 h-4 accent-violet-600 flex-shrink-0">
+                            <div class="leading-snug">
+                                <div class="text-xs font-black text-gray-900">模式 1：主頻道＋私人頻道雙守候（家長端）</div>
+                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">同時監聽兩頻道（清潔隊優先不蓋台）；主鈕發清潔隊，旁側小型鈕僅發私人頻道。</div>
+                            </div>
+                        </label>
+                        <label class="flex items-start gap-2.5 p-3 rounded-2xl border-2 border-gray-200 cursor-pointer has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50/70 transition-colors">
+                            <input type="radio" name="privateRadioMode" value="2" class="mt-0.5 w-4 h-4 accent-emerald-600 flex-shrink-0">
+                            <div class="leading-snug">
+                                <div class="text-xs font-black text-gray-900">模式 2：僅私人頻道（幼兒端）</div>
+                                <div class="text-[11px] font-bold text-gray-500 mt-0.5">僅監聽與發送至私人頻道，100% 隔離清潔隊頻道，主畫面維持單一對講按鈕。</div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 pt-1">
+                        <button type="button" id="btnCancelPrivateRadioModal" class="py-2.5 rounded-2xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-extrabold text-xs active:scale-95 transition-all">取消</button>
+                        <button type="button" id="btnSavePrivateRadioModal" class="py-2.5 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-black text-xs shadow-md active:scale-95 transition-all">儲存並套用</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(privateModalEl);
+
+            privateModalEl.addEventListener('click', (e) => {
+                if (e.target === privateModalEl) {
+                    closePrivateRadioSettingsModal();
+                }
+            });
+            privateModalEl.querySelector('#btnClosePrivateRadioModal')?.addEventListener('click', closePrivateRadioSettingsModal);
+            privateModalEl.querySelector('#btnCancelPrivateRadioModal')?.addEventListener('click', closePrivateRadioSettingsModal);
+            privateModalEl.querySelector('#btnSavePrivateRadioModal')?.addEventListener('click', () => {
+                const codeInput = privateModalEl.querySelector('#privateRadioCodeInput');
+                const errEl = privateModalEl.querySelector('#privateRadioErrorText');
+                const checkedRadio = privateModalEl.querySelector('input[name="privateRadioMode"]:checked');
+                const selectedMode = checkedRadio ? Number(checkedRadio.value) : PRIVATE_MODE_OFF;
+                const rawCode = codeInput ? String(codeInput.value || '').trim() : '';
+                const cleanCode = sanitizePrivateChannelCode(rawCode);
+
+                if (selectedMode !== PRIVATE_MODE_OFF) {
+                    if (cleanCode.length < 2 || cleanCode !== rawCode) {
+                        if (errEl) {
+                            errEl.textContent = '請輸入 2～16 碼英數字私人頻道密碼（不可含空白或特殊符號）';
+                            errEl.classList.remove('hidden');
+                        }
+                        if (codeInput) codeInput.focus();
+                        return;
+                    }
+                }
+
+                if (errEl) errEl.classList.add('hidden');
+                applyPrivateRadioConfig(selectedMode, cleanCode);
+                closePrivateRadioSettingsModal();
+
+                if (selectedMode === PRIVATE_MODE_DUAL_WATCH) {
+                    flashRadioToast('🔒 已啟用雙守候模式（清潔隊優先＋私人頻道）', 'private', 2400);
+                } else if (selectedMode === PRIVATE_MODE_PRIVATE_ONLY) {
+                    flashRadioToast('🔒 已啟用僅私人頻道模式（已隔離清潔隊頻道）', 'private', 2400);
+                } else {
+                    flashRadioToast('📻 已切換回一般隊員模式', 'sent', 2000);
+                }
+            });
+        }
+
+        const codeInput = privateModalEl.querySelector('#privateRadioCodeInput');
+        const errEl = privateModalEl.querySelector('#privateRadioErrorText');
+        const effectiveMode = getEffectivePrivateMode();
+        if (codeInput) codeInput.value = privateChannelCode || '';
+        if (errEl) errEl.classList.add('hidden');
+        const radios = privateModalEl.querySelectorAll('input[name="privateRadioMode"]');
+        radios.forEach((r) => {
+            r.checked = Number(r.value) === effectiveMode;
+        });
+
+        privateModalEl.classList.remove('hidden');
+        syncPttButtonVisibility();
+    }
+
+    // 🕵️ 隱藏解鎖入口：僅在設定選單的版本號文字上連續點擊 5 下才開啟私人頻道設定
+    function setupHiddenPrivateRadioTrigger() {
+        const versionTextEl = document.getElementById('settingsVersionText');
+        if (!versionTextEl || versionTextEl.dataset.privateUnlockBound === '1') return;
+        versionTextEl.dataset.privateUnlockBound = '1';
+
+        let tapCount = 0;
+        let tapResetTimer = null;
+
+        versionTextEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tapCount += 1;
+            if (tapResetTimer) clearTimeout(tapResetTimer);
+            tapResetTimer = setTimeout(() => {
+                tapCount = 0;
+                tapResetTimer = null;
+            }, PRIVATE_UNLOCK_WINDOW_MS);
+
+            if (tapCount >= PRIVATE_UNLOCK_TAP_TARGET) {
+                tapCount = 0;
+                if (tapResetTimer) {
+                    clearTimeout(tapResetTimer);
+                    tapResetTimer = null;
+                }
+                openPrivateRadioSettingsModal();
+            }
+        });
     }
 
     function setRadioEnabled(enabled) {

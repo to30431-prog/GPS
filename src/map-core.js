@@ -142,6 +142,8 @@ const PURE_CHINESE_TEXT_FIELD = [
 
 // 記錄最後一次繪製的路線 GeoJSON 資料，確保切換任何底圖樣式 (map.setStyle) 後自動無縫重繪所有自訂路線圖層
 let cachedBgRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedFutureSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
+let cachedFutureMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: [] };
 let cachedInactiveDayBranchGeoJSON = { type: 'FeatureCollection', features: [] };
@@ -735,8 +737,8 @@ function ensureCustomRouteSourcesAndLayers() {
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: {
                     'line-color': '#ffffff',
-                    'line-width': 9,
-                    'line-opacity': 0.5,
+                    'line-width': 8,
+                    'line-opacity': 0.18,
                     'line-blur': 0.5
                 }
             });
@@ -749,13 +751,48 @@ function ensureCustomRouteSourcesAndLayers() {
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: {
                     'line-color': '#94a3b8',
-                    'line-width': 6,
-                    'line-opacity': 0.45
+                    'line-width': 5.5,
+                    'line-opacity': 0.22
                 }
             });
         }
 
-        // 2. 音樂關閉路段（藍色虛線 + 俐落外框邊線 line-casing）
+        // 1.5 遠期尚未行駛路段（僅於遵循導航／路線重播複習使用，繪製於已走過路段之上、眼前當前區段之下，低透明度淡化不干擾當前岔路口判斷）
+        if (!map.getSource('route-future-silent')) {
+            map.addSource('route-future-silent', { type: 'geojson', data: cachedFutureSilentRouteGeoJSON || emptyGeoJSON() });
+        }
+        if (!map.getLayer('route-future-silent-line')) {
+            map.addLayer({
+                id: 'route-future-silent-line',
+                type: 'line',
+                source: 'route-future-silent',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#3b82f6',
+                    'line-width': 4.5,
+                    'line-dasharray': [2, 2],
+                    'line-opacity': 0.28
+                }
+            });
+        }
+        if (!map.getSource('route-future-music')) {
+            map.addSource('route-future-music', { type: 'geojson', data: cachedFutureMusicRouteGeoJSON || emptyGeoJSON() });
+        }
+        if (!map.getLayer('route-future-music-line')) {
+            map.addLayer({
+                id: 'route-future-music-line',
+                type: 'line',
+                source: 'route-future-music',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: {
+                    'line-color': '#16a34a',
+                    'line-width': 5,
+                    'line-opacity': 0.28
+                }
+            });
+        }
+
+        // 2. 音樂關閉路段（藍色虛線 + 俐落外框邊線 line-casing，永遠位於最上層）
         if (!map.getSource('route-Silent')) {
             map.addSource('route-Silent', { type: 'geojson', data: cachedSilentRouteGeoJSON || emptyGeoJSON() });
         }
@@ -782,12 +819,13 @@ function ensureCustomRouteSourcesAndLayers() {
                 paint: {
                     'line-color': '#3b82f6',
                     'line-width': 6,
-                    'line-dasharray': [2, 2]
+                    'line-dasharray': [2, 2],
+                    'line-opacity': 1.0
                 }
             });
         }
 
-        // 3. 音樂開啟清運路段（綠色實線 + 俐落外框邊線 line-casing）
+        // 3. 音樂開啟清運路段（綠色實線 + 俐落外框邊線 line-casing，永遠位於最上層）
         if (!map.getSource('route-music')) {
             map.addSource('route-music', { type: 'geojson', data: cachedMusicRouteGeoJSON || emptyGeoJSON() });
         }
@@ -813,7 +851,8 @@ function ensureCustomRouteSourcesAndLayers() {
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: {
                     'line-color': '#16a34a',
-                    'line-width': 7
+                    'line-width': 7,
+                    'line-opacity': 1.0
                 }
             });
         }
@@ -2669,11 +2708,15 @@ function updateRouteLayers(points, throttleMs = 0) {
     const inactiveMask = resolveInactiveDayEdgeMaskForPoints(points);
     const { musicFeatures, silentFeatures, inactiveFeatures } = buildRouteLayerFeatures(points, inactiveMask);
     cachedBgRouteGeoJSON = emptyGeoJSON();
+    cachedFutureMusicRouteGeoJSON = emptyGeoJSON();
+    cachedFutureSilentRouteGeoJSON = emptyGeoJSON();
     cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
     cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
     cachedInactiveDayBranchGeoJSON = { type: 'FeatureCollection', features: inactiveFeatures };
     ensureCustomRouteSourcesAndLayers();
     map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+    map.getSource('route-future-music')?.setData(cachedFutureMusicRouteGeoJSON);
+    map.getSource('route-future-silent')?.setData(cachedFutureSilentRouteGeoJSON);
     map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
     map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
     map.getSource('route-inactive-day-branch')?.setData(cachedInactiveDayBranchGeoJSON);
@@ -2697,9 +2740,13 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
 
     if (!Array.isArray(points) || points.length < 2) {
         cachedBgRouteGeoJSON = emptyGeoJSON();
+        cachedFutureMusicRouteGeoJSON = emptyGeoJSON();
+        cachedFutureSilentRouteGeoJSON = emptyGeoJSON();
         cachedMusicRouteGeoJSON = emptyGeoJSON();
         cachedSilentRouteGeoJSON = emptyGeoJSON();
         map.getSource('bg-route')?.setData(cachedBgRouteGeoJSON);
+        map.getSource('route-future-music')?.setData(cachedFutureMusicRouteGeoJSON);
+        map.getSource('route-future-silent')?.setData(cachedFutureSilentRouteGeoJSON);
         map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
         map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
         return;
@@ -2768,12 +2815,56 @@ function updateProgressRouteLayers(points, currentTrackIndex, exactPos = null, t
         }
     }
 
-    const { musicFeatures, silentFeatures, inactiveFeatures } = buildRouteLayerFeatures(remainingPoints, remainingInactiveMask);
+    // 2. 三段式動態視覺階層切分（僅於遵循導航／路線重播複習生效）：
+    //    - 眼前當前區段（往前約 350m 或約 35 個節點內）：100% 不透明度鮮豔色彩、完整線寬，繪製於最上層（route-music / route-Silent）
+    //    - 遠期尚未行駛路段（超過當前區段之後）：0.28 透明度、略細線寬，繪製於中層（route-future-music / route-future-silent）
+    //    - 已行駛過路段（0 ~ currentTrackIndex）：0.22 透明度淡化，繪製於最底層（bg-route）
+    const NAV_AHEAD_HIGHLIGHT_METERS = 350;
+    const NAV_AHEAD_HIGHLIGHT_MIN_METERS = 180;
+    const NAV_AHEAD_HIGHLIGHT_MAX_NODES = 35;
+    let aheadSplitIdx = remainingPoints.length - 1;
+    let accumAheadM = 0;
+    for (let k = 1; k < remainingPoints.length; k++) {
+        const prevP = remainingPoints[k - 1];
+        const currP = remainingPoints[k];
+        if (!currP.isSegmentStart) {
+            accumAheadM += getDistanceKm(prevP.lng, prevP.lat, currP.lng, currP.lat) * 1000;
+        }
+        if (accumAheadM >= NAV_AHEAD_HIGHLIGHT_METERS || (k >= NAV_AHEAD_HIGHLIGHT_MAX_NODES && accumAheadM >= NAV_AHEAD_HIGHLIGHT_MIN_METERS)) {
+            aheadSplitIdx = k;
+            break;
+        }
+    }
+
+    const immediatePoints = remainingPoints.slice(0, aheadSplitIdx + 1);
+    const immediateInactiveMask = remainingInactiveMask ? remainingInactiveMask.slice(0, aheadSplitIdx + 1) : null;
+    const { musicFeatures, silentFeatures, inactiveFeatures } = buildRouteLayerFeatures(immediatePoints, immediateInactiveMask);
+
+    let futureMusicFeatures = [];
+    let futureSilentFeatures = [];
+    if (aheadSplitIdx < remainingPoints.length - 1) {
+        const futurePoints = remainingPoints.slice(aheadSplitIdx);
+        let futureInactiveMask = null;
+        if (remainingInactiveMask) {
+            futureInactiveMask = new Uint8Array(futurePoints.length);
+            for (let k = 1; k < futurePoints.length; k++) {
+                futureInactiveMask[k] = remainingInactiveMask[aheadSplitIdx + k] || 0;
+            }
+        }
+        const futureBuilt = buildRouteLayerFeatures(futurePoints, futureInactiveMask);
+        futureMusicFeatures = futureBuilt.musicFeatures;
+        futureSilentFeatures = futureBuilt.silentFeatures;
+    }
+
+    cachedFutureMusicRouteGeoJSON = { type: 'FeatureCollection', features: futureMusicFeatures };
+    cachedFutureSilentRouteGeoJSON = { type: 'FeatureCollection', features: futureSilentFeatures };
     cachedMusicRouteGeoJSON = { type: 'FeatureCollection', features: musicFeatures };
     cachedSilentRouteGeoJSON = { type: 'FeatureCollection', features: silentFeatures };
     cachedInactiveDayBranchGeoJSON = fullInactiveMask
         ? { type: 'FeatureCollection', features: buildRouteLayerFeatures(points, fullInactiveMask).inactiveFeatures }
         : { type: 'FeatureCollection', features: inactiveFeatures };
+    map.getSource('route-future-music')?.setData(cachedFutureMusicRouteGeoJSON);
+    map.getSource('route-future-silent')?.setData(cachedFutureSilentRouteGeoJSON);
     map.getSource('route-music')?.setData(cachedMusicRouteGeoJSON);
     map.getSource('route-Silent')?.setData(cachedSilentRouteGeoJSON);
     map.getSource('route-inactive-day-branch')?.setData(cachedInactiveDayBranchGeoJSON);
